@@ -1,0 +1,10 @@
+*.iml
+.gradle
+/local.properties
+/.idea/git rm -r --cached .idea/
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties

@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- 悬浮窗按键显示：需要系统级悬浮窗权限 -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- 长时间后台采集输入：引导用户忽略电池优化 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- 采集服务以前台服务形式运行（用于常驻状态栏提示，避免被系统回收） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- Android 14+ 要求为前台服务声明类型；本服务属于"其它特殊用途"（按键悬浮窗） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:name=".SthKeyApplication"
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.SthKey">
+
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="keyboard|keyboardHidden|navigation|screenLayout|screenSize|smallestScreenSize|orientation"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.SthKey"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+            悬浮窗服务：在 WindowManager 上叠加按键显示。
+            前台服务 + specialUse 类型：悬浮窗需要长时间存活，
+            普通后台服务在 Android 12+ 很容易被冻结回收（窗口会直接消失）。
+        -->
+        <service
+            android:name=".capture.OverlayService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="按键悬浮窗：在其他应用之上显示外接键盘的按键状态" />
+        </service>
+
+        <!--
+            输入采集（root / Shizuku）与 Shizuku UserService 将在下一步接入：
+              <service android:name=".capture.RootInputService" ... />
+              <service android:name=".capture.ShizukuInputService" ... />
+        -->
+    </application>
+
+</manifest>

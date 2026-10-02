@@ -1,0 +1,45 @@
+# ============================================================
+# 项目专用的 R8 保留规则
+# ============================================================
+# AGP 会把 src/main/keepRules 下所有文件合并后交给 R8。
+# 详细说明见 https://d.android.com/r/tools/r8/keep-rules
+#
+# 这里的每一条都对应"名字是**字符串**写出来的、或在框架/外部进程里按名字查找"
+# 的类 —— 这类代码在 release 构建（isMinifyEnabled = true）下被混淆就会失效，
+# 而且失效方式往往是"运行时静默失败"，非常难查。
+# ============================================================
+
+
+# ------------------------------------------------------------
+# Shizuku UserService
+# ------------------------------------------------------------
+# 为什么必须保留：
+#
+# Shizuku 启动 UserService 走的是「另一个进程用 app_process + 类名反射加载」，
+# 而类名来自我们传给 UserServiceArgs 的**字符串**：
+#
+#     "com.something.sthkey.capture.shizuku.ShizukuInputService"
+#
+# 一旦 R8 把这个类改名，Shizuku 在那个进程里就找不到它，
+# 表现为：绑定请求发出去了、进程起不来、onServiceConnected 永远不回调
+# —— 也就是"绑定 UserService 超时"，且看不出任何原因。
+#
+# 这条规则在 debug 构建下无关紧要，但 release 构建**必须**有。
+-keep class com.something.sthkey.capture.shizuku.ShizukuInputService { *; }
+
+# UserService 里用到的 AIDL 接口与实现：
+# - Stub/Proxy 由 AIDL 生成，Binder 框架按名字查找；
+# - 回调接口在主进程与 UserService 进程之间跨进程传递，同样不能改名。
+-keep interface com.something.sthkey.IShizukuInputService { *; }
+-keep interface com.something.sthkey.IShizukuInputListener { *; }
+-keep class com.something.sthkey.IShizukuInputService$* { *; }
+-keep class com.something.sthkey.IShizukuInputListener$* { *; }
+
+
+# ------------------------------------------------------------
+# 崩溃兜底
+# ------------------------------------------------------------
+# CrashLogger 会把异常堆栈写进文件给用户复制。
+# 混淆后堆栈里全是 a.b.c，用户发过来也没法定位，因此保留行号信息。
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile
