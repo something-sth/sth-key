@@ -170,7 +170,17 @@ object AppLinks {
      */
     const val GITHUB_REPO = "https://github.com/something-sth/sth-key"
 
-    const val LICENSE = "https://github.com/something-sth/sth-key/blob/main/LICENSE"
+    /*
+     * ⚠️ 用 `/blob/HEAD/` 而不是写死分支名。
+     *
+     * 仓库的默认分支是 `master`，而新建仓库的惯例是 `main` ——
+     * 写死任何一个，将来改了默认分支（或别人 fork 后用了别的名字）
+     * 这个链接就指错地方，而它**不会报错、只是打开一个 404 页面**，
+     * 很难被发现。
+     *
+     * `HEAD` 是 GitHub 支持的写法，永远指向**当前默认分支**。
+     */
+    const val LICENSE = "https://github.com/something-sth/sth-key/blob/HEAD/LICENSE"
 
     /** QQ 群分享链接（沿用旧项目的群） */
     const val QQ_GROUP =
