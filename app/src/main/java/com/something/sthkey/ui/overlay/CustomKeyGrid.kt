@@ -1,4 +1,4 @@
-﻿package com.something.sthkey.ui.overlay
+package com.something.sthkey.ui.overlay
 
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
+import androidx.compose.runtime.remember
+import com.something.sthkey.ui.component.bitmapSpecOf
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -33,6 +35,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.something.sthkey.core.log.AppLog
@@ -592,6 +596,17 @@ private fun CustomComponentView(
             if (shadowSpan > 0f) {
                 val isHard = style.shadowMode == ShadowMode.HARD
 
+                /*
+                 * 柔光：优先用**真模糊**（API 31+），与按键样式同一个做法。
+                 *
+                 * 只靠 `BitmapFontText` 里的多层副本上限不高：那一层画完副本后
+                 * 还要用 `DstOut` 擦掉字形本身，剩下的只是"字形外一圈薄晕"，
+                 * 而图片字体是像素块 —— 看起来就跟硬阴影一样。
+                 *
+                 * 半径口径见 `KeyGrid` 里 `REAL_BLUR_RATIO` 的说明。
+                 */
+                val useRealBlur = !isHard && canUseRealBlur && shadowSpan > 0f
+
                 Box(
                     modifier = Modifier
                         .matchParentSize()
@@ -604,7 +619,14 @@ private fun CustomComponentView(
                             .matchParentSize()
                             .graphicsLayer {
                                 compositingStrategy = CompositingStrategy.Offscreen
-                            },
+                            }
+                            .then(
+                                if (useRealBlur) {
+                                    Modifier.realBlur((shadowSpan * CUSTOM_REAL_BLUR_RATIO).dp)
+                                } else {
+                                    Modifier
+                                },
+                            ),
                         contentAlignment = Alignment.Center,
                     ) {
                         /* 第一遍：阴影本体 */
@@ -619,6 +641,21 @@ private fun CustomComponentView(
                             fontSize = fontSize,
                             fontFamily = fontFamily,
                             cpsLineScalePercent = cpsLineScale,
+                            bitmapFontId = style.bitmapFontId.ifBlank { null },
+                            letterSpacingPercent = style.letterSpacing,
+                            lineSpacingPercent = style.lineSpacing,
+                            /*
+                             * 图片字体的柔光半径（**像素**；矢量字体那条路
+                             * 读的是 `TextStyle.Shadow.blurRadius`，单位是 dp）。
+                             *
+                             * ⚠️ 用了真模糊就不能再叠多层副本 ——
+                             * 两套一起上会糊成一团，还白白多画 8 遍。
+                             */
+                            shadowBlurPx = when {
+                                isHard -> 0f
+                                useRealBlur -> 0f
+                                else -> with(LocalDensity.current) { shadowSpan.dp.toPx() }
+                            },
                             modifier = Modifier.graphicsLayer {
                                 translationX = if (isHard) shadowSpan * 0.6f * density else 0f
                                 translationY = if (isHard) shadowSpan * 0.6f * density else 0f
@@ -633,6 +670,14 @@ private fun CustomComponentView(
                             fontSize = fontSize,
                             fontFamily = fontFamily,
                             cpsLineScalePercent = cpsLineScale,
+                            bitmapFontId = style.bitmapFontId.ifBlank { null },
+                            letterSpacingPercent = style.letterSpacing,
+                            lineSpacingPercent = style.lineSpacing,
+                            /*
+                             * 抠洞层必须是**实心剪影**：图片字体默认按字形
+                             * 原色绘制，渐变色形的浅色部分 `DstOut` 抠不干净。
+                             */
+                            asSolidMask = true,
                             modifier = Modifier.graphicsLayer {
                                 blendMode = BlendMode.DstOut
                                 compositingStrategy = CompositingStrategy.Offscreen
@@ -656,6 +701,9 @@ private fun CustomComponentView(
                     fontSize = fontSize,
                     fontFamily = fontFamily,
                     cpsLineScalePercent = cpsLineScale,
+                    bitmapFontId = style.bitmapFontId.ifBlank { null },
+                    letterSpacingPercent = style.letterSpacing,
+                    lineSpacingPercent = style.lineSpacing,
                 )
             }
         }
@@ -685,6 +733,31 @@ private fun ComponentText(
     fontFamily: androidx.compose.ui.text.font.FontFamily?,
     /** CPS 那一行的额外缩放（1..200），100 = 与主文字一样大 */
     cpsLineScalePercent: Int = 100,
+    /**
+     * 图片字体的 id；`null` 表示用矢量字体。
+     *
+     * ⚠️ 判断"这段文字能不能用图片字体画"是**逐行**做的：
+     * 图片字体只有 ASCII 字形，而一个组件可能一行是 `LMB`、
+     * 另一行是中文。整段回退的话 `LMB` 那行也白搭了。
+     */
+    bitmapFontId: String? = null,
+    /**
+     * 柔光半径（像素）；0 表示硬阴影。
+     *
+     * ⚠️ 专给图片字体：矢量字体的柔光走 `TextStyle.Shadow`（`baseStyle` 里），
+     * 而图片字体自己贴图、**读不到 `TextStyle`** —— 不传的话柔光对它就无效。
+     */
+    shadowBlurPx: Float = 0f,
+    /**
+     * 是否把字形画成**实心剪影**（抠洞层 `DstOut` 用）。
+     *
+     * `DstOut` 按源的不透明度擦除，而图片字体默认按字形原色绘制 ——
+     * 渐变色形的浅色部分抠不干净，会留一圈毛边。
+     */
+    asSolidMask: Boolean = false,
+    /** 字间距 / 行间距（相对字号的百分比，0 = 不动）；只对图片字体生效 */
+    letterSpacingPercent: Float = 0f,
+    lineSpacingPercent: Float = 0f,
     modifier: Modifier = Modifier,
 ) {
     /*
@@ -697,6 +770,79 @@ private fun ComponentText(
      * 这里同时接受真的换行符：老配置里可能存着真的（用户直接按过回车）。
      */
     val lines = text.replace("\\n", "\n").split('\n')
+
+    /*
+     * 图片字体：逐行判断能不能用它画，能就用 [BitmapFontText]。
+     *
+     * 与下面的矢量路径**完全不共用代码**（一个贴图、一个走 Text），
+     * 所以放在最前面直接返回，避免两条路径的判断纠缠在一起。
+     */
+    if (bitmapFontId != null) {
+        val spec = remember(bitmapFontId) { bitmapSpecOf(bitmapFontId) }
+        if (spec != null && lines.all { canRenderAsBitmap(it, spec) }) {
+            val lineStyle = baseStyle.copy(
+                lineHeight = fontSize,
+                lineHeightStyle = LineHeightStyle(
+                    alignment = LineHeightStyle.Alignment.Center,
+                    trim = LineHeightStyle.Trim.Both,
+                ),
+            )
+
+            /*
+             * ============================================================
+             * ⚠️ 整段**一次画完**，不能逐行各画一次
+             * ============================================================
+             * 早先是 `lines.forEach { BitmapFontText(it) }` ——
+             * 每个 `BitmapFontText` 都是一个独立 Canvas、各自按自身内容高度
+             * 居中，于是**多行全部重叠在同一个位置**
+             * （用户实测的"CPS 模式 3 转自定义 Key 后两行挤在一起"）。
+             *
+             * 交给 [BitmapFontText] 一次处理换行，行高与行距才是按整段算的。
+             */
+            BitmapFontText(
+                fontId = bitmapFontId,
+                text = lines.joinToString("\n"),
+                fontSize = fontSize,
+                /*
+                 * 颜色照传：图片字体的染色语义是"字形 RGB × 文字颜色"，
+                 * 白色字形就是整块染成这个颜色。
+                 */
+                color = color,
+                /*
+                 * 阴影**不在这里画**：调用方已经把阴影那一层
+                 * 用同一个 [ComponentText] 画过了（只是颜色不同），
+                 * 这里再画一次会叠两层阴影，边缘变实。
+                 *
+                 * 但**柔光半径要传**（见参数说明）。
+                 */
+                shadowBlurPx = shadowBlurPx,
+                asSolidMask = asSolidMask,
+                extraAdvance = safeLetterSpacing(lineStyle),
+                /*
+                 * 逐行字号：**主行 100%、CPS 行按比例**。
+                 *
+                 * ⚠️ 这里的下标容易写反。`lineScalePercents` 是**相对
+                 * [fontSize]** 的倍率，而 `cpsLineScalePercent` 是"CPS 行
+                 * 相对主行的百分比"（转换过来是 79）—— 所以
+                 * **主行给 100、CPS 行给 `cpsLineScalePercent`**。
+                 *
+                 * 曾经写成"CPS 行给 100、其余给 `cpsLineScalePercent`"，
+                 * 结果主行被放大成 **79 倍**（把 79 当成了 7900%），
+                 * 而 CPS 行反倒成了正常大小。用户看到的是"这个滑块没效果"，
+                 * 其实整套字号已经乱掉了。
+                 *
+                 * 口径与矢量路径一致（那边是 `fontSize * percent/100`）。
+                 */
+                lineScalePercents = lines.map { line ->
+                    if (CustomLayout.hasCpsPlaceholder(line)) cpsLineScalePercent else 100
+                },
+                letterSpacingPercent = letterSpacingPercent,
+                lineSpacingPercent = lineSpacingPercent,
+                modifier = modifier,
+            )
+            return
+        }
+    }
 
     // 单行且不需要缩放：不必包 Column，少一层布局
     if (lines.size <= 1 && cpsLineScalePercent == 100) {
@@ -711,12 +857,35 @@ private fun ComponentText(
         return
     }
 
+    /*
+     * ============================================================
+     * 矢量路径也要吃字间距 / 行间距
+     * ============================================================
+     * ⚠️ 早先只有图片字体那条路吃这两个值，矢量字体调了完全没反应 ——
+     * 而"字距不合适"在矢量字体上同样会发生（中文字体尤其常见）。
+     *
+     * 字间距：`TextStyle.letterSpacing` 的单位是 **em 倍数**，
+     * 而我们的滑块是"相对字号的百分比" → 除以 100 即可对上。
+     *
+     * 行间距：直接乘进**行高**。行高本身已经等于字号（见下），
+     * 所以"行距 = 行高 × (1 + 行间距)"就是把行与行的基准距离拉开，
+     * 而**首行之前不会多出空白** —— 这正是想要的。
+     * （用 Spacer 插在行间也行，但那样多一层布局、还要特判首行。）
+     */
+    val letterSpacingEm = (letterSpacingPercent / 100f).takeIf { it.isFinite() } ?: 0f
+    val lineSpacingFactor = if (lineSpacingPercent.isFinite()) {
+        (1f + lineSpacingPercent / 100f).coerceAtLeast(MIN_LINE_SPACING_FACTOR)
+    } else {
+        1f
+    }
+
     val lineStyle = baseStyle.copy(
-        lineHeight = fontSize,
+        lineHeight = fontSize * lineSpacingFactor,
         lineHeightStyle = LineHeightStyle(
             alignment = LineHeightStyle.Alignment.Center,
             trim = LineHeightStyle.Trim.Both,
         ),
+        letterSpacing = letterSpacingEm.em,
     )
 
     /*
@@ -736,13 +905,22 @@ private fun ComponentText(
                 text = line,
                 color = color,
                 textAlign = TextAlign.Center,
-                style = if (isCpsLine) lineStyle.copy(fontSize = cpsLineSize) else lineStyle,
+                style = if (isCpsLine) {
+                    // 行高也要跟着这一行自己的字号走，否则小字那行会多出空白
+                    lineStyle.copy(
+                        fontSize = cpsLineSize,
+                        lineHeight = cpsLineSize * lineSpacingFactor,
+                    )
+                } else {
+                    lineStyle
+                },
                 fontFamily = fontFamily,
                 maxLines = 1,
             )
         }
     }
 }
+
 
 /**
  * 行样式：行高等于字号，并去掉上下多余留白。
@@ -899,3 +1077,11 @@ private const val CPS_LOG_INTERVAL_MS = 1_000L
  * 现在统一用 [ColorLerp.kt] 里的 `lerpColor`（返回 Color）与
  * `lerpArgb`（返回 Int），按需要挑一个。
  */
+/**
+ * 自定义 Key 的真模糊半径倍数。
+ *
+ * 与按键样式的 `KeyGrid.REAL_BLUR_RATIO` 取同一个值 ——
+ * 两个样式的"柔光"观感必须一致，否则同一个阴影大小在两个样式下
+ * 一个糊一个锐，用户会以为是 bug。
+ */
+private const val CUSTOM_REAL_BLUR_RATIO = 0.5f

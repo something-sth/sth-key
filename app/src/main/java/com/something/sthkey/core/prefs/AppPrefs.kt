@@ -1,6 +1,7 @@
 package com.something.sthkey.core.prefs
 
 import android.content.Context
+import com.something.sthkey.data.config.ExportMethod
 import android.content.SharedPreferences
 import com.something.sthkey.domain.capture.KeyMode
 import com.something.sthkey.ui.EditMode
@@ -119,6 +120,22 @@ class AppPrefs private constructor(context: Context) {
         get() = prefs.getString(KEY_IMPORTED_FONTS, null)
         set(value) {
             prefs.edit().putString(KEY_IMPORTED_FONTS, value).apply()
+        }
+
+    /**
+     * 位图字体（图片字体）库的 JSON 文本。
+     *
+     * 与矢量字体**分开存**而不是塞进同一个列表：两者的字段结构完全不同
+     * （一个只要文件名，另一个有网格、遮罩模式、ascent 等一套参数），
+     * 混在一起就得在每个读写点判断"这条是哪种"，漏一处就是解析异常。
+     *
+     * 图集文件本身和矢量字体放在同一个 `filesDir/fonts/` 下，
+     * 那样配置包导出能走同一套逻辑。
+     */
+    var bitmapFontsJson: String?
+        get() = prefs.getString(KEY_BITMAP_FONTS, null)
+        set(value) {
+            prefs.edit().putString(KEY_BITMAP_FONTS, value).apply()
         }
 
     /**
@@ -359,7 +376,108 @@ class AppPrefs private constructor(context: Context) {
             prefs.edit().putBoolean(KEY_EDITOR_SHOW_SELECTED_FRAME, value).apply()
         }
 
+    /*
+     * ============================================================
+     * 配置列表的排版
+     * ============================================================
+     * 用户反馈"配置太多时看着杂乱"，所以要能自己决定列表长什么样。
+     *
+     * ⚠️ 这些是**显示偏好**，不是某一份配置的一部分 ——
+     * 所以存在应用偏好里，而不是 `KeyStrokesConfig` 里。
+     * 放进配置的话，导出一份配置会把"你的列表长什么样"也带给别人。
+     */
+
+    /**
+     * 是否在配置卡片上显示描述文字。
+     *
+     * 关掉之后卡片只有名称，列表更紧凑（描述常常是给别人看的，
+     * 自己用久了根本不需要每次看到）。
+     */
+    var configListShowDescription: Boolean
+        get() = prefs.getBoolean(KEY_CONFIG_LIST_SHOW_DESCRIPTION, true)
+        set(value) {
+            prefs.edit().putBoolean(KEY_CONFIG_LIST_SHOW_DESCRIPTION, value).apply()
+        }
+
+    /**
+     * 是否把导出 / 复制 / 删除收进一个「更多」菜单。
+     *
+     * 关掉（默认）= 三个按钮平铺在卡片上（一眼可见、少一次点击）；
+     * 打开 = 只留一个竖排三点图标，卡片干净很多。
+     *
+     * ⚠️ **默认关**：这是"本来就有的三个按钮"，把常用操作藏进菜单
+     * 一定要用户自己选，不能替他决定。
+     */
+    var configListCompactActions: Boolean
+        get() = prefs.getBoolean(KEY_CONFIG_LIST_COMPACT_ACTIONS, false)
+        set(value) {
+            prefs.edit().putBoolean(KEY_CONFIG_LIST_COMPACT_ACTIONS, value).apply()
+        }
+
+    /**
+     * 列表一行显示几个配置。
+     *
+     * 取值 [CONFIG_LIST_COLUMNS_MIN] .. [CONFIG_LIST_COLUMNS_MAX]。
+     * 大屏（平板横屏）一行放多个能显著减少滚动；
+     * 手机竖屏放 1 个最舒服 —— 所以 1 是默认值。
+     */
+    var configListColumns: Int
+        get() = prefs.getInt(KEY_CONFIG_LIST_COLUMNS, CONFIG_LIST_COLUMNS_DEFAULT)
+            .coerceIn(CONFIG_LIST_COLUMNS_MIN, CONFIG_LIST_COLUMNS_MAX)
+        set(value) {
+            prefs.edit()
+                .putInt(
+                    KEY_CONFIG_LIST_COLUMNS,
+                    value.coerceIn(CONFIG_LIST_COLUMNS_MIN, CONFIG_LIST_COLUMNS_MAX),
+                )
+                .apply()
+        }
+
+    /*
+     * ============================================================
+     * 配置导出
+     * ============================================================
+     */
+
+    /**
+     * 默认导出方式；[ExportMethod.ASK] 表示"每次都弹窗问"。
+     *
+     * ⚠️ **默认必须是 ASK**：新装的用户第一次点导出当然应该看到那个窗口，
+     * 而不是被一个他从没选过的默认方式替做决定。
+     *
+     * ⚠️ 曾经还有一个 `exportDirectory`（SAF 目录树，可自定义导出位置），
+     * 已删除 —— 实测那套在多种设备上都会失败（"无法在所选目录里创建文件"），
+     * 而用户实际只需要导到 Download。详见 `ConfigExporters` 的说明。
+     */
+    var exportMethod: ExportMethod
+        get() = ExportMethod.fromId(prefs.getString(KEY_EXPORT_METHOD, null))
+        set(value) {
+            prefs.edit().putString(KEY_EXPORT_METHOD, value.name).apply()
+        }
+
     companion object {
+        /** 一行最少几个配置 */
+        const val CONFIG_LIST_COLUMNS_MIN = 1
+
+        /**
+         * 一行几个的**默认值**。
+         *
+         * 用 2 而不是 [CONFIG_LIST_COLUMNS_MIN]：手机竖屏一行两个是
+         * 最省滚动又不至于挤的排法，而"一行一个"在小屏上会让列表长得离谱。
+         *
+         * ⚠️ 这是**初值**，不是范围下限 —— 用户把它拖到 1 是完全正常的，
+         * 所以读的时候只夹到 `MIN..MAX`，不能用这个值去覆盖用户的选择。
+         */
+        const val CONFIG_LIST_COLUMNS_DEFAULT = 2
+
+        /**
+         * 一行最多几个配置。
+         *
+         * 上限 6 是**可读性**的下限决定的：再密的话每个卡片窄到
+         * 装不下一个 `LMB(cps2)` 这样的配置名，列表就没法看了。
+         */
+        const val CONFIG_LIST_COLUMNS_MAX = 6
+
         private const val PREFS_NAME = "sthkey_settings"
         private const val KEY_MODE = "key_mode"
         private const val KEY_SHIZUKU_BACKEND = "shizuku_backend"
@@ -368,6 +486,7 @@ class AppPrefs private constructor(context: Context) {
         private const val KEY_ACTIVE_CONFIG_ID = "active_config_id"
         private const val KEY_CONFIGS_JSON = "configs_json"
         private const val KEY_IMPORTED_FONTS = "imported_fonts"
+        private const val KEY_BITMAP_FONTS = "bitmap_fonts"
         private const val KEY_IMPORTED_LIVE2D_MODELS = "imported_live2d_models"
         private const val KEY_OVERLAY_STATE_SYNCED = "overlay_state_synced"
         private const val KEY_CAPTURE_ENABLED = "capture_enabled"
@@ -385,6 +504,10 @@ class AppPrefs private constructor(context: Context) {
         private const val KEY_EDITOR_PANEL_SIDE_CHOSEN = "editor_panel_side_chosen"
         private const val KEY_EDITOR_SHOW_WINDOW_FRAME = "editor_show_window_frame"
         private const val KEY_EDITOR_SHOW_SELECTED_FRAME = "editor_show_selected_frame"
+        private const val KEY_CONFIG_LIST_SHOW_DESCRIPTION = "config_list_show_description"
+        private const val KEY_CONFIG_LIST_COMPACT_ACTIONS = "config_list_compact_actions"
+        private const val KEY_CONFIG_LIST_COLUMNS = "config_list_columns"
+        private const val KEY_EXPORT_METHOD = "export_method"
 
         /**
          * 悬浮窗尚未被拖动过的位置标记。

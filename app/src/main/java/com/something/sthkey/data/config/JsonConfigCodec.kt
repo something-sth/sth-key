@@ -10,6 +10,9 @@ import com.something.sthkey.domain.config.DEFAULT_FONT_ID
 import com.something.sthkey.domain.config.KeyMapping
 import com.something.sthkey.domain.config.KeyOutline
 import com.something.sthkey.domain.config.KeyStrokesConfig
+import com.something.sthkey.domain.config.TextOffset
+import com.something.sthkey.domain.style.KeyLayout
+import com.something.sthkey.domain.config.TextSpacing
 import com.something.sthkey.domain.config.LIVE2D_MODEL_STANDARD
 import com.something.sthkey.domain.config.Live2DSettings
 import com.something.sthkey.domain.config.Opacity
@@ -90,8 +93,65 @@ object JsonConfigCodec {
      * （`shadow` 就是），默认配置里它们走的是"关闭"分支，
      * 于是推导出来的清单会缺掉那些键 —— 又是同一个坑。
      */
-    private fun probeConfigForKnownKeys(): KeyStrokesConfig {
-        val base = defaultConfig()
+    /**
+     * 读每个槽位各自的文字偏移。
+     *
+     * 容错：任何一项坏了就**丢掉那一项**，不影响其它键，也不让整份配置读不出来
+     * （与项目里其它解码器的取舍一致）。
+     *
+     * 值为 0/0 的项会被丢掉：它和"没有这一项"在渲染上完全等价，
+     * 留着只会让配置越存越大、也让"这个键调过没有"变得看不出来。
+     */
+    private fun decodeSlotTextOffsets(json: JSONObject?): Map<String, TextOffset> {
+        if (json == null) return emptyMap()
+        val result = mutableMapOf<String, TextOffset>()
+        val keys = json.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            val item = json.optJSONObject(key) ?: continue
+            val x = item.optDouble("x", 0.0).toFloat()
+            val y = item.optDouble("y", 0.0).toFloat()
+            if (x == 0f && y == 0f) continue
+            result[key] = TextOffset(x = x, y = y)
+        }
+        return result
+    }
+
+    /** 读全局的字间距 / 行间距；缺字段时用默认（0 = 不动） */
+    private fun decodeTextSpacing(json: JSONObject?): TextSpacing =
+        if (json == null) {
+            TextSpacing()
+        } else {
+            TextSpacing(
+                letter = json.optDouble("letter", 0.0).toFloat(),
+                line = json.optDouble("line", 0.0).toFloat(),
+            )
+        }
+
+    /**
+     * 读每个槽位各自的字间距 / 行间距。
+     *
+     * 容错与 [decodeSlotTextOffsets] 一致：坏掉的项丢掉，
+     * 全零的项也丢掉（它与"没有这一项"在渲染上等价）。
+     */
+    private fun decodeSlotTextSpacings(json: JSONObject?): Map<String, TextSpacing> {
+        if (json == null) return emptyMap()
+        val result = mutableMapOf<String, TextSpacing>()
+        val keys = json.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            val item = json.optJSONObject(key) ?: continue
+            val spacing = TextSpacing(
+                letter = item.optDouble("letter", 0.0).toFloat(),
+                line = item.optDouble("line", 0.0).toFloat(),
+            )
+            if (spacing.letter == 0f && spacing.line == 0f) continue
+            result[key] = spacing
+        }
+        return result
+    }
+
+    private fun probeConfigForKnownKeys(): KeyStrokesConfig {        val base = defaultConfig()
         return base.copy(
             outline = base.outline.copy(enabled = true),
             shadow = base.shadow.copy(enabled = true),
@@ -99,6 +159,7 @@ object JsonConfigCodec {
             showShiftKey = true,
             showMouseButtons = true,
             mouseCpsEnabled = true,
+            slotTextOffsets = emptyMap(),
         )
     }
 
@@ -220,6 +281,71 @@ object JsonConfigCodec {
 
         // 字体标识：不存的话重启后会回落到默认字体
         put("fontId", config.fontId)
+        put("bitmapFontId", config.bitmapFontId)
+
+        // 文字偏移：图片字体常需要按图集微调，不存的话重启就白调了
+        put("textOffsetX", config.textOffsetX.toDouble())
+        put("textOffsetY", config.textOffsetY.toDouble())
+
+        /*
+         * 每个槽位各自的偏移。
+         *
+         * 存成对象（`{ "SPACE": {"x":0,"y":3} }`）而不是两个扁平数组：
+         * 数组要靠下标与槽位列表对应，布局一变就会错位；
+         * 用槽位 id 做键则天然稳定，也不必保证"两个数组一样长"。
+         *
+         * ⚠️ **无条件写**，哪怕为空。
+         *
+         * 早先写的是"非空才写"，结果有两处不对：
+         * 1. 读的时候无条件读、写的时候却不写 —— 编解码本身就是不对称的；
+         * 2. [KNOWN_KEYS] 是从"把探针配置编码一遍"推导出来的，于是这个键
+         *    不在已知清单里，**带它的配置包导入时会被报成"未识别字段"**
+         *    （用户实测遇到的就是这个）。
+         *
+         * 一个空对象（`{}`）的开销可以忽略，换来的是"读写对称 + 键始终已注册"。
+         */
+        put(
+            "slotTextOffsets",
+            JSONObject().apply {
+                config.slotTextOffsets.forEach { (slotId, offset) ->
+                    put(
+                        slotId,
+                        JSONObject().apply {
+                            put("x", offset.x.toDouble())
+                            put("y", offset.y.toDouble())
+                        },
+                    )
+                }
+            },
+        )
+
+        /*
+         * 字间距 / 行间距：与文字偏移**同一套结构**（全局 + 每槽位）。
+         *
+         * 同样**无条件写** —— 理由与上面 `slotTextOffsets` 完全一样
+         * （读写对称 + 键始终在 KNOWN_KEYS 里）。
+         */
+        put(
+            "textSpacing",
+            JSONObject().apply {
+                put("letter", config.textSpacing.letter.toDouble())
+                put("line", config.textSpacing.line.toDouble())
+            },
+        )
+        put(
+            "slotTextSpacings",
+            JSONObject().apply {
+                config.slotTextSpacings.forEach { (slotId, spacing) ->
+                    put(
+                        slotId,
+                        JSONObject().apply {
+                            put("letter", spacing.letter.toDouble())
+                            put("line", spacing.line.toDouble())
+                        },
+                    )
+                }
+            },
+        )
 
         put(
             "outline",
@@ -335,7 +461,15 @@ object JsonConfigCodec {
             keyGap = json.optDouble("keyGap", defaults.keyGap.toDouble())
                 .toFloat()
                 .coerceIn(0f, 60f),
-            scalePercent = json.optInt("scalePercent", defaults.scalePercent).coerceIn(50, 200),
+                        /*
+             * ⚠️ 范围**引用 `KeyLayout` 的常量**，不要写字面量。
+             *
+             * 写死 `coerceIn(50, 200)` 的话，改滑块下限时很容易漏掉这里，
+             * 症状是"我调的缩放存不住"：调到 20 保存、再打开就变回 50。
+             * 编译期完全看不出来。
+             */
+            scalePercent = json.optInt("scalePercent", defaults.scalePercent)
+                .coerceIn(KeyLayout.SCALE_PERCENT_MIN, KeyLayout.SCALE_PERCENT_MAX),
             textScalePercent = json.optInt("textScalePercent", defaults.textScalePercent)
                 .coerceIn(50, 150),
             cornerRadiusEnabled = json.optBoolean("cornerRadiusEnabled", false),
@@ -353,6 +487,12 @@ object JsonConfigCodec {
             ),
             // 字体 id：老配置没有这个字段时回落到默认字体
             fontId = json.optString("fontId", DEFAULT_FONT_ID).ifBlank { DEFAULT_FONT_ID },
+            bitmapFontId = json.optString("bitmapFontId", ""),
+            textOffsetX = json.optDouble("textOffsetX", 0.0).toFloat(),
+            textOffsetY = json.optDouble("textOffsetY", 0.0).toFloat(),
+            slotTextOffsets = decodeSlotTextOffsets(json.optJSONObject("slotTextOffsets")),
+            textSpacing = decodeTextSpacing(json.optJSONObject("textSpacing")),
+            slotTextSpacings = decodeSlotTextSpacings(json.optJSONObject("slotTextSpacings")),
             outline = decodeOutline(json.optJSONObject("outline")),
             shadow = decodeShadow(json.optJSONObject("shadow")),
             opacity = decodeOpacity(json.optJSONObject("opacity")),

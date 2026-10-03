@@ -1,6 +1,7 @@
 package com.something.sthkey.data.config
 
 import com.something.sthkey.domain.config.KeyStrokesConfig
+import com.something.sthkey.domain.font.bitmap.BitmapFontSpec
 import org.json.JSONObject
 
 /**
@@ -140,6 +141,21 @@ object ConfigPackageCodec {
         val displayName: String,
         /** 内容 SHA-256；导入时用来判断"这个字体本地已经有了" */
         val sha256: String,
+        /**
+         * 图片字体的规格；`null` = 这是一个矢量字体（`.ttf` 等）。
+         *
+         * ============================================================
+         * 为什么规格必须**跟着包一起走**
+         * ============================================================
+         * 图片字体的"怎么切格子、怎么取遮罩、ascent 多少"是一组参数，
+         * 它们**不在配置里**（配置只存一个 `bitmapFontId`），
+         * 而是存在导出方的字体库里。
+         *
+         * 不带的话，导入方拿到那张 PNG 也不知道该怎么解析 ——
+         * 只能猜一套默认值，而图片字体的规格恰恰是**因图而异**的
+         * （不同材质包的行列数、遮罩模式、ascent 都可能不同）。
+         */
+        val bitmap: BitmapFontSpec? = null,
     )
 
     /**
@@ -185,6 +201,25 @@ object ConfigPackageCodec {
                             put("path", font.path)
                             put("displayName", font.displayName)
                             put("sha256", font.sha256)
+
+                            /*
+                             * 图片字体的规格：把 `BitmapFontSpec` 的字段
+                             * **平铺进来**，而不是套一层 `"bitmap": {...}`。
+                             *
+                             * 理由：`BitmapFontSpec.fromJson` 本来就是按
+                             * "从同一个 JSON 对象里读这些字段"写的
+                             * （字体库里也是这么存的），平铺之后读写
+                             * 共用同一段逻辑，不会出现"两处的字段名不一致"。
+                             *
+                             * 矢量字体不写这些字段 —— 读取时靠 `maskMode`
+                             * 在不在来判断这是不是一个图片字体。
+                             */
+                            font.bitmap?.let { spec ->
+                                val specJson = spec.toJson()
+                                specJson.keys().forEach { key ->
+                                    put(key, specJson.get(key))
+                                }
+                            }
                         },
                     )
                 }
@@ -235,6 +270,23 @@ object ConfigPackageCodec {
                             path = path,
                             displayName = item.optString("displayName").ifBlank { path },
                             sha256 = item.optString("sha256"),
+                            /*
+                             * 是不是图片字体，看 `maskMode` 在不在 ——
+                             * 那是 [BitmapFontSpec.toJson] 一定会写的字段，
+                             * 而矢量字体的条目里没有它。
+                             *
+                             * 用"某个字段存在与否"而不是加一个 `kind` 字段：
+                             * 少一个要维护的枚举，也不会出现"kind 说是矢量、
+                             * 实际带着一整套图片规格"这种自相矛盾的条目。
+                             *
+                             * 文件名传空串：真正的文件名在导入时定
+                             * （落盘用 uuid），规格里的文件名只是个冗余记录。
+                             */
+                            bitmap = if (item.has("maskMode")) {
+                                BitmapFontSpec.fromJson(item, atlasFileName = "")
+                            } else {
+                                null
+                            },
                         ),
                     )
                 }

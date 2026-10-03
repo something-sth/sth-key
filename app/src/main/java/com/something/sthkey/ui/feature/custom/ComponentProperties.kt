@@ -70,6 +70,8 @@ import com.something.sthkey.domain.custom.movedTo
 import com.something.sthkey.domain.custom.primaryText
 import com.something.sthkey.domain.custom.resizedTo
 import com.something.sthkey.domain.custom.withPrimaryText
+import com.something.sthkey.domain.custom.withStyle
+import com.something.sthkey.ui.component.EditableSliderRow
 import com.something.sthkey.domain.custom.withTextOffset
 import com.something.sthkey.domain.custom.withTextScale
 import com.something.sthkey.domain.font.FontRegistry
@@ -230,6 +232,7 @@ fun PropertyPanel(
     onBeginContinuous: () -> Unit,
     onEndContinuous: () -> Unit,
     onPickFont: () -> Unit,
+    onPickBitmapFont: () -> Unit,
     onPickKeys: (KeyComponent) -> Unit,
     onPickCpsKeys: (TextComponent, Int) -> Unit,
 ) {
@@ -320,6 +323,7 @@ fun PropertyPanel(
                 onEndContinuous = onEndContinuous,
                 onStyleChange = onStyleChange,
                 onPickFont = onPickFont,
+        onPickBitmapFont = onPickBitmapFont,
             )
         }
 
@@ -805,6 +809,7 @@ private fun LookSection(
     onEndContinuous: () -> Unit,
     onStyleChange: (ComponentStyle, Boolean) -> Unit,
     onPickFont: () -> Unit,
+    onPickBitmapFont: () -> Unit,
 ) {
     SubLabel("文字")
 
@@ -845,32 +850,62 @@ private fun LookSection(
     )
 
     /*
-     * CPS 那一行的字号。
+     * ============================================================
+     * 字间距 / 行间距（**相对字号的百分比**）
+     * ============================================================
+     * 用百分比而不是像素：字号是可调的，固定像素值在小字号下会挤成一团、
+     * 大字号下又几乎看不出来。
      *
-     * ⚠️ **只在文字里真的含占位符时出现** —— 没有 CPS 就没有"那一行"，
-     * 摆在那里只会让人以为这个滑块坏了。这与"内容"分区里
-     * 键位选择器的出现条件是同一条规矩。
-     *
-     * 按键样式的 CPS 模式 3 里，第二行本来就比主文字小（28 与 22），
-     * 所以从那边转换过来的组件会带一个约 79% 的值 ——
-     * 这个滑块就是给用户调它的。
+     * ⚠️ **对所有字体都显示**，包括常规（矢量）字体。
+     * 早先只在使用图片字体时才显示，那是个设计错误 ——
+     * "字距不合适"在矢量字体上同样会发生（中文字体尤其常见），
+     * 把入口藏起来等于这个功能对多数用户不存在。
      */
-    if (component is KeyComponent &&
-        CustomLayout.hasCpsPlaceholder(component.label)
-    ) {
-        SliderRow(
-            label = "CPS 行字号",
-            value = component.cpsTextScalePercent.toFloat(),
-            range = CustomLayout.CPS_LINE_SCALE_MIN.toFloat()..
-                CustomLayout.CPS_LINE_SCALE_MAX.toFloat(),
-            display = "${component.cpsTextScalePercent}%",
-            onBegin = onBeginContinuous,
-            onEnd = onEndContinuous,
-            onChange = { value ->
-                onComponentChange(component.copy(cpsTextScalePercent = value.toInt()), false)
-            },
-        )
-    }
+    SliderRow(
+        label = "字间距",
+        value = component.style.letterSpacing,
+        range = LETTER_SPACING_MIN..LETTER_SPACING_MAX,
+        display = "${component.style.letterSpacing.toInt()}%",
+        onBegin = onBeginContinuous,
+        onEnd = onEndContinuous,
+        onChange = { value ->
+            onComponentChange(
+                component.withStyle(component.style.copy(letterSpacing = value)),
+                false,
+            )
+        },
+    )
+    SliderRow(
+        label = "行间距",
+        value = component.style.lineSpacing,
+        range = LINE_SPACING_MIN..LINE_SPACING_MAX,
+        display = "${component.style.lineSpacing.toInt()}%",
+        onBegin = onBeginContinuous,
+        onEnd = onEndContinuous,
+        onChange = { value ->
+            onComponentChange(
+                component.withStyle(component.style.copy(lineSpacing = value)),
+                false,
+            )
+        },
+    )
+
+    /*
+     * ============================================================
+     * 这里**没有**「CPS 行字号」滑块
+     * ============================================================
+     * 曾经有过一个，删掉了 —— 用户实际用不到：
+     *
+     * - 组件里的两行字号由组件自己的字号决定，用户要改就改那个；
+     * - "从 Key 样式 CPS 模式 3 转换过来时副行更小"这件事，
+     *   转换时已经定好了，用户不需要再微调。
+     *
+     * 留一个用不到的滑块只会让面板更长、更像"没效果"。
+     *
+     * ⚠️ 数据字段 `cpsTextScalePercent` 仍然保留并生效：
+     * **转换**需要它（`KeyToCustomConverter` 会把 79% 写进去），
+     * 渲染两条路径也都吃它。删掉的只是这一个界面入口。
+     */
 
     SubLabel("形状")
     /* ---------- 圆角 ---------- */
@@ -998,6 +1033,35 @@ private fun LookSection(
             .padding(horizontal = 4.dp, vertical = 2.dp),
     ) {
         Text("字体：${FontRegistry.displayNameOf(component.style.fontId)}")
+    }
+
+    /*
+     * 图片字体（可选）。
+     *
+     * ============================================================
+     * 为什么是**单独一项**、而不是和上面合成一个按钮
+     * ============================================================
+     * 两者不是二选一：图片字体只有 ASCII 字形，中文要靠上面的常规字体
+     * 兜底。所以真实关系是「常规字体（必选）+ 图片字体（可选）」，
+     * 界面上也就是两个入口。
+     *
+     * 未选择时按钮显示"不使用" —— 它的默认状态就是不用，
+     * 而写成"图片字体：默认（字体已移除）"那种会让人以为哪里坏了。
+     */
+    OutlinedButton(
+        onClick = onPickBitmapFont,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 2.dp),
+    ) {
+        val id = component.style.bitmapFontId
+        Text(
+            if (id.isBlank()) {
+                "图片字体：不使用"
+            } else {
+                "图片字体：${FontRegistry.displayNameOf(id)}"
+            },
+        )
     }
 }
 
@@ -1331,6 +1395,18 @@ private fun positionText(value: Float, canvas: Float): String {
  * 不要为了标记开始而在外面套 `pointerInput` —— 那会和 Slider 自己的手势竞争，
  * 结果是**滑块彻底拖不动**（这个坑踩过）。用它的回调，别抢它的事件。
  */
+/**
+ * 带数值显示的滑块行，**数值可点开直接输入**。
+ *
+ * 实现已搬到共用的 [EditableSliderRow]（`ui/component/EditableSliderRow.kt`）——
+ * 自定义编辑页与配置编辑页原先各写了一份，两份的差异只有内边距与字号，
+ * 却各自维护。共用之后"点数值改精确值"这个能力对两边**同时**生效，
+ * 不会出现"这个页面能改、那个页面不能"。
+ *
+ * ⚠️ 保留这个薄封装而不是让调用方直接用 `EditableSliderRow`：
+ * 参数名（`range` / `onChange` / `onBegin` / `onEnd`）与这里所有调用点一致，
+ * 换实现时不必改几十处调用。
+ */
 @Composable
 fun SliderRow(
     label: String,
@@ -1342,42 +1418,32 @@ fun SliderRow(
     onEnd: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var dragging by remember { mutableStateOf(false) }
+    EditableSliderRow(
+        label = label,
+        value = value,
+        range = range,
+        display = display,
+        onValueChange = onChange,
+        modifier = modifier.padding(horizontal = 4.dp),
+        step = stepOf(range),
+        onBeginDrag = onBegin,
+        onEndDrag = onEnd,
+    )
+}
 
-    Column(modifier = modifier.padding(horizontal = 4.dp)) {
-        if (label.isNotEmpty()) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.weight(1f),
-                )
-                Text(
-                    text = display,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
-        }
-
-        Slider(
-            value = value.coerceIn(range.start, range.endInclusive),
-            onValueChange = { newValue ->
-                if (!dragging) {
-                    dragging = true
-                    onBegin()
-                }
-                onChange(newValue)
-            },
-            valueRange = range,
-            onValueChangeFinished = {
-                dragging = false
-                onEnd()
-            },
-        )
+/**
+ * 输入框的粒度：按**范围宽度**猜一个合理的精度。
+ *
+ * 范围很窄的（比如 0..1 的透明度）需要小数，宽范围（0..200）用整数就够 ——
+ * 一律用整数的话窄范围只能填 0 或 1，一律用小数的话宽范围
+ * 会看到"125.0"这种多余的小数点。
+ */
+internal fun stepOf(range: ClosedFloatingPointRange<Float>): Float {
+    val span = range.endInclusive - range.start
+    return when {
+        span <= 2f -> 0.01f
+        span <= 20f -> 0.1f
+        else -> 1f
     }
 }
 
@@ -1409,3 +1475,20 @@ private fun SwitchRow(
  * 界面上会显示成 `0,1` —— 这种"看起来像 bug"的显示问题不值得冒险。
  */
 private fun formatTrimmed(value: Float): String = (round(value * 100f) / 100f).toString()
+/*
+ * ============================================================
+ * 字间距 / 行间距的取值上下限（**相对字号的百分比**）
+ * ============================================================
+ * 为什么用百分比而不是像素：字号可调，固定像素值在小字号下会挤成一团、
+ * 在大字号下又几乎看不出来。百分比天生跟着字号缩放。
+ *
+ * 字间距允许负值（收紧到重叠），因为有些材质包的字形自带较宽的
+ * 左侧留白，需要收回来才好看。
+ *
+ * ⚠️ 行间距的负值**有下限**（引擎侧夹在 0.5 倍行高）：
+ * 再小两行就压在一起了，那不是"紧凑"而是坏了。
+ */
+private const val LETTER_SPACING_MIN = -30f
+private const val LETTER_SPACING_MAX = 100f
+private const val LINE_SPACING_MIN = -50f
+private const val LINE_SPACING_MAX = 200f

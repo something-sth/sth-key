@@ -38,6 +38,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import com.something.sthkey.core.prefs.AppPrefs
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -53,6 +62,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.something.sthkey.data.config.ConfigPackageCodec
+import android.net.Uri
+import android.widget.Toast
+import com.something.sthkey.data.config.ExportMethod
 import com.something.sthkey.data.config.ConfigPackageManager
 import com.something.sthkey.data.config.JsonConfigCodec
 import com.something.sthkey.domain.config.KeyStrokesConfig
@@ -98,67 +110,101 @@ fun ConfigListScreen(
 
     // 重命名不改变列表长度，靠版本号保证列表刷新
     val listRevision = viewModel.configVersion
-    val rows = configs.chunked(2)
-
-    var deleting by remember { mutableStateOf<KeyStrokesConfig?>(null) }
-    var notice by remember { mutableStateOf<String?>(null) }
-    var showCreateDialog by remember { mutableStateOf(false) }
-
-    /** 导出目标配置；非 null 时说明用户点了"导出" */
-    var exporting by remember { mutableStateOf<KeyStrokesConfig?>(null) }
-
-    /**
-     * 提交给系统选择器的建议文件名。
-     *
-     * 单独存一份而不是在回调里重算：配置可能在这期间被改名，而
-     * **"我们请求的是哪个名字"是判断系统有没有背地里改名的依据** ——
-     * 重算出来的名字与实际请求的不一致，清理逻辑就会失效（见 export 的说明）。
-     */
-    var exportingName by remember { mutableStateOf("") }
-
-    /** 导入结果（成功）与失败原因，用于弹报告 */
-    var importReport by remember { mutableStateOf<ConfigPackageManager.ImportResult?>(null) }
-    var importError by remember { mutableStateOf<String?>(null) }
-
-    /** 导入/导出都是磁盘操作，放协程里 */
-    val scope = rememberCoroutineScope()
 
     /*
-     * 导出：先用系统选择器让用户决定存哪、叫什么名。
+     * ============================================================
+     * 列表排版：由**设置页**决定（这里的入口不提供切换）
+     * ============================================================
+     * ⚠️ 刻意**不在这一页放排版切换**。
      *
-     * CreateDocument 会带上我们建议的文件名（含 .sthkey 后缀），
-     * 用户可以改。它返回目标 Uri，我们再把 zip 写进去 ——
-     * 这样不需要任何存储权限。
+     * 这一页是"挑配置、编辑配置"的地方，排版是"一次性偏好"——
+     * 混在一起会让每次操作都要面对一堆与当前任务无关的开关。
+     * 而且顶部已经有「导入配置」按钮，再塞切换控件会越来越挤。
+     *
+     * 偏好从 `AppPrefs` 读：它是**应用级**的，不属于任何一份配置，
+     * 所以导出配置时不会把"你的列表长什么样"带给别人。
      */
-    val exportLauncher = rememberLauncherForActivityResult(
-        /*
-         * MIME 传通配符，而不是 application/octet-stream。
-         *
-         * 传具体 MIME 时，部分文件管理器会因为"类型与后缀不匹配"
-         * 强行改成它认识的组合，于是 .sthkey 变成了 .bin。
-         * 通配符下系统不会去纠后缀，我们给什么就是什么。
-         */
-        contract = ActivityResultContracts.CreateDocument("*/*"),
-    ) { uri ->
-        val target = exporting
-        val suggestedName = exportingName
-        exporting = null
-        exportingName = ""
-        if (uri == null || target == null) return@rememberLauncherForActivityResult
+    val prefs = remember { AppPrefs.get(context) }
+    var showDescription by remember { mutableStateOf(prefs.configListShowDescription) }
+    var compactActions by remember { mutableStateOf(prefs.configListCompactActions) }
+    var columns by remember { mutableStateOf(prefs.configListColumns) }
 
-        scope.launch {
-            val ok = withContext(Dispatchers.IO) {
-                // 传上建议的文件名：导出内部靠"实际名字与它不一致"来识别
-                // "系统替我改名造了个空文件"，那才允许清理（见 ConfigPackageManager.export）
-                ConfigPackageManager.export(context, target, uri, suggestedName)
-            }
-            notice = if (ok) {
-                "已导出「${target.name}」"
-            } else {
-                "导出失败，请重试（若目录里出现了 0 字节的同名文件，可以删掉它再试）"
+    /*
+     * 每次回到这一页（ON_RESUME）重新读一次偏好。
+     *
+     * ============================================================
+     * ⚠️ 为什么不能只在 `remember` 里读一次
+     * ============================================================
+     * 用户去设置页改完再回来时，这个页面在导航栈里可能**没有被销毁重建**，
+     * 于是看到的还是旧排版 —— 表现为"设置里改了没生效，要重启应用才行"。
+     *
+     * 也**不能用 `LaunchedEffect(某个 key)`**：那个 key 在一次组合里是
+     * 常量，`LaunchedEffect` 只在首次组合时跑一次，返回这一页时并不会重跑
+     * （这一点很容易写错，而且症状和"完全没写"一模一样）。
+     * 必须真正监听生命周期事件。
+     */
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                showDescription = prefs.configListShowDescription
+                compactActions = prefs.configListCompactActions
+                columns = prefs.configListColumns
             }
         }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
+
+    val rows = configs.chunked(columns)
+
+    var deleting by remember { mutableStateOf<KeyStrokesConfig?>(null) }
+    var showCreateDialog by remember { mutableStateOf(false) }
+
+    /** 导入失败的原因，用于弹错误框 */
+    var importError by remember { mutableStateOf<String?>(null) }
+
+    /*
+     * ============================================================
+     * 一次性提示改用 **Toast**
+     * ============================================================
+     * 以前这些提示画在页面**最下面**一行小字（`notice` + `SectionHint`）——
+     * 而配置一多，那一行就在屏幕之外。用户点了导出、什么都没看见，
+     * 只能怀疑是不是没成功。
+     *
+     * Toast 浮在界面上方，与页面滚到哪无关，而且这个项目里
+     * 编辑器/调试页早就这么做了。
+     */
+    /* `context` 在本函数开头已经取过（导入那段也要用），这里不重复声明 */
+    val showToast: (String) -> Unit = remember(context) {
+        { message ->
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /** 待选择导出方式的配置；非 null 时说明弹窗开着 */
+    var choosingExportFor by remember { mutableStateOf<KeyStrokesConfig?>(null) }
+
+    val exportFlow = rememberExportFlow(onMessage = showToast)
+
+    /**
+     * 点「导出」：按已设的默认方式走，没设过（`ASK`）就弹选择窗口。
+     *
+     * ⚠️ 每次点击都**重新读一次偏好**，而不是用组合期的快照：
+     * 用户可能刚去设置页改了默认方式再回来。
+     */
+    fun startExport(config: KeyStrokesConfig) {
+        when (val method = prefs.exportMethod) {
+            ExportMethod.ASK -> choosingExportFor = config
+            else -> exportFlow.start(config, method, false)
+        }
+    }
+
+    /** 导入结果（成功），用于弹报告 */
+    var importReport by remember { mutableStateOf<ConfigPackageManager.ImportResult?>(null) }
+
+    /** 导入是磁盘操作，放协程里 */
+    val scope = rememberCoroutineScope()
 
     /*
      * 导入：让用户挑一个配置包。
@@ -231,36 +277,50 @@ fun ConfigListScreen(
         },
     ) {
         rows.forEachIndexed { rowIndex, rowItems ->
-            item(key = "row_${listRevision}_${rowItems.firstOrNull()?.id ?: rowIndex}") {
+            item(key = "row_${listRevision}_${columns}_${rowItems.firstOrNull()?.id ?: rowIndex}") {
                 BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                    val cardWidth = (maxWidth - 12.dp) / 2
+                    /*
+                     * 卡片宽度 = (可用宽 − 间隙总和) / 列数。
+                     *
+                     * `columns - 1` 段间隙：n 张卡片之间有 n-1 个缝。
+                     * 用 `coerceAtLeast(1)` 只是防除零（列数由 AppPrefs
+                     * 夹在 1..6，正常不会为 0）。
+                     */
+                    val gap = 12.dp
+                    val gaps = gap * (columns - 1).coerceAtLeast(0)
+                    val cardWidth = (maxWidth - gaps) / columns.coerceAtLeast(1)
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
                         rowItems.forEach { config ->
                             ConfigCard(
                                 config = config,
                                 width = cardWidth,
+                                showDescription = showDescription,
+                                compactActions = compactActions,
                                 // 点卡片即编辑：这是这一页最常用的动作。
                                 // 悬浮窗开关在主页，这里不重复放一份。
                                 onClick = { onEditConfig(config.id) },
-                                onExport = {
-                                    val name = config.name + ConfigPackageCodec.EXTENSION
-                                    exporting = config
-                                    // 记下建议的文件名：导出内部靠它识别"系统替我改名了"
-                                    exportingName = name
-                                    exportLauncher.launch(name)
-                                },
+                                onExport = { startExport(config) },
                                 onDuplicate = {
                                     val created = viewModel.duplicateConfig(config.id)
-                                    notice = "已复制为「${created.name}」"
+                                    showToast("已复制为「${created.name}」")
                                 },
                                 onDelete = { deleting = config },
                             )
+                        }
 
-                            if (rowItems.size == 1) {
-                                // 奇数个配置时补一个空位，避免最后一张卡片被拉伸到整行
-                                Spacer(modifier = Modifier.width(cardWidth))
-                            }
+                        /*
+                         * 末行不满时补空位，避免最后几张卡片被拉伸。
+                         *
+                         * ⚠️ 换成 `columns` 列之后这里不能再用"只有 1 张就补"：
+                         * 一行 3 列但只剩 2 张时，那 2 张会因为
+                         * `spacedBy` + 固定宽度而**左对齐留白**（本来就是这样），
+                         * 所以补齐只是为了不让 `Row` 把它们拉宽 —— 而宽度是
+                         * 显式给的，不会被拉伸。因此**不需要补位**。
+                         */
+                        repeat((columns - rowItems.size).coerceAtLeast(0)) {
+                            // 占位：保证这一行的卡片宽度与其它行一致（不参与布局宽度计算）
+                            Spacer(modifier = Modifier.width(cardWidth))
                         }
                     }
                 }
@@ -280,12 +340,6 @@ fun ConfigListScreen(
                     "可以同时开多个，各自有独立的悬浮窗。",
             )
         }
-
-        notice?.let { message ->
-            item {
-                SectionHint(text = message)
-            }
-        }
     }
 
     /*
@@ -300,7 +354,7 @@ fun ConfigListScreen(
             onConfirm = { name, description, styleId ->
                 val created = viewModel.createConfig(name, description, styleId)
                 showCreateDialog = false
-                notice = "已新建「${created.name}」（${created.style.label}）"
+                showToast("已新建「${created.name}」（${created.style.label}）")
             },
         )
     }
@@ -317,6 +371,24 @@ fun ConfigListScreen(
 
     importReport?.let { report ->
         ImportReportDialog(report = report, onDismiss = { importReport = null })
+    }
+
+    /*
+     * ============================================================
+     * 导出方式选择
+     * ============================================================
+     * 只在"没有默认导出方式"时出现（或用户主动来改时）。
+     * 勾了「设为默认」之后下次点导出直接按那个方式走，不再弹这个窗口。
+     */
+    choosingExportFor?.let { target ->
+        ExportMethodDialog(
+            configName = target.name,
+            onPick = { method, remember ->
+                choosingExportFor = null
+                exportFlow.start(target, method, remember)
+            },
+            onDismiss = { choosingExportFor = null },
+        )
     }
 
     importError?.let { message ->
@@ -353,7 +425,7 @@ fun ConfigListScreen(
                 TextButton(
                     onClick = {
                         val ok = viewModel.deleteConfig(target.id)
-                        notice = if (ok) "已删除「${target.name}」" else "内置配置无法删除"
+                        showToast(if (ok) "已删除「${target.name}」" else "内置配置无法删除")
                         deleting = null
                     },
                     enabled = !target.builtIn,
@@ -379,6 +451,10 @@ private fun ConfigCard(
     config: KeyStrokesConfig,
     width: androidx.compose.ui.unit.Dp,
     modifier: Modifier = Modifier,
+    /** 是否显示描述文字（设置页可关，关掉后卡片更紧凑） */
+    showDescription: Boolean = true,
+    /** 是否把导出/复制/删除收进「更多」菜单 */
+    compactActions: Boolean = false,
     onClick: () -> Unit,
     onExport: () -> Unit,
     onDuplicate: () -> Unit,
@@ -394,27 +470,41 @@ private fun ConfigCard(
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
             /*
-             * 第一行：名称
+             * 名称：独占一整行。
+             *
+             * ⚠️ 紧凑模式下**不能**把「更多」按钮放进这一行 ——
+             * 卡片可能只有 1/6 屏宽，一个 36dp 的按钮就能把标题挤没
+             * （用户实测：配置名字直接消失）。按钮改到右下角，见下。
              */
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = config.name,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            /*
+             * 描述：可以被设置页关掉。
+             *
+             * 关掉之后**整块不占位置**（而不是留一段空白）——
+             * 否则"关掉描述"只是少了一行字，卡片高度没变，达不到紧凑的目的。
+             *
+             * ⚠️ 没有描述时也整块不渲染：`config.description` 与
+             * `config.style.description` 都可能是空的，那时留着就是一个空行。
+             */
+            val description = config.description.ifBlank { config.style.description }
+            if (showDescription && description.isNotBlank()) {
+                Spacer(modifier = Modifier.height(2.dp))
+
                 Text(
-                    text = config.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
+                    text = description,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
                 )
             }
-
-            Spacer(modifier = Modifier.height(2.dp))
-
-            Text(
-                text = config.description.ifBlank { config.style.description },
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
 
             Spacer(modifier = Modifier.height(6.dp))
 
@@ -424,48 +514,149 @@ private fun ConfigCard(
                 color = MaterialTheme.colorScheme.primary,
             )
 
-            Spacer(modifier = Modifier.height(2.dp))
-
             /*
-             * 操作区：三个独立图标（编辑已经等于"点整张卡片"，不再重复放一个按钮）。
+             * ============================================================
+             * 操作区 —— 两种排布，都在卡片的**右下角**
+             * ============================================================
+             * - **平铺**（默认）：三个独立图标。编辑已经等于"点整张卡片"，
+             *   所以不再重复放一个编辑按钮。
+             * - **紧凑**：收进一个「更多」菜单，**右对齐**放在同一位置。
              *
-             * 用菜单虽然省地方，但"要多点一次才能看到有什么操作"，观感也差。
+             * ⚠️ 紧凑模式下的按钮**不能挤进标题那一行**：
+             * 卡片可能只有 1/6 屏宽，一个 36dp 的按钮足以把标题挤没 ——
+             * 用户实测的现象是"配置名字直接消失"。
+             * 放到右下角之后标题独占一行，多窄都不会被挤掉。
              *
-             * 宽度是这里唯一的麻烦：卡片只有半屏宽，扣掉内边距后，
-             * 360dp 屏上大约只剩 134dp —— 四个 36dp 的按钮并排需要 150dp，
-             * 直接溢出（标题会被挤没）。去掉编辑按钮后三个刚好宽裕，
-             * 但仍然**按权重均分**而不是固定宽度：无论屏幕多窄都刚好排满、不会溢出，
-             * 图标始终居中。触摸高度保持 36dp 不缩，手感不受影响。
+             * ⚠️ 平铺时的宽度是另一个麻烦：卡片可能只有 1/6 屏宽，
+             * 扣掉内边距后在窄屏上只剩几十 dp。所以**按权重均分**而不是
+             * 固定宽度：无论多窄都刚好排满、不会溢出，图标始终居中。
+             * 触摸高度保持 36dp 不缩，手感不受影响。
              *
-             * 这里不画缩略预览：卡片太窄，按键文字会挤错位，
+             * ⚠️ 两种模式**占同样的高度**（都靠 `CompactIconButton` 的
+             * 36dp 固定高度）：否则切换排版会让整行卡片高度跳动，
+             * 看着像列表在闪。
+             *
+             * 这里不画缩略预览：卡片太窄，按键文字会挤错位 ——
              * 预览只在编辑页里看（那里的尺寸足够）。
              */
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                CompactIconButton(
-                    icon = Icons.Default.SaveAlt,
-                    description = "导出",
-                    onClick = onExport,
-                    modifier = Modifier.weight(1f),
-                )
-                CompactIconButton(
-                    icon = Icons.Default.ContentCopy,
-                    description = "复制",
-                    onClick = onDuplicate,
-                    modifier = Modifier.weight(1f),
-                )
-                CompactIconButton(
-                    icon = Icons.Default.Delete,
-                    description = "删除",
-                    onClick = onDelete,
-                    enabled = !config.builtIn,
-                    modifier = Modifier.weight(1f),
-                )
+            if (compactActions) {
+                /*
+                 * 紧凑模式：占满整行、内容靠右 —— 于是按钮落在**右下角**，
+                 * 与平铺模式那把图标的右端对齐。
+                 */
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.CenterEnd,
+                ) {
+                    ConfigActionsMenu(
+                        builtIn = config.builtIn,
+                        onExport = onExport,
+                        onDuplicate = onDuplicate,
+                        onDelete = onDelete,
+                    )
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    CompactIconButton(
+                        icon = Icons.Default.SaveAlt,
+                        description = "导出",
+                        onClick = onExport,
+                        modifier = Modifier.weight(1f),
+                    )
+                    CompactIconButton(
+                        icon = Icons.Default.ContentCopy,
+                        description = "复制",
+                        onClick = onDuplicate,
+                        modifier = Modifier.weight(1f),
+                    )
+                    CompactIconButton(
+                        icon = Icons.Default.Delete,
+                        description = "删除",
+                        onClick = onDelete,
+                        enabled = !config.builtIn,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             }
+        }
+    }
+}
+
+/**
+ * 配置卡片**右下角**的「更多」菜单（竖排三点）。
+ *
+ * ============================================================
+ * 为什么用 `DropdownMenu` 而不是自己画一个
+ * ============================================================
+ * 它是 Material 的标准做法：位置自动贴着锚点、点外面自动关、
+ * 有系统一致的进入动画与阴影。自己画的话这三点都得手动处理，
+ * 而"看起来像原生但行为不一致"比"朴素一点"更糟。
+ *
+ * ⚠️ 菜单项**带图标 + 文字**，而不是纯文字：纯文字的菜单
+ * 在多语言/长词下会变得很高，而图标能让用户扫一眼就找到目标。
+ *
+ * ⚠️ 内置配置（Default）的「删除」要禁用而不是隐藏：
+ * 隐藏会让用户以为"这个菜单里没有删除"，禁用则明确告诉他
+ * "有，但这一项不能删"（卡片平铺模式下也是同样的规矩）。
+ */
+@Composable
+private fun ConfigActionsMenu(
+    builtIn: Boolean,
+    onExport: () -> Unit,
+    onDuplicate: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Box {
+        CompactIconButton(
+            icon = Icons.Default.MoreVert,
+            description = "更多操作",
+            onClick = { expanded = true },
+            /*
+             * ⚠️ 必须**给定宽度并关掉 `fillWidth`** ——
+             * 这个按钮是单独一个放在右下角的，撑满整行的话
+             * 看起来是一条可点的长条，而不是一个"更多"按钮。
+             *
+             * 48dp 是 Material 的最小触摸目标尺寸，够大也够收敛。
+             */
+            modifier = Modifier.width(48.dp),
+            fillWidth = false,
+        )
+
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            DropdownMenuItem(
+                text = { Text("导出") },
+                leadingIcon = { Icon(Icons.Default.SaveAlt, contentDescription = null) },
+                onClick = {
+                    expanded = false
+                    onExport()
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("复制") },
+                leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                onClick = {
+                    expanded = false
+                    onDuplicate()
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("删除") },
+                leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
+                enabled = !builtIn,
+                onClick = {
+                    expanded = false
+                    onDelete()
+                },
+            )
         }
     }
 }
@@ -473,9 +664,14 @@ private fun ConfigCard(
 /**
  * 紧凑图标按钮。
  *
- * 宽度交给调用方（通常传 weight(1f)），这里只管高度与点击区：
+ * 宽度交给调用方（通常传 `weight(1f)`），这里只管高度与点击区：
  * 高度固定 36dp，既满足"可点击区域不小于 36dp"的可用性要求，
  * 又不会像默认 IconButton 的 48dp 那样把半屏卡片撑爆。
+ *
+ * ⚠️ 默认**占满可用宽度**（`fillMaxWidth`）——平铺模式下由 `weight`
+ * 决定实际宽度，所以这个默认值不影响它。
+ * 但"只放一个按钮"的场景（右下角的「更多」）要显式传窄宽度，
+ * 否则它会撑满整行、看着像一个长条热区而不是一个按钮。
  */
 @Composable
 private fun CompactIconButton(
@@ -484,11 +680,12 @@ private fun CompactIconButton(
     onClick: () -> Unit,
     enabled: Boolean = true,
     modifier: Modifier = Modifier,
+    fillWidth: Boolean = true,
 ) {
     Box(
         modifier = modifier
             .height(36.dp)
-            .fillMaxWidth()
+            .then(if (fillWidth) Modifier.fillMaxWidth() else Modifier)
             .clip(RoundedCornerShape(8.dp))
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
@@ -679,160 +876,3 @@ private fun OverlayStyleDescriptor.icon(): ImageVector = when (iconKey) {
  * 只报"缺失"会漏掉一半信息（导入新版配置到旧版时，用户看不到设置被丢了）。
  * 默认折叠，避免一次刷出几十行；需要细节时再展开。
  */
-@Composable
-private fun ImportReportDialog(
-    report: ConfigPackageManager.ImportResult,
-    onDismiss: () -> Unit,
-) {
-    var expanded by remember { mutableStateOf(false) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (report.hasDifferences) "导入完成（有差异）" else "导入成功") },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 400.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text(
-                    text = buildString {
-                        append("已导入「${report.config.name}」")
-                        if (report.renamed) {
-                            append("（原名称「${report.originalName}」，因重名已自动改名）")
-                        }
-                    },
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-
-                Text(
-                    text = "包版本：格式 v${report.packageFormatVersion}" +
-                        if (report.packageAppVersion.isNotBlank()) {
-                            " · 导出自 ${report.packageAppVersion}"
-                        } else {
-                            ""
-                        },
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-
-                /* ---- 字体 ---- */
-
-                if (report.importedFonts.isNotEmpty()) {
-                    ReportSection(
-                        title = "已加入字体库",
-                        lines = report.importedFonts,
-                        hint = "这些字体对所有配置可用，无需重复导入",
-                    )
-                }
-
-                if (report.reusedFonts.isNotEmpty()) {
-                    ReportSection(
-                        title = "复用了已有的字体",
-                        lines = report.reusedFonts,
-                        hint = "内容相同，没有重复占用空间",
-                    )
-                }
-
-                if (report.missingFonts.isNotEmpty()) {
-                    ReportSection(
-                        title = "⚠ 字体缺失（已回落为默认字体）",
-                        lines = report.missingFonts,
-                        hint = "包里没带这些字体。用到它们的地方已回落为默认字体 —— " +
-                            "到「自定义编辑 → 外观」里给那些组件重新选一个即可，其余组件不受影响",
-                        titleColor = MaterialTheme.colorScheme.error,
-                    )
-                }
-
-                /* ---- Live2D 模型 ---- */
-
-                if (report.importedModels.isNotEmpty()) {
-                    ReportSection(
-                        title = "已加入模型库",
-                        lines = report.importedModels,
-                        hint = "该模型对所有配置可用，无需重复导入",
-                    )
-                }
-
-                if (report.reusedModels.isNotEmpty()) {
-                    ReportSection(
-                        title = "复用了已有的模型",
-                        lines = report.reusedModels,
-                        hint = "内容相同，没有重复占用空间",
-                    )
-                }
-
-                if (report.modelMissing) {
-                    Text(
-                        text = "⚠ 配置包里的 Live2D 模型缺失或导入失败，该配置已回落到内置模型。",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-
-                /* ---- 字段差异 ---- */
-
-                if (report.unknownKeys.isNotEmpty() || report.missingKeys.isNotEmpty()) {
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-                    Text(
-                        text = "字段差异 " +
-                            "（未识别 ${report.unknownKeys.size} · 默认值 ${report.missingKeys.size}）",
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-
-                    TextButton(onClick = { expanded = !expanded }) {
-                        Text(if (expanded) "收起详情" else "展开详情")
-                    }
-
-                    if (expanded) {
-                        if (report.unknownKeys.isNotEmpty()) {
-                            ReportSection(
-                                title = "未识别的字段（已跳过）",
-                                lines = report.unknownKeys.map { JsonConfigCodec.labelOf(it) },
-                                hint = "这些多半来自更新版本的功能，本版本无法应用",
-                            )
-                        }
-                        if (report.missingKeys.isNotEmpty()) {
-                            ReportSection(
-                                title = "配置中未定义的项（已用默认值）",
-                                lines = report.missingKeys.map { JsonConfigCodec.labelOf(it) },
-                                hint = "这些项在配置包里没有写，因此使用本版本的默认值",
-                            )
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("知道了") }
-        },
-    )
-}
-
-/** 报告里的一个小节：标题 + 若干条目 + 一句说明 */
-@Composable
-private fun ReportSection(
-    title: String,
-    lines: List<String>,
-    hint: String,
-    titleColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurface,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(text = title, style = MaterialTheme.typography.titleSmall, color = titleColor)
-        lines.forEach { line ->
-            Text(
-                text = "· $line",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Text(
-            text = hint,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}

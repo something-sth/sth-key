@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    FileProvider 能对外暴露的路径。
+
+    ⚠️ 只暴露 cacheDir/share/ 这一个子目录，**不要**写 `<cache-path name="x" path="." />`。
+
+    共享出去的 Uri 会带上临时读权限，接收方在那段时间里能读到这个路径下的
+    任何文件。把整个私有目录交出去的话，缓存里的其它东西（导入过程中
+    复制进来的临时 zip 等）也一并可读 —— 那是没必要的暴露。
+
+    这里只放"刚为分享而生成的那一个配置包"，用完即删（见 ConfigExporters）。
+-->
+<paths>
+    <cache-path
+        name="share"
+        path="share/" />
+</paths>

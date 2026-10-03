@@ -46,8 +46,8 @@ android {
         // targetSdk 保持 36：它决定运行时行为（是否受新版系统限制），
         // 与"用什么 SDK 编译"是两件事，没必要跟着一起升
         targetSdk = 36
-        versionCode = 240
-        versionName = "2.4.0"
+        versionCode = 250
+        versionName = "2.5.0"
 
         buildConfigField("String", "BUILD_TAG", "\"$buildTag\"")
 

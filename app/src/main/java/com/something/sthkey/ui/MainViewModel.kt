@@ -591,6 +591,52 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /*
      * ============================================================
+     * 配置列表的排版（设置页可调）
+     * ============================================================
+     * 用户反馈"配置太多，列表看着杂乱"，所以列表长什么样交给用户决定。
+     *
+     * 放在 view-model 里而不是像画布边框那样直接读写 `AppPrefs`：
+     * 这三项**渲染在同一页**（设置页），改完要立刻看到开关/滑块的反馈，
+     * 用 Compose 状态最直接。而配置列表页在回到它时重新读一次偏好
+     * （见 `ConfigListScreen` 的生命周期监听）。
+     */
+
+    /** 是否在配置卡片上显示描述 */
+    var configListShowDescription by mutableStateOf(prefs.configListShowDescription)
+        private set
+
+    fun updateConfigListShowDescription(show: Boolean) {
+        if (configListShowDescription == show) return
+        configListShowDescription = show
+        prefs.configListShowDescription = show
+    }
+
+    /** 是否把导出/复制/删除收进「更多」菜单 */
+    var configListCompactActions by mutableStateOf(prefs.configListCompactActions)
+        private set
+
+    fun updateConfigListCompactActions(compact: Boolean) {
+        if (configListCompactActions == compact) return
+        configListCompactActions = compact
+        prefs.configListCompactActions = compact
+    }
+
+    /** 配置列表一行显示几个（1..6） */
+    var configListColumns by mutableStateOf(prefs.configListColumns)
+        private set
+
+    fun updateConfigListColumns(count: Int) {
+        val clamped = count.coerceIn(
+            AppPrefs.CONFIG_LIST_COLUMNS_MIN,
+            AppPrefs.CONFIG_LIST_COLUMNS_MAX,
+        )
+        if (configListColumns == clamped) return
+        configListColumns = clamped
+        prefs.configListColumns = clamped
+    }
+
+    /*
+     * ============================================================
      * 画布边框那两个开关**不在这里**
      * ============================================================
      * 它们在自定义编辑页顶部的「更多」菜单里，由 [MainActivity] 直接

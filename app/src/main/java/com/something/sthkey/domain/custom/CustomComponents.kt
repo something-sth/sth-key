@@ -168,6 +168,29 @@ data class ComponentStyle(
 
     /** 字体标识，规则与 [com.something.sthkey.domain.config.KeyStrokesConfig.fontId] 一致 */
     val fontId: String = DEFAULT_COMPONENT_FONT_ID,
+
+    /**
+     * 图片字体标识（可选）；空字符串表示不用。
+     *
+     * 与 [fontId] 是"**常规字体（必选）+ 图片字体（可选）**"的关系，
+     * 不是二选一 —— 图片字体只有 ASCII 字形，中文要靠 [fontId] 兜底。
+     * 字段名以 `fontId` 结尾是为了被配置包的 `ParamsTree` 自动收集，
+     * 详见 `KeyStrokesConfig.bitmapFontId`。
+     */
+    val bitmapFontId: String = "",
+
+    /**
+     * 这个组件自己的**字间距 / 行间距**（相对字号的百分比，0 = 不动）。
+     *
+     * 放在**组件自己的样式**里、而不是像 Key 那样另开一张按槽位查的表：
+     * 自定义 Key 的每个组件本来就是独立对象，"每个组件各自的间距"
+     * 直接是一个字段就够，不必再查一次表。
+     *
+     * 图片字体的字形宽度与间距因图集而异（有的材质包字距很挤、有的很松），
+     * 而 TTF 那套字距设置在图片字体上不起作用 —— 所以需要它。
+     */
+    val letterSpacing: Float = 0f,
+    val lineSpacing: Float = 0f,
 )
 
 /**

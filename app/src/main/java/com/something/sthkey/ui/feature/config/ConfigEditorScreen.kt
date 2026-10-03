@@ -59,20 +59,28 @@ import kotlinx.coroutines.delay
 import com.something.sthkey.domain.config.resetParamsToDefault
 import com.something.sthkey.domain.font.FontRegistry
 import com.something.sthkey.domain.style.KeyLayout
+import kotlin.math.roundToInt
 import com.something.sthkey.domain.style.StyleId
 import com.something.sthkey.domain.live2d.Live2DModels
 import com.something.sthkey.ui.component.Live2DModelPickerDialog
 import com.something.sthkey.ui.EditMode
 import com.something.sthkey.ui.MainViewModel
 import com.something.sthkey.ui.component.CardDivider
+import com.something.sthkey.domain.font.bitmap.BitmapFontImporter
+import com.something.sthkey.ui.component.BitmapFontPickerDialog
+import com.something.sthkey.ui.component.PendingBitmapImportDialog
 import com.something.sthkey.ui.component.FontPickerDialog
 import com.something.sthkey.ui.component.HexColorRow
 import com.something.sthkey.ui.component.KeyMappingEditor
 import com.something.sthkey.ui.component.ScrollableScreen
+import com.something.sthkey.ui.component.EditableSliderRow
 import com.something.sthkey.ui.component.SectionHeader
+import com.something.sthkey.ui.feature.custom.stepOf
 import com.something.sthkey.ui.component.SectionHint
 import com.something.sthkey.ui.component.SettingItem
 import com.something.sthkey.ui.component.SettingsCard
+import com.something.sthkey.ui.component.SlotTextOffsetDialog
+import com.something.sthkey.ui.component.SlotTextSpacingDialog
 import com.something.sthkey.ui.component.SwitchItem
 import com.something.sthkey.ui.preview.ConfigPreview
 import kotlinx.coroutines.Dispatchers
@@ -219,6 +227,29 @@ fun ConfigEditorScreen(
     var showFontPicker by remember { mutableStateOf(false) }
 
     /*
+     * 图片字体是**独立的一个对话框**（常规字体必选 + 图片字体可选），
+     * 所以状态也是独立的。合成一个布尔量的话，用户从图片字体那一项
+     * 进去也会把"选择常规字体"弹出来。
+     */
+    var showBitmapFontPicker by remember { mutableStateOf(false) }
+
+    /** 每个键各自的文字偏移窗口 */
+    var showSlotOffsetDialog by remember { mutableStateOf(false) }
+
+    /** 每个键各自的字间距 / 行间距窗口 */
+    var showSlotSpacingDialog by remember { mutableStateOf(false) }
+
+    /**
+     * 待命名的图片字体导入。
+     *
+     * 选完文件先不登记，而是等用户起名字 —— 图集文件名基本都叫
+     * `ascii.png`，直接拿它当字体名的话导几张之后列表里全是同名条目。
+     */
+    val pendingBitmapImport = remember {
+        mutableStateOf<BitmapFontImporter.Source?>(null)
+    }
+
+    /*
      * 字体导入的文件选择器。
      *
      * 用 SAF（系统文件选择器）而不是申请存储权限：
@@ -242,6 +273,64 @@ fun ConfigEditorScreen(
             }
         }
     }
+
+    /*
+     * 图片字体的导入。
+     *
+     * ⚠️ 这一条**不走"先关对话框再重开"那一套**（矢量字体才需要）：
+     * 选完文件之后弹的是**我们自己**的命名对话框，把选择窗口一起关掉
+     * 反而让用户看不到"新导入的字体出现在列表里"。
+     *
+     * 但 `AlertDialog` 是独立窗口，SAF 选择器一起来宿主 Activity 暂停、
+     * 对话框窗口失焦，系统会给它一个 dismiss。所以选择器返回时把
+     * `showBitmapFontPicker` 重新置 true —— 抵消系统那次 dismiss。
+     */
+    val bitmapFontPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) {
+            showBitmapFontPicker = true
+            return@rememberLauncherForActivityResult
+        }
+
+        scope.launch {
+            val source = withContext(Dispatchers.IO) {
+                BitmapFontImporter.readFrom(context, uri)
+            }
+
+            showBitmapFontPicker = true
+
+            if (source is BitmapFontImporter.Source.Failure) {
+                toast = source.reason
+                return@launch
+            }
+
+            pendingBitmapImport.value = source
+        }
+    }
+
+    PendingBitmapImportDialog(
+        source = pendingBitmapImport.value,
+        onDismiss = { pendingBitmapImport.value = null },
+        onRegistered = { fontId, name ->
+            pendingBitmapImport.value = null
+
+            /*
+             * ⚠️ 只改 `bitmapFontId`，**不动 `fontId`** ——
+             * 图片字体是可选的叠加项，常规字体仍要留着给中文兜底。
+             * 写成 `copy(fontId = ...)` 会把用户的常规字体顶掉，
+             * 而那个 id 是 `bitmap:` 前缀、`FontRegistry` 找不到，
+             * 界面就会显示"默认（字体已移除）"。
+             */
+            applyChange { it.copy(bitmapFontId = fontId) }
+            fontRevision++
+            toast = "已导入「$name」"
+        },
+        onFailed = { reason ->
+            pendingBitmapImport.value = null
+            toast = reason
+        },
+    )
 
     /** 返回：保存生效模式下有未保存改动时先确认，避免误触丢失 */
     fun requestBack() {
@@ -447,7 +536,7 @@ fun ConfigEditorScreen(
                     value = editable.scalePercent.toFloat(),
                     valueRange = KeyLayout.SCALE_PERCENT_MIN.toFloat()..
                         KeyLayout.SCALE_PERCENT_MAX.toFloat(),
-                    steps = 14,
+                    steps = SCALE_SLIDER_STEPS,
                     display = "${editable.scalePercent}%",
                     onValueChange = { value -> applyChange { it.copy(scalePercent = value.toInt()) } },
                 )
@@ -596,6 +685,30 @@ fun ConfigEditorScreen(
                     title = "自定义字体",
                     subtitle = FontRegistry.displayNameOf(editable.fontId),
                     onClick = { showFontPicker = true },
+                )
+
+                /*
+                 * 图片字体（可选）。
+                 *
+                 * ============================================================
+                 * 为什么是**独立一项**、而不是和上面合成一个入口
+                 * ============================================================
+                 * 两者不是二选一：图片字体只有 ASCII 字形，中文要靠上面的
+                 * 常规字体兜底。所以真实关系是「常规字体（必选）+
+                 * 图片字体（可选）」，界面上也就是两个入口。
+                 *
+                 * 未选择时显示"不使用" —— 它的默认状态就是不用，
+                 * 写成"默认（字体已移除）"那种会让人以为哪里坏了。
+                 */
+                CardDivider()
+                SettingItem(
+                    title = "图片字体",
+                    subtitle = if (editable.bitmapFontId.isBlank()) {
+                        "不使用（只有 ASCII 会用到它）"
+                    } else {
+                        FontRegistry.displayNameOf(editable.bitmapFontId)
+                    },
+                    onClick = { showBitmapFontPicker = true },
                 )
             }
         }
@@ -989,6 +1102,135 @@ fun ConfigEditorScreen(
 
         /*
          * ============================================================
+         * 文字偏移
+         * ============================================================
+         * 放在「行为」与「键位映射」之间：它既不是"行为"（不影响按键逻辑），
+         * 也不是"键位映射"（不改显示什么字），而是**文字画在哪**。
+         *
+         * ⚠️ 这个分区主要是为**图片字体**加的：不同字体图集的 `ascent`
+         * 不同，字形在格子里高低不一，换一张图集就可能整体偏上/偏下 ——
+         * 没有这个滑块就只能靠改图解决。
+         *
+         * 单位与自定义 Key 的"文字 X/Y 偏移"**完全一致**（基础坐标单位），
+         * 所以以后做"Key → 自定义"转换时是**原样对应**，不需要换算。
+         * 范围也照抄（−60..60），免得两个页面的滑块手感不一样。
+         */
+
+        item { SectionHeader("文字偏移") }
+
+        item {
+            SettingsCard {
+                SliderRow(
+                    label = "文字 X 偏移",
+                    value = editable.textOffsetX,
+                    valueRange = TEXT_OFFSET_MIN..TEXT_OFFSET_MAX,
+                    display = editable.textOffsetX.roundToInt().toString(),
+                    onValueChange = { value -> applyChange { it.copy(textOffsetX = value) } },
+                )
+                CardDivider()
+                SliderRow(
+                    label = "文字 Y 偏移",
+                    value = editable.textOffsetY,
+                    valueRange = TEXT_OFFSET_MIN..TEXT_OFFSET_MAX,
+                    display = editable.textOffsetY.roundToInt().toString(),
+                    onValueChange = { value -> applyChange { it.copy(textOffsetY = value) } },
+                )
+
+                /*
+                 * 每个键各自的偏移放进**独立窗口**。
+                 *
+                 * 直接平铺在这里的话，8~10 个键 × 2 个滑块 = 二十来个滑条，
+                 * 这一页会长到没法用（而这一页本来就已经很长了）。
+                 * 收进窗口之后主页面只多一行按钮。
+                 */
+                CardDivider()
+                OutlinedButton(
+                    onClick = { showSlotOffsetDialog = true },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp, vertical = 8.dp),
+                ) {
+                    Text("单独调整每个键…")
+                }
+            }
+        }
+
+        item {
+            SectionHint(
+                text = "正值是往右、往下。图片字体在不同图集里的基线位置会有差别，" +
+                    "用它把文字挪到合适的位置。范围与自定义 Key 的文字偏移一致，" +
+                    "所以两者之间互相转换时位置不会跑偏。\n\n" +
+                    "个别键如果和别的不一样（比如空格显示的是非 ASCII 横线、" +
+                    "走的不是图片字体），用「单独调整每个键」逐个修。",
+            )
+        }
+
+        /*
+         * ============================================================
+         * 字间距 / 行间距
+         * ============================================================
+         * 与「文字偏移」同一套结构：两个全局滑块 + 一个"逐键调整"窗口。
+         *
+         * ⚠️ 单位是**相对字号的百分比**，不是像素：字号可调，
+         * 固定像素值在小字号下会挤成一团、大字号下又几乎看不出来。
+         *
+         * ⚠️ **对所有字体都显示**，包括常规（矢量）字体。
+         * 早先只在使用图片字体时才显示，那是个设计错误 ——
+         * "字距不合适"在矢量字体上同样会发生（中文字体尤其常见），
+         * 把入口藏起来等于这个功能对多数用户不存在。
+         */
+
+        item { SectionHeader("字间距与行间距") }
+
+        item {
+            SettingsCard {
+                SliderRow(
+                    label = "字间距",
+                    value = editable.textSpacing.letter,
+                    valueRange = SPACING_MIN..LETTER_SPACING_MAX,
+                    display = "${editable.textSpacing.letter.roundToInt()}%",
+                    onValueChange = { value ->
+                        applyChange {
+                            it.copy(textSpacing = it.textSpacing.copy(letter = value))
+                        }
+                    },
+                )
+                CardDivider()
+                SliderRow(
+                    label = "行间距",
+                    value = editable.textSpacing.line,
+                    valueRange = SPACING_MIN..LINE_SPACING_MAX,
+                    display = "${editable.textSpacing.line.roundToInt()}%",
+                    onValueChange = { value ->
+                        applyChange {
+                            it.copy(textSpacing = it.textSpacing.copy(line = value))
+                        }
+                    },
+                )
+
+                CardDivider()
+                OutlinedButton(
+                    onClick = { showSlotSpacingDialog = true },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp, vertical = 8.dp),
+                ) {
+                    Text("单独调整每个键…")
+                }
+            }
+        }
+
+        item {
+            SectionHint(
+                text = "百分比是相对字号算的，以后改字号不用重新调。\n\n" +
+                    "行间距收紧有下限（不会把两行压在一起）；" +
+                    "字间距可以收成负值 —— 有些字体的字形自带较宽的左侧留白，" +
+                    "需要收回来才好看。",
+            )
+        }
+
+        /*
+         * ============================================================
          * 键位映射
          * ============================================================
          */
@@ -1214,6 +1456,77 @@ fun ConfigEditorScreen(
         )
     }
 
+    /*
+     * 图片字体是**另一个对话框**（常规字体必选 + 图片字体可选），
+     * 所以这里是独立的一段，而不是上面那个对话框里的第二个导入按钮。
+     */
+    if (showBitmapFontPicker) {
+        BitmapFontPickerDialog(
+            selectedId = editable.bitmapFontId,
+            onSelect = { fontId -> applyChange { it.copy(bitmapFontId = fontId) } },
+            onDismiss = { showBitmapFontPicker = false },
+            /*
+             * ⚠️ 这里**不关**对话框：图片字体导入后弹的是我们自己的命名
+             * 对话框，选择窗口留着才能让用户看到新条目。
+             * 系统那次 dismiss 由 `bitmapFontPicker` 回调里那句
+             * `showBitmapFontPicker = true` 抵消。
+             */
+            onImport = {
+                bitmapFontPicker.launch(
+                    arrayOf(
+                        /*
+                         * MIME 要同时覆盖"图片"与"压缩包"。
+                         *
+                         * ⚠️ 不要把通配符 MIME 原样写进块注释：Kotlin 的块
+                         * 注释是**可嵌套**的，注释里出现"斜杠 + 星号"会被当成
+                         * 嵌套注释的开始，而闭合只有一层 —— 整段注释永不闭合，
+                         * 后面代码全被吞掉，报出来的却是别的函数"未解析"。
+                         */
+                        "image/*",                 // 直接选 ascii.png
+                        "application/zip",         // .zip 与 .mcpack（后者就是 zip）
+                        "application/x-zip-compressed",
+                        "application/octet-stream", // 有些 ROM 只认这个，否则 .mcpack 选不了
+                    ),
+                )
+            },
+            refreshKey = fontRevision,
+        )
+    }
+
+    /*
+     * 每个键各自的文字偏移（独立窗口，见分区的说明）。
+     *
+     * 放在这里而不是分区内部：它和"字体选择"一样是**点开才出现**的东西，
+     * 挂在页面末尾的对话框区，与其它对话框在一起，不会被 LazyColumn
+     * 的回收影响（放进 item 里的话滚出屏幕就可能被销毁重建）。
+     */
+    if (showSlotOffsetDialog) {
+        SlotTextOffsetDialog(
+            config = editable,
+            offsets = editable.slotTextOffsets,
+            onOffsetsChange = { offsets -> applyChange { it.copy(slotTextOffsets = offsets) } },
+            onDismiss = { showSlotOffsetDialog = false },
+        )
+    }
+
+    /*
+     * ⚠️ 这个块曾经**漏了** —— 按钮把 `showSlotSpacingDialog` 置了 true，
+     * 但没有任何地方读它，于是"点了没反应"。
+     *
+     * 两个对话框的写法必须**成对**：加一个"打开按钮"就要同时加渲染块。
+     * 这类漏写在编译期看不出来（`showXxx` 是个合法的局部 var），
+     * 所以以后加这类窗口时，改完顺手搜一下 `showXxx` 出现几次 ——
+     * 只有两次（声明 + 置 true）就是漏了渲染。
+     */
+    if (showSlotSpacingDialog) {
+        SlotTextSpacingDialog(
+            config = editable,
+            spacings = editable.slotTextSpacings,
+            onSpacingsChange = { spacings -> applyChange { it.copy(slotTextSpacings = spacings) } },
+            onDismiss = { showSlotSpacingDialog = false },
+        )
+    }
+
     /* ---------------- 一次性提示 ---------------- */
 
     toast?.let { message ->
@@ -1253,7 +1566,7 @@ private fun LazyListScope.live2DStyleSections(
                 value = editable.scalePercent.toFloat(),
                 valueRange = KeyLayout.SCALE_PERCENT_MIN.toFloat()..
                     KeyLayout.SCALE_PERCENT_MAX.toFloat(),
-                steps = 14,
+                steps = SCALE_SLIDER_STEPS,
                 display = "${editable.scalePercent}%",
                 onValueChange = { value ->
                     applyChange { it.copy(scalePercent = value.toInt()) }
@@ -1368,7 +1681,7 @@ private fun LazyListScope.customKeyStyleSections(
                 value = editable.scalePercent.toFloat(),
                 valueRange = KeyLayout.SCALE_PERCENT_MIN.toFloat()..
                     KeyLayout.SCALE_PERCENT_MAX.toFloat(),
-                steps = 14,
+                steps = SCALE_SLIDER_STEPS,
                 display = "${editable.scalePercent}%",
                 onValueChange = { value ->
                     applyChange { it.copy(scalePercent = value.toInt()) }
@@ -1498,6 +1811,12 @@ private const val CONVERT_CONFIRM_DELAY_MS = 1_000L
 /**
  * 带数值显示的滑块行。
  */
+/**
+ * 带数值显示的滑块行，**数值可点开直接输入**。
+ *
+ * 实现已搬到共用的 [EditableSliderRow]（`ui/component/EditableSliderRow.kt`）——
+ * 与自定义编辑页共用同一份，"点数值改精确值"对两边同时生效。
+ */
 @Composable
 private fun SliderRow(
     label: String,
@@ -1508,28 +1827,44 @@ private fun SliderRow(
     modifier: Modifier = Modifier,
     steps: Int = 0,
 ) {
-    Column(modifier = modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                text = display,
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
-            )
-        }
-
-        Slider(
-            value = value,
-            onValueChange = onValueChange,
-            valueRange = valueRange,
-            steps = steps,
-        )
-    }
+    EditableSliderRow(
+        label = label,
+        value = value,
+        range = valueRange,
+        display = display,
+        onValueChange = onValueChange,
+        modifier = modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+        steps = steps,
+        step = stepOf(valueRange),
+        labelStyle = MaterialTheme.typography.bodyLarge,
+        valueStyle = MaterialTheme.typography.labelLarge,
+    )
 }
+
+/**
+ * 文字偏移的取值上下限。
+ *
+ * ⚠️ **与自定义 Key 的文字偏移完全一致**（那边是 `range = -60f..60f`）。
+ * 两边不一致的话，同一个视觉位置在两个页面里对应的数值不同，
+ * 互相转换时位置就会跑偏 —— 而"转换后位置没变"是这个功能的基线要求。
+ */
+/* 字间距 / 行间距的取值上下限（**相对字号的百分比**） */
+private const val SPACING_MIN = -50f
+private const val LETTER_SPACING_MAX = 100f
+private const val LINE_SPACING_MAX = 200f
+
+private const val TEXT_OFFSET_MIN = -60f
+private const val TEXT_OFFSET_MAX = 60f
+/**
+ * 「整体缩放」滑块的**分档数**（`Slider` 的 `steps` 参数）。
+ *
+ * `steps` 是"档位之间的间隔数"，即实际可停靠的位置有 `steps + 1` 个。
+ * 想让用户按 **10%** 一档地调，就是 `(跨度 / 10) - 1`。
+ *
+ * ⚠️ 必须与 [KeyLayout.SCALE_PERCENT_MIN]/[KeyLayout.SCALE_PERCENT_MAX]
+ * **联动推导**，不要写死 —— 早先写死 `14`（对应旧的 50..200），
+ * 下限改成 20 之后档位就不对齐了：滑到最左边不是整数，
+ * 显示出来是 `20%` 但实际停靠值是 21、19 这种。
+ */
+private val SCALE_SLIDER_STEPS =
+    (KeyLayout.SCALE_PERCENT_MAX - KeyLayout.SCALE_PERCENT_MIN) / 10 - 1

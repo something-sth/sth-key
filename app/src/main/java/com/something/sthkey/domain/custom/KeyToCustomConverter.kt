@@ -282,7 +282,7 @@ object KeyToCustomConverter {
             y = box.topY,
             width = box.width,
             height = box.height,
-            style = styleOf(config),
+            style = styleOf(config, box.slotId),
             label = label,
             inputKeyCodes = box.codes,
             textScalePercent = textScalePercentFor(
@@ -301,8 +301,16 @@ object KeyToCustomConverter {
              * 缩放它只会让模式 1 的单行 CPS 莫名其妙变小。
              */
             cpsTextScalePercent = if (twoLineCps) CPS_LINE_SCALE_PERCENT else 100,
-            textOffsetX = 0f,
-            textOffsetY = 0f,
+            /*
+             * 文字偏移与 Key 是**同一套语义**（基础坐标单位），所以原样搬运、
+             * 不做换算 —— 转换后位置必须一致。
+             *
+             * ⚠️ 要带上**本槽位**的偏移：Key 那边是"全局 + 本槽位"叠加，
+             * 只搬全局的话，用户在 Key 里单独调过的键（比如空格）
+             * 转到自定义之后会跳回默认位置。
+             */
+            textOffsetX = config.textOffsetX + (config.slotTextOffsets[box.slotId]?.x ?: 0f),
+            textOffsetY = config.textOffsetY + (config.slotTextOffsets[box.slotId]?.y ?: 0f),
             animationMode = config.animationMode,
             animationDurationSec = config.animationDurationSec,
         )
@@ -364,15 +372,23 @@ object KeyToCustomConverter {
             y = box.topY,
             width = box.width,
             height = box.height,
-            style = styleOf(config),
+            style = styleOf(config, box.slotId),
             text = text,
             cpsKeyCodesPerPlaceholder = listOf(codes.ifEmpty { DEFAULT_CPS_KEY_CODES }),
             textScalePercent = textScalePercentFor(
                 sourceSize = KEY_TEXT_BASE,
                 percent = config.textScalePercent,
             ),
-            textOffsetX = 0f,
-            textOffsetY = 0f,
+            /*
+             * 文字偏移与 Key 是**同一套语义**（基础坐标单位），所以原样搬运、
+             * 不做换算 —— 转换后位置必须一致。
+             *
+             * ⚠️ 要带上**本槽位**的偏移：Key 那边是"全局 + 本槽位"叠加，
+             * 只搬全局的话，用户在 Key 里单独调过的键（比如空格）
+             * 转到自定义之后会跳回默认位置。
+             */
+            textOffsetX = config.textOffsetX + (config.slotTextOffsets[box.slotId]?.x ?: 0f),
+            textOffsetY = config.textOffsetY + (config.slotTextOffsets[box.slotId]?.y ?: 0f),
         )
     }
 
@@ -391,7 +407,7 @@ object KeyToCustomConverter {
      *
      * 文字阴影在按键样式里也有，所以一并搬过去（两边语义已经统一）。
      */
-    private fun styleOf(config: KeyStrokesConfig): ComponentStyle = ComponentStyle(
+    private fun styleOf(config: KeyStrokesConfig, slotId: String): ComponentStyle = ComponentStyle(
         fillUp = config.colors.keyUp,
         fillDown = config.colors.keyDown,
         fillOpacityUp = config.opacity.keyUp,
@@ -421,6 +437,29 @@ object KeyToCustomConverter {
         cornerRadiusPercent = config.cornerRadiusPercent,
 
         fontId = config.fontId,
+        /*
+         * ⚠️ 图片字体**必须一起搬**。
+         *
+         * 它和 `fontId` 是两个独立字段（常规字体必选 + 图片字体可选），
+         * 只搬 `fontId` 的话，转换后**图片字体就丢了** ——
+         * 表现是"转成自定义 Key 之后，键面文字变回矢量字体"，
+         * 而用户明明在 Key 样式里选好了图片字体。
+         *
+         * 这个字段是后来才加的，`styleOf` 里当时漏了它；
+         * 凡是"从配置构造组件样式"的地方都要检查一遍。
+         */
+        bitmapFontId = config.bitmapFontId,
+        /*
+         * 字间距 / 行间距也一起搬。
+         *
+         * Key 那边是"全局 + 本槽位"两层，而组件这边只有一层字段 ——
+         * 所以在这里把两层加起来。转换后用户看到的是同一个间距，
+         * 想改就改那一个滑块，不必再去想"是哪一层在生效"。
+         */
+        letterSpacing = config.textSpacing.letter +
+            (config.slotTextSpacings[slotId]?.letter ?: 0f),
+        lineSpacing = config.textSpacing.line +
+            (config.slotTextSpacings[slotId]?.line ?: 0f),
     )
 
     /** 该槽位绑定的键码（CPS 文本组件要用它声明"数哪些键"） */

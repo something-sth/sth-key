@@ -5,6 +5,7 @@ import android.net.Uri
 import com.something.sthkey.core.log.AppLog
 import com.something.sthkey.core.prefs.AppPrefs
 import com.something.sthkey.domain.config.DEFAULT_FONT_ID
+import com.something.sthkey.domain.font.bitmap.BitmapFontStore
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -13,7 +14,7 @@ import java.util.UUID
 /**
  * 字体来源。
  *
- * 三者的差别只在"能不能删/改名"和"从哪加载"，UI 上是同一个列表。
+ * 四者的差别在"能不能删/改名"和"从哪加载"，UI 上是同一个列表。
  */
 enum class FontKind(val label: String) {
     /** 系统通用字体族（sans-serif / serif / monospace …），不可删除 */
@@ -22,8 +23,20 @@ enum class FontKind(val label: String) {
     /** 随应用打包的内置字体，不可删除 */
     BUILTIN("内置字体"),
 
-    /** 用户导入的字体，可删除、可重命名 */
+    /** 用户导入的矢量字体（.ttf / .otf / .ttc），可删除、可重命名 */
     IMPORTED("导入的字体"),
+
+    /**
+     * 图片字体（Minecraft 风格的位图图集）。
+     *
+     * ⚠️ 它和上面三种**不是同一套渲染**：矢量字体交给 Compose 的 `Text`，
+     * 而图片字体要自己逐字贴图（Compose 没有"替换字形"的机制）。
+     * 但它们在**配置里是同一个 [FontEntry.id]**，所以配置层不需要区分。
+     *
+     * 单独列一类而不是混进 [IMPORTED]：界面上用户需要一眼看出
+     * "这个字体是图片、只能显示 ASCII"，否则会奇怪为什么中文没了。
+     */
+    BITMAP("图片字体"),
 }
 
 /**
@@ -33,10 +46,12 @@ enum class FontKind(val label: String) {
  *   - 系统字体 `system:<族名>`
  *   - 内置字体 `builtin:<文件名>`
  *   - 导入字体 `imported:<uuid>`
+ *   - 图片字体 `bitmap:<uuid>`
  * @param displayName 显示名称（导入字体可被用户改名）
  * @param subtitle 次要说明
  * @param file 实际字体文件。系统字体为 null（走 Compose 的通用族）；
- *   内置字体指向从 assets 解出的缓存文件；导入字体指向私有目录里的文件。
+ *   内置字体指向从 assets 解出的缓存文件；导入字体与图片字体
+ *   指向私有目录里的文件。
  */
 data class FontEntry(
     val id: String,
@@ -138,8 +153,49 @@ object FontRegistry {
      * ============================================================
      */
 
-    /** 全部字体：系统 → 内置 → 导入 */
+    /**
+     * 全部字体：系统 → 内置 → 导入 → 图片。
+     *
+     * ⚠️ **界面上"常规字体"那个列表不该用这个** ——
+     * 图片字体是**可选的叠加项**（"常规字体必选 + 图片字体可选"），
+     * 混进同一个列表会让人以为它们是二选一，而图片字体只有 ASCII 字形、
+     * 中文还得靠常规字体兜底。常规字体用 [vectorFonts]，图片字体用
+     * [bitmapFonts]，两者在界面上是两个独立的入口。
+     *
+     * 保留这个合并视图是给"按 id 查一条"这类不区分类型的场合用的
+     * （[find] / [displayNameOf] 都基于它）。
+     */
     fun all(): List<FontEntry> = buildList {
+        addAll(vectorFonts())
+        addAll(bitmapFonts())
+    }
+
+    /**
+     * 图片字体（Minecraft 风格的位图图集）。
+     *
+     * 元数据在 [com.something.sthkey.domain.font.bitmap.BitmapFontStore] 里，
+     * 这里只是把它**翻译成同一个 [FontEntry] 形状** —— 上层（配置页、
+     * 字体选择器、配置包导出）就不必为图片字体写第二套逻辑。
+     */
+    fun bitmapFonts(): List<FontEntry> = BitmapFontStore.entries().map { (id, displayName) ->
+        FontEntry(
+            id = id,
+            displayName = displayName,
+            kind = FontKind.BITMAP,
+            /*
+             * 副标题写清"只支持 ASCII"。
+             *
+             * 这不是废话：图片字体画不出中文（图集里没有那些字），
+             * 用户选了之后发现中文变成空白，第一反应是"字体坏了"。
+             * 在这里先说清楚，比让他自己去发现好。
+             */
+            subtitle = "图片字体 · 仅 ASCII",
+            file = BitmapFontStore.specOf(id)?.let { BitmapFontStore.atlasFileOf(it) },
+        )
+    }
+
+    /** 全部**矢量**字体（系统 / 内置 / 导入）；**不含**图片字体 */
+    fun vectorFonts(): List<FontEntry> = buildList {
         addAll(systemFonts())
         addAll(builtinFonts())
         addAll(importedFonts())

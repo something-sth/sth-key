@@ -31,17 +31,96 @@
             android:exported="true"
             android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
 
+        <!--
+            「分享配置」用。
+            Android 7+ 起不能把 `file://` 交给别的应用（会抛
+            `FileUriExposedException`），必须用 FileProvider 生成 `content://`。
+
+            ⚠️ `exported="false"` + `grantUriPermissions="true"` 是标准组合：
+            外部应用**不能**主动来读，只有在某次分享里被我们显式授权才能读
+            那一个 Uri。也不能设 `android:permission`，否则接收方读不了。
+
+            authority 用 `${applicationId}.files`，与
+            `ConfigExporters.authorityOf()` 里算出来的一致。
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <activity
             android:name=".MainActivity"
             android:configChanges="keyboard|keyboardHidden|navigation|screenLayout|screenSize|smallestScreenSize|orientation"
             android:exported="true"
             android:label="@string/app_name"
             android:theme="@style/Theme.SthKey"
-            android:windowSoftInputMode="adjustResize">
+            android:windowSoftInputMode="adjustResize"
+            android:launchMode="singleTask">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!--
+                ============================================================
+                外部导入配置包
+                ============================================================
+                「用本应用打开 .sthkey」与「把 .sthkey 分享到本应用」。
+
+                ⚠️ 这里**没有** `application/x-sthkey` 这种自定义 MIME，
+                因为它永远不会被匹配到 ——
+                Android 的 `MimeTypeMap` 只认内建表里的后缀，
+                `.sthkey` 不在其中，系统解析出来就是下面这些"大路货"之一。
+
+                于是只能把它们**全部**列上，靠导入时的 manifest 校验兜底：
+                收下一个不是配置包的文件不会出事，只会明确报错。
+
+                ⚠️ `*/*` 是**故意不加**的（虽然能提高命中率）：
+                加了之后用户在任何文件上点"打开方式"都会看到我们这个
+                与文件无关的应用，非常烦人。下面这四种已经覆盖了
+                文件管理器、聊天软件、网盘的常见行为。
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+
+                <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+            </intent-filter>
+
+            <!--
+                一次分享多个文件。我们只取第一个（见 `IncomingConfig`），
+                但不声明的话系统在某些应用的分享面板里会**不显示我们**。
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+
+                <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
             </intent-filter>
         </activity>
 

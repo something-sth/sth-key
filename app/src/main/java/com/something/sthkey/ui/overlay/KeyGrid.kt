@@ -14,8 +14,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
+import androidx.compose.runtime.remember
+import com.something.sthkey.ui.component.bitmapSpecOf
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
@@ -32,10 +36,13 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.something.sthkey.domain.config.AnimationMode
+import kotlin.math.roundToInt
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.config.ShadowMode
 import com.something.sthkey.domain.style.KeyBox
@@ -366,8 +373,35 @@ private fun OverlayKey(
         val shadowSpan = if (shadowSize == null) 0f else shadowSize
         val contentPadding = (shadowSpan * 2f).coerceAtMost(minOf(widthDp, heightDp) / 4f)
 
+        /*
+         * ⚠️ 柔光半径的单位要换算：`TextStyle.Shadow.blurRadius` 吃的是 **dp**，
+         * 而 `BitmapFontText` 的参数是**像素**（它自己不做 dp 换算）。
+         *
+         * 之前直接把 dp 值当像素传进去，于是柔光半径小了 2~3 倍 ——
+         * 表现就是"硬阴影有效、柔光看起来没效果"。
+         */
+        val shadowSpanPx = with(LocalDensity.current) { shadowSpan.dp.toPx() }
+
         if (shadowSpan > 0f) {
             val isHard = config.shadow.mode == ShadowMode.HARD
+
+            /*
+             * 柔光：**优先用真模糊**（API 31+）。
+             *
+             * ============================================================
+             * 为什么不能只靠 `BitmapFontText` 里的多层副本
+             * ============================================================
+             * 那一层画完 8 个偏移副本后，还要用 `DstOut` 把字形本身擦掉 ——
+             * 剩下的只是"字形外面一圈薄晕"。而图片字体是**像素块**，
+             * 块状字形外一圈薄晕看起来就是硬阴影。
+             *
+             * 改成在这一层上做真模糊之后：模糊先作用在"阴影副本"上，
+             * 抠洞再擦掉中心，留下的才是真正的光晕。
+             *
+             * API 30 没有 `RenderEffect`，那时仍然走多层副本
+             * （见 [realBlur] 与 `canUseRealBlur`）。
+             */
+            val useRealBlur = !isHard && canUseRealBlur && shadowSpanPx > 0f
 
             Box(
                 modifier = Modifier
@@ -382,7 +416,20 @@ private fun OverlayKey(
                          * 隔离图层：见上面关于 DstOut 的说明。
                          * 不隔离会把键帽底色也擦掉。
                          */
-                        .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen },
+                        .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                        /*
+                         * 真模糊作用在**这一层**上（阴影副本 + 抠洞之后的整体）。
+                         * 半径用 `shadowSpanPx / 2`：`RenderEffect` 的模糊半径
+                         * 是"标准差量级"的，直接用 dp 值会糊过头，
+                         * 而 TTF 那边 `TextStyle.Shadow.blurRadius` 的口径偏小。
+                         */
+                        .then(
+                            if (useRealBlur) {
+                                Modifier.realBlur((shadowSpan * REAL_BLUR_RATIO).dp)
+                            } else {
+                                Modifier
+                            },
+                        ),
                     contentAlignment = Alignment.Center,
                 ) {
                     /* 第一遍：阴影本体 */
@@ -393,10 +440,28 @@ private fun OverlayKey(
                         textColor = shadowColor,
                         fontSize = fontSize,
                         fontFamily = fontFamily,
-                        // 柔光靠字体自带的模糊；硬阴影是实心副本，不加模糊
+                        /*
+                         * 矢量字体的柔光仍然挂 `TextStyle.Shadow` ——
+                         * 那是它自己的真模糊，而且对 TTF 一直工作正常。
+                         * 图片字体那条走上面这一层的 `realBlur`。
+                         */
                         blurRadiusDp = if (isHard) 0f else shadowSpan,
-                        offsetXDp = if (isHard) shadowSpan * 0.6f else 0f,
-                        offsetYDp = if (isHard) shadowSpan * 0.6f else 0f,
+                        /*
+                         * ⚠️ 用了真模糊就**不能**再叠多层副本：
+                         * 两套一起上会糊成一团，而且白白多画 8 遍。
+                         */
+                        shadowBlurPx = when {
+                            isHard -> 0f
+                            useRealBlur -> 0f
+                            else -> shadowSpanPx
+                        },
+                        /*
+                         * 只给**硬阴影自身**的位移。
+                         * 文字偏移由 [KeyLabel] 内部统一叠加（全局 + 本槽位），
+                         * 这里再传一次就会算两遍。
+                         */
+                        offsetXDp = if (isHard) (shadowSpan * 0.6f).dp else 0.dp,
+                        offsetYDp = if (isHard) (shadowSpan * 0.6f).dp else 0.dp,
                     )
 
                     /* 第二遍：把文字轮廓从这一层里擦掉 */
@@ -425,6 +490,11 @@ private fun OverlayKey(
                 .padding(contentPadding.dp),
             contentAlignment = Alignment.Center,
         ) {
+            /*
+             * 文字偏移走 `KeyLabel` 的 `offsetXDp/YDp` ——
+             * 与自定义 Key 的 `Modifier.offset(x = (textOffsetX*scale).dp)` 一致，
+             * 也与上面阴影那一遍用的是同一个偏移，两者不会错位。
+             */
             KeyLabel(
                 box = box,
                 config = config,
@@ -450,7 +520,9 @@ private fun OverlayKey(
  * （这种错位很难一眼看出来，但很丑）。
  *
  * @param blurRadiusDp 大于 0 时给文字加模糊投影（柔光阴影用）
- * @param offsetXDp / offsetYDp 相对自身的偏移（硬阴影用）
+ * @param shadowBlurPx 同上，但单位是**像素** —— 图片字体那条路要这个
+ *   （`TextStyle.Shadow` 吃 dp，而 `BitmapFontText` 自己不做 dp 换算）
+ * @param offsetXDp / offsetYDp 相对自身的偏移（硬阴影与文字偏移用）
  * @param blendMode 绘制模式；抠洞时传 [BlendMode.DstOut]
  */
 @Composable
@@ -462,15 +534,43 @@ private fun KeyLabel(
     fontSize: TextUnit,
     fontFamily: FontFamily?,
     blurRadiusDp: Float,
-    offsetXDp: Float = 0f,
-    offsetYDp: Float = 0f,
+    shadowBlurPx: Float = 0f,
+    offsetXDp: Dp = 0.dp,
+    offsetYDp: Dp = 0.dp,
     blendMode: BlendMode = BlendMode.SrcOver,
 ) {
+    /*
+     * ============================================================
+     * 文字偏移：**全局 + 本槽位**，在这里统一算出来
+     * ============================================================
+     * 为什么放在这一层、而不是各调用点各算一次：
+     * 阴影要画三遍（阴影本体、抠洞、正文），三遍必须**逐像素对齐**。
+     * 偏移若在不同地方各算，只要有一处漏了或算法不同，
+     * 抠洞就会擦错位置 —— 表现是"文字边上缺一块"，很难查。
+     *
+     * ⚠️ 本槽位偏移的键是 [KeyBox.slotId]：CPS 模式 2 那两个额外显示位
+     * （`CPS_L` / `CPS_R`）天然就是独立的槽位 id，不需要特判。
+     */
+    val slotOffset = config.slotTextOffsets[box.slotId]
+    val offsetX = config.textOffsetX + (slotOffset?.x ?: 0f) + offsetXDp.value
+    val offsetY = config.textOffsetY + (slotOffset?.y ?: 0f) + offsetYDp.value
+
+    /*
+     * 字间距 / 行间距同样"全局 + 本槽位"叠加。
+     *
+     * 与偏移放在**同一处**算：两者的层级语义必须一致，
+     * 分两处写迟早会出现"偏移有本槽位、间距忘了加"这种不对称。
+     */
+    val slotSpacing = config.slotTextSpacings[box.slotId]
+    val letterSpacing = config.textSpacing.letter + (slotSpacing?.letter ?: 0f)
+    val lineSpacing = config.textSpacing.line + (slotSpacing?.line ?: 0f)
+
     /*
      * 柔光阴影：把模糊挂在 TextStyle 上，由字体渲染层负责。
      *
      * 偏移给 0 —— 柔光要的是"文字周围一圈光晕"，
      * 而不是"往右下挪一点的影子"（那是硬阴影要做的事）。
+     * 光晕跟着文字走这件事由外层 [layerModifier] 的位移负责。
      */
     val shadowStyle = if (blurRadiusDp > 0f) {
         TextStyle(
@@ -500,8 +600,15 @@ private fun KeyLabel(
      * 这个差别从调用点看不出来，所以写在这里。
      */
     val layerModifier = Modifier.graphicsLayer {
-        translationX = offsetXDp * density
-        translationY = offsetYDp * density
+        /*
+         * `offsetX/offsetY` 是**基础坐标单位**（全局 + 本槽位 + 本次偏移），
+         * 乘 `scale` 得到 dp，再乘 density 才是像素。
+         *
+         * ⚠️ 这一层是**唯一**做位移的地方：正文、阴影本体、抠洞三遍
+         * 都挂在它上面，所以它们必然对齐（见上面 [offsetX] 的说明）。
+         */
+        translationX = (offsetX * scale).dp.toPx()
+        translationY = (offsetY * scale).dp.toPx()
         if (blendMode != BlendMode.SrcOver) {
             this.blendMode = blendMode
             compositingStrategy = CompositingStrategy.Offscreen
@@ -523,6 +630,19 @@ private fun KeyLabel(
             fontSize = fontSize,
             fontFamily = fontFamily,
             style = shadowStyle,
+            bitmapFontId = config.bitmapFontId.ifBlank { null },
+            /*
+             * 柔光半径要显式传给图片字体那条路：它读不到 `TextStyle.Shadow`。
+             * 抠洞那一层（`DstOut`）不需要柔光，所以只在非 DstOut 时给。
+             */
+            shadowBlurPx = if (blendMode == BlendMode.DstOut) 0f else shadowBlurPx,
+            /*
+             * 抠洞那一层必须是**实心剪影**：图片字体默认按字形原色绘制，
+             * 用它去 `DstOut` 会抠得不干净（渐变字形的浅色部分抠不掉）。
+             */
+            asSolidMask = blendMode == BlendMode.DstOut,
+            letterSpacingPercent = letterSpacing,
+            lineSpacingPercent = lineSpacing,
             modifier = layerModifier,
         )
         return
@@ -568,26 +688,72 @@ private fun KeyLabel(
         // 偏移与混合模式要作用在**整块两行文字**上，不能只挂到某一行
         modifier = layerModifier,
     ) {
-        Text(
-            text = box.label,
+        /*
+         * ============================================================
+         * 两行合成**一次**调用
+         * ============================================================
+         * 两行字号不同（主 28、副 22），所以要把"副行相对主行的比例"
+         * 作为**逐行字号**传下去，而不是各画一次。
+         *
+         * ⚠️ 分开画的两个后果（都实测过）：
+         * 1. 图片字体逐行画会让**两行重叠**（每个 `BitmapFontText` 都是
+         *    独立 Canvas、各自按自身高度居中）；
+         * 2. 副文字走的是矢量路径，**图片字体在它上面不生效** ——
+         *    用户实测的"开了 CPS 模式 3，下面那行没用图片字体"。
+         *
+         * 矢量路径仍然只认一个字号，所以 [KeyLabelText] 内部会按
+         * "主行同号、其余行按比例"处理（见它的实现）。
+         */
+        val secondaryPercent = if (primarySize > 0f) {
+            (secondarySize / primarySize * 100f).roundToInt().coerceIn(1, 1000)
+        } else {
+            100
+        }
+
+        KeyLabelText(
+            /*
+             * ⚠️ 用**真的换行符** `"\n"`，不是 `LINE_BREAK`（`"\\n"`）。
+             *
+             * `"\\n"` 是"反斜杠 + n"两个**字符** —— 那是自定义 Key 那边
+             * 为了"文字输入框是单行的、真换行会看不见"而定下的约定
+             * （见 `KeyToCustomConverter.LINE_BREAK`）。
+             *
+             * 而这里是**渲染路径**，没有任何理由走那层转义：
+             * 传 `"\\n"` 会被当成普通文字原样画出来 ——
+             * 用户实测看到的就是 `LMB\nCPS 0` 这种字面量。
+             *
+             * `KeyLabelText` 同时接受真换行与转义写法（老配置里可能存着
+             * 转义的），所以这里给真的即可，两条路径都不受影响。
+             */
+            text = box.label + "\n" + subLabel,
             color = textColor,
-            textAlign = TextAlign.Center,
             // 旧项目主文字 28 × 文字缩放，比普通键小一点，给副文字腾位置
+            fontSize = primarySize.sp,
+            fontFamily = fontFamily,
             style = lineStyle(primarySize),
-            fontFamily = fontFamily,
-            maxLines = 1,
-        )
-        Spacer(modifier = Modifier.height((4f * scale).dp))
-        Text(
-            text = subLabel,
-            color = textColor,
-            textAlign = TextAlign.Center,
-            style = lineStyle(secondarySize),
-            fontFamily = fontFamily,
-            maxLines = 1,
+            bitmapFontId = config.bitmapFontId.ifBlank { null },
+            /*
+             * 主行 100%、副行按比例（22/28 ≈ 79%）。
+             */
+            lineScalePercents = listOf(100, secondaryPercent),
+            /*
+             * ⚠️ 间距**必须在这里也传一次**。
+             *
+             * `KeyLabelText` 的这两个参数默认是 0，漏传不会报错、也不会有
+             * 任何提示 —— 只是"调了没反应"。用户实测的"CPS 模式 3 的
+             * LMB/RMB 调不动字间距行间距，转成自定义 Key 才生效"就是这个：
+             * 单行那条分支（第 627 行）传了，这一条漏了。
+             *
+             * 同一个参数在同一个函数里有**两条调用路径**时，
+             * 加参数一定要两条都加 —— 编译期看不出来。
+             */
+            letterSpacingPercent = letterSpacing,
+            lineSpacingPercent = lineSpacing,
         )
     }
 }
+
+
 
 /**
  * 一段键面文字，**支持换行**。
@@ -609,9 +775,138 @@ private fun KeyLabelText(
     fontSize: TextUnit,
     fontFamily: FontFamily?,
     style: TextStyle,
+    /** 图片字体的 id；`null` 表示用矢量字体 */
+    bitmapFontId: String? = null,
+    /**
+     * 行与行之间的额外间距（dp）。
+     *
+     * CPS 模式 3 的两行之间有 4 像素间距，而普通的 `\n` 换行不需要。
+     * 合并成一个组件之后用这个参数区分，不必再维护两套绘制代码。
+     */
+    lineSpacingDp: Float = 0f,
+    /**
+     * 柔光半径（像素）；0 表示硬阴影。
+     *
+     * ⚠️ 这个参数是**专门给图片字体**的。
+     *
+     * 矢量字体的柔光走 `TextStyle.Shadow`（`baseStyle` 里的 `blurRadius`），
+     * 而图片字体是自己贴图的，**读不到 `TextStyle`** —— 于是柔光看起来
+     * "对图片字体无效"，只有硬阴影起作用。
+     *
+     * 调用方在画阴影那一层时把 `shadowSpan` 传进来即可，两条路径的观感一致。
+     */
+    shadowBlurPx: Float = 0f,
+    /**
+     * 是否把字形画成**实心剪影**（只取覆盖率、颜色统一）。
+     *
+     * ⚠️ 抠洞层（`DstOut`）必须开：`DstOut` 按源的不透明度擦除，
+     * 而图片字体默认是"按字形原色绘制" —— 渐变色形的浅色部分
+     * 不透明度低，抠出来就是一圈没擦干净的毛边。
+     */
+    asSolidMask: Boolean = false,
+    /**
+     * 逐行的字号百分比（100 = 与 [fontSize] 同号）；空 = 所有行同号。
+     *
+     * ⚠️ 只对**图片字体**那条路生效。
+     *
+     * CPS 模式 3 的两行字号不同（主 28、副 22），而矢量路径只接受一个
+     * 字号 —— 所以那边仍然由调用方分开画两次。图片路径能逐行给字号，
+     * 是因为它整段一次画完、每行单独算缩放（见 `BitmapFontText`）。
+     */
+    lineScalePercents: List<Int> = emptyList(),
+    /** 行距系数：1 = 行高即行距，< 1 收紧，> 1 拉开（只对图片字体生效） */
+    lineSpacingScale: Float = 1f,
+    /*
+     * 字间距 / 行间距（相对字号的百分比，0 = 不动）。
+     *
+     * ⚠️ **刻意不给默认值**。
+     *
+     * 给了 `= 0f` 的话，"漏传"就会静默变成"这个值永远是 0" ——
+     * 编译通过、没有警告、只是"调了没反应"。用户实测的
+     * "CPS 模式 3 的 LMB/RMB 调不动间距、转成自定义 Key 才生效"
+     * 就是这么来的：这个函数有**两条调用路径**，
+     * 加参数时只加了一条。
+     *
+     * 去掉默认值之后，漏传直接编译失败。
+     */
+    letterSpacingPercent: Float,
+    lineSpacingPercent: Float,
     modifier: Modifier = Modifier,
 ) {
     val lines = text.split('\n')
+
+    /*
+     * 图片字体：整段都是 ASCII 时走位图渲染。
+     *
+     * ⚠️ 与矢量路径**不共用代码**（一个贴图、一个走 Text），
+     * 所以放在最前面直接返回，避免两条路径的判断纠缠。
+     *
+     * 判断是"**整段**都能用"才走位图：键面文字很短（`LMB`、`W`），
+     * 逐行判断的收益不值得多一层分支。以后做中英混排时再改成逐行。
+     */
+    if (bitmapFontId != null) {
+        val spec = remember(bitmapFontId) { bitmapSpecOf(bitmapFontId) }
+        if (spec != null && lines.all { canRenderAsBitmap(it, spec) }) {
+            /*
+             * ⚠️ 整段**一次画完**，不能逐行各画一次。
+             *
+             * 每个 `BitmapFontText` 都是一个独立 Canvas、各自按自身内容高度
+             * 居中 —— 逐行画会让**多行全部重叠在同一个位置**。
+             *
+             * 行间距由 [lineSpacingDp] 折成"行距系数"传进去，
+             * 而不是在外面插 `Spacer`：插 Spacer 的话每行仍是独立 Canvas，
+             * 重叠问题照旧。
+             */
+            val lineHeightDp = with(LocalDensity.current) { fontSize.toDp().value }
+            val spacingScale = if (lineSpacingScale != 1f) {
+                lineSpacingScale
+            } else if (lineHeightDp > 0f) {
+                (lineHeightDp + lineSpacingDp) / lineHeightDp
+            } else {
+                1f
+            }
+
+            BitmapFontText(
+                fontId = bitmapFontId,
+                text = text,
+                fontSize = fontSize,
+                /*
+                 * 颜色照传：图片字体的染色语义是"字形 RGB × 文字颜色"，
+                 * 白色字形就是整块染成这个颜色。
+                 */
+                color = color,
+                /*
+                 * 阴影**不在这里画**：调用方已经把阴影那一层用同一个
+                 * [KeyLabelText] 画过了（只是颜色不同），
+                 * 这里再画会叠两层，边缘变实。
+                 *
+                 * 但**柔光半径要传**：矢量字体能从 `style` 里读到
+                 * `blurRadius`，图片字体读不到 —— 不传的话柔光就
+                 * 只有硬阴影那一档，看起来像"柔光对图片字体无效"。
+                 */
+                shadowBlurPx = shadowBlurPx,
+                asSolidMask = asSolidMask,
+                lineScalePercents = lineScalePercents,
+                lineSpacingScale = spacingScale,
+                letterSpacingPercent = letterSpacingPercent,
+                lineSpacingPercent = lineSpacingPercent,
+                modifier = modifier,
+            )
+            return
+        }
+    }
+
+    /*
+     * 字间距 / 行间距同样要作用到单行（行间距对单行无意义，
+     * 但字间距一定要 —— 否则"只有一个字的键"调不动，
+     * 而那种键恰恰是最需要微调字距的）。
+     */
+    val letterSpacingEm = (letterSpacingPercent / 100f).takeIf { it.isFinite() } ?: 0f
+    val lineSpacingFactor = if (lineSpacingPercent.isFinite()) {
+        (1f + lineSpacingPercent / 100f).coerceAtLeast(MIN_LINE_SPACING_FACTOR)
+    } else {
+        1f
+    }
 
     // 单行：不必包 Column，少一层布局
     if (lines.size <= 1) {
@@ -621,36 +916,64 @@ private fun KeyLabelText(
             textAlign = TextAlign.Center,
             fontSize = fontSize,
             fontFamily = fontFamily,
-            style = style,
+            style = style.copy(letterSpacing = letterSpacingEm.em),
             modifier = modifier,
         )
         return
     }
 
     /*
-     * 行高显式等于字号，并去掉上下多余留白 ——
+     * ============================================================
+     * 矢量路径也要吃字间距 / 行间距（CPS 模式 3 就在这里）
+     * ============================================================
+     * ⚠️ 早先这两个值**只有图片字体那条路**吃，于是矢量字体调了完全没反应 ——
+     * 而 CPS 模式 3 那两行常常是矢量的（副行含非 ASCII，或用户根本没选
+     * 图片字体），表现就是"怎么调都没变化"。
+     *
+     * 字间距：`TextStyle.letterSpacing` 的单位是 **em 倍数**，
+     * 而滑块是"相对字号的百分比" → 除以 100 即可对上。
+     *
+     * 行间距：乘进**行高**。行高本身已显式等于字号（见下），
+     * 所以"行距 = 行高 × (1 + 行间距)"就是把行与行的基准距离拉开，
+     * 且**首行之前不会多出空白**。
+     */
+    /*
+     * 行高显式等于字号 × 行距系数，并去掉上下多余留白 ——
      * 与 CPS 模式 3 那条路径用同一套做法，两处的行距才一致。
      */
     val lineStyle = style.copy(
-        lineHeight = fontSize,
+        lineHeight = fontSize * lineSpacingFactor,
         lineHeightStyle = LineHeightStyle(
             alignment = LineHeightStyle.Alignment.Center,
             trim = LineHeightStyle.Trim.Both,
         ),
+        letterSpacing = letterSpacingEm.em,
     )
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = modifier,
     ) {
-        lines.forEach { line ->
+        lines.forEachIndexed { index, line ->
+            /*
+             * 逐行字号：`lineScalePercents` 给了就按它缩放（CPS 模式 3 的
+             * 副文字更小），没给就所有行同号。
+             *
+             * ⚠️ 行高也要跟着这一行自己的字号走：只改 `fontSize` 而沿用
+             * 按主字号算出来的 `lineHeight`，两行之间会凭空多出一截空白 ——
+             * 看起来像"副文字被推远了"。
+             */
+            val lineSize = fontSize * (lineScalePercents.getOrNull(index)?.let { it / 100f } ?: 1f)
             Text(
                 text = line,
                 color = color,
                 textAlign = TextAlign.Center,
                 fontFamily = fontFamily,
                 maxLines = 1,
-                style = lineStyle,
+                style = lineStyle.copy(
+                    fontSize = lineSize,
+                    lineHeight = lineSize * lineSpacingFactor,
+                ),
             )
         }
     }
@@ -663,3 +986,14 @@ private fun KeyLabelText(
  * 这里不再各留一份 —— 早先两份分头维护时，
  * 自定义 Key 那边就漏掉了描边与阴影的插值，表现与按键样式不一致。
  */
+
+/**
+ * 真模糊的半径相对 `shadowSpan` 的倍数。
+ *
+ * `RenderEffect` 的模糊半径口径比 `TextStyle.Shadow.blurRadius` 大 ——
+ * 直接用 dp 值会糊过头（字都看不出形状）。`0.5` 是让图片字体的柔光
+ * 与矢量字体的柔光**观感接近**的取值。
+ *
+ * 调柔光观感就改这一个数。
+ */
+private const val REAL_BLUR_RATIO = 0.5f

@@ -45,6 +45,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import kotlin.math.roundToInt
 import androidx.compose.foundation.layout.Spacer
@@ -95,7 +96,13 @@ import com.something.sthkey.domain.custom.withCpsKeyCodesAt
 import com.something.sthkey.domain.custom.withInputKeyCodes
 import com.something.sthkey.domain.custom.withStyle
 import com.something.sthkey.domain.font.FontRegistry
+import com.something.sthkey.domain.font.bitmap.AtlasGrid
+import com.something.sthkey.domain.font.bitmap.BitmapFontImporter
+import com.something.sthkey.domain.font.bitmap.BitmapFontSpec
+import com.something.sthkey.domain.font.bitmap.BitmapFontStore
 import com.something.sthkey.ui.EditorPanelSide
+import com.something.sthkey.ui.component.BitmapFontPickerDialog
+import com.something.sthkey.ui.component.PendingBitmapImportDialog
 import com.something.sthkey.ui.component.FontPickerDialog
 import com.something.sthkey.ui.component.MultiKeyPickerDialog
 import com.something.sthkey.ui.overlay.CustomKeyCanvas
@@ -186,6 +193,24 @@ fun CustomLayoutEditorScreen(
     var showResetDialog by remember { mutableStateOf(false) }
     var showDiscardDialog by remember { mutableStateOf(false) }
     var showFontPicker by remember { mutableStateOf(false) }
+
+    /*
+     * 图片字体是**独立的一个对话框**（常规字体必选 + 图片字体可选），
+     * 所以状态也是独立的。合成一个布尔量的话，用户从图片字体那一项
+     * 进去也会把"选择常规字体"弹出来。
+     */
+    var showBitmapFontPicker by remember { mutableStateOf(false) }
+
+    /**
+     * 待命名的图片字体导入。
+     *
+     * 选完文件先不登记，而是等用户起名字 —— 图集文件名基本都叫
+     * `ascii.png`，直接拿它当字体名的话导几张之后列表里全是同名条目。
+     */
+    val pendingBitmapImport = remember {
+        mutableStateOf<BitmapFontImporter.Source?>(null)
+    }
+
     /** 「更多」菜单：画布边框那类"编辑器相关但全局生效"的选项放这里 */
     var showMoreMenu by remember { mutableStateOf(false) }
     /**
@@ -318,6 +343,71 @@ fun CustomLayoutEditorScreen(
         }
     }
 
+    /*
+     * 图片字体的导入。
+     *
+     * ⚠️ 这一条**不走"先关对话框再重开"那一套**（矢量字体才需要）：
+     * 选完文件之后弹的是**我们自己**的命名对话框（同一个 Composable 里），
+     * 把选择窗口一起关掉反而让用户看不到"新导入的字体出现在列表里"。
+     *
+     * 但 `AlertDialog` 是独立窗口，SAF 选择器一起来宿主 Activity 暂停、
+     * 对话框窗口失焦，系统会给它一个 dismiss。所以选择器返回时
+     * 把 `showBitmapFontPicker` 重新置 true —— 抵消系统那次 dismiss，
+     * 视觉上对话框全程都在。
+     */
+    val bitmapFontPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) {
+            showBitmapFontPicker = true
+            return@rememberLauncherForActivityResult
+        }
+
+        scope.launch {
+            val source = withContext(Dispatchers.IO) {
+                BitmapFontImporter.readFrom(context, uri)
+            }
+
+            showBitmapFontPicker = true
+
+            if (source is BitmapFontImporter.Source.Failure) {
+                Toast.makeText(context, source.reason, Toast.LENGTH_LONG).show()
+                return@launch
+            }
+
+            pendingBitmapImport.value = source
+        }
+    }
+
+    PendingBitmapImportDialog(
+        source = pendingBitmapImport.value,
+        onDismiss = { pendingBitmapImport.value = null },
+        onRegistered = { fontId, name ->
+            pendingBitmapImport.value = null
+
+            /*
+             * ⚠️ 只改 `bitmapFontId`，**不动 `fontId`**。
+             *
+             * 图片字体是可选的叠加项，常规字体仍然是必选的、要留着给
+             * 中文兜底。早先这里写的是 `copy(fontId = fontId)` ——
+             * 那会把用户的常规字体**顶掉**：中文失去退路，
+             * 而且 `fontId` 存着一个 `bitmap:` id、`FontRegistry` 找不到它，
+             * 界面就显示"默认（字体已移除）"。
+             *
+             * 需求原话正是这两条："既没有立马应用，还顶掉了原本的字体选择"。
+             */
+            selectedForImport.value?.let { target ->
+                draft.replace(target.withStyle(target.style.copy(bitmapFontId = fontId)))
+            }
+            fontRevision++
+            Toast.makeText(context, "已导入「$name」", Toast.LENGTH_SHORT).show()
+        },
+        onFailed = { reason ->
+            pendingBitmapImport.value = null
+            Toast.makeText(context, reason, Toast.LENGTH_LONG).show()
+        },
+    )
+
     val panelContent: @Composable (Modifier) -> Unit = { panelModifier ->
         PropertyPanel(
             component = selected,
@@ -330,6 +420,7 @@ fun CustomLayoutEditorScreen(
             onBeginContinuous = { draft.mutateOnce() },
             onEndContinuous = { draft.finishStep() },
             onPickFont = { showFontPicker = true },
+            onPickBitmapFont = { showBitmapFontPicker = true },
             onPickKeys = { key -> editingKeysFor = key },
             onPickCpsKeys = { text, index -> editingCpsKeysFor = text to index },
         )
@@ -590,6 +681,61 @@ fun CustomLayoutEditorScreen(
                         context,
                         "打不开文件选择器（${e.javaClass.simpleName}）：" +
                             "这台设备上没有能选文件的应用",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            },
+            refreshKey = fontRevision,
+        )
+    }
+
+    if (showBitmapFontPicker) {
+        BitmapFontPickerDialog(
+            selectedId = selected?.style?.bitmapFontId.orEmpty(),
+            onSelect = { fontId ->
+                selected?.let { target ->
+                    draft.replace(target.withStyle(target.style.copy(bitmapFontId = fontId)))
+                }
+            },
+            onDismiss = { showBitmapFontPicker = false },
+            /*
+             * ⚠️ 这里**不关**对话框（与矢量字体那条不同）。
+             *
+             * 图片字体导入后弹的是我们自己的命名对话框，选择窗口留着才能
+             * 让用户看到"新导入的字体出现在列表里"。系统那次 dismiss 由
+             * `bitmapFontPicker` 回调里那句 `showBitmapFontPicker = true` 抵消。
+             */
+            onImport = {
+                try {
+                    bitmapFontPicker.launch(
+                        arrayOf(
+                            /*
+                             * MIME 要同时覆盖"图片"与"压缩包"。
+                             *
+                             * ⚠️ 这里**不能**把通配符 MIME 原样写进块注释！
+                             * Kotlin 的块注释是**可嵌套**的：注释里出现
+                             * "斜杠 + 星号"会被当成嵌套注释的开始，而闭合只有
+                             * 一层 —— 于是整段注释永不闭合，后面的代码全被吞掉，
+                             * 报出来的却是"某个毫不相关的函数未解析 / Unclosed
+                             * comment"，极难定位（这个坑我踩了很久）。
+                             *
+                             * 所以下面用注释逐条说明，不写那两个字符。
+                             */
+                            "image/*",                // 直接选 ascii.png
+                            "application/zip",        // .zip 与 .mcpack（后者就是 zip）
+                            "application/x-zip-compressed",
+                            "application/octet-stream", // 有些 ROM 只认这个，否则 .mcpack 选不了
+                        ),
+                    )
+                } catch (e: Exception) {
+                    AppLog.e(
+                        "CustomEditor",
+                        "拉起图片字体选择器失败：${e.javaClass.simpleName}: ${e.message}",
+                        e,
+                    )
+                    Toast.makeText(
+                        context,
+                        "打不开文件选择器（${e.javaClass.simpleName}）：这台设备上没有能选文件的应用",
                         Toast.LENGTH_LONG,
                     ).show()
                 }

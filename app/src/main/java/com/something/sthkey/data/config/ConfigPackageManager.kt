@@ -9,6 +9,7 @@ import com.something.sthkey.domain.config.DEFAULT_LIVE2D_MODEL_ID
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.font.FontKind
 import com.something.sthkey.domain.font.FontRegistry
+import com.something.sthkey.domain.font.bitmap.BitmapFontStore
 import com.something.sthkey.domain.live2d.Live2DModelKind
 import com.something.sthkey.domain.live2d.Live2DModels
 import com.something.sthkey.data.live2d.Live2DModelImporter
@@ -238,6 +239,20 @@ object ConfigPackageManager {
         null
     }
 
+    /**
+     * 把配置包写到目标 Uri 的**唯一实现**。
+     *
+     * `internal` 而不是 `private`：三种"不用挑位置"的导出方式
+     * （下载目录 / 自定义目录 / 分享）都在 [ConfigExporters] 里，
+     * 它们必须走这同一份写入逻辑。
+     *
+     * ⚠️ 不能让它们各写一份：写入要带字体、Live2D 模型、改写真写 params
+     * （顺序还不能错，见下面的注释），漏一步的表现是"用某种方式导出的包
+     * 少了某个资源"，而且只有那一种方式会坏。
+     */
+    internal fun writeTo(context: Context, config: KeyStrokesConfig, target: Uri): Boolean =
+        writePackage(context, config, target)
+
     /** 真正写一个包进去；不管名字、不做重试 */
     private fun writePackage(context: Context, config: KeyStrokesConfig, target: Uri): Boolean {
         val model = collectLive2DModel(config)
@@ -418,25 +433,50 @@ object ConfigPackageManager {
         val usedNames = mutableSetOf<String>()
 
         ParamsTree.collectFontIds(params).forEach { fontId ->
-            // 系统字体与内置字体：不进包，树里保持原 id（导入方用自己那份）
+            /*
+             * 系统字体与内置字体：不进包，树里保持原 id（导入方用自己那份）。
+             *
+             * ⚠️ 图片字体（[FontKind.BITMAP]）**也要进包**，而且比矢量字体
+             * 更需要：它的"怎么切格子、怎么取遮罩、ascent 多少"是一组
+             * **因图而异**的参数，只存一个 id 的话导入方拿到 PNG 也不知道
+             * 该怎么解析（详见 `ConfigPackageCodec.FontFileInfo.bitmap`）。
+             */
             val entry = FontRegistry.find(fontId) ?: run {
                 AppLog.w(TAG, "配置引用的字体不存在，导出时跳过：$fontId")
                 return@forEach
             }
-            if (entry.kind != FontKind.IMPORTED) return@forEach
+            if (entry.kind != FontKind.IMPORTED && entry.kind != FontKind.BITMAP) {
+                return@forEach
+            }
 
             val file = FontRegistry.resolveFile(fontId) ?: run {
                 AppLog.w(TAG, "字体文件缺失，导出时跳过：${entry.displayName}")
                 return@forEach
             }
 
-            val path = ConfigPackageCodec.DIR_FONTS + uniqueFileName(entry.displayName, usedNames)
+            /*
+             * 图片字体：连**规格**一起进包（见 `FontFileInfo.bitmap`）。
+             * 落盘文件名用 `.png`，与矢量字体区分开 ——
+             * 导入方按后缀决定"注册成矢量字体还是图片字体"，
+             * 不依赖 manifest 里的字段是否读全。
+             */
+            val bitmapSpec = if (entry.kind == FontKind.BITMAP) {
+                BitmapFontStore.specOf(fontId)
+            } else {
+                null
+            }
+
+            val extension = if (bitmapSpec != null) ".png" else ".ttf"
+            val path = ConfigPackageCodec.DIR_FONTS +
+                uniqueFileName(entry.displayName, usedNames, extension)
+
             files += CollectedFont(
                 file = file,
                 info = ConfigPackageCodec.FontFileInfo(
                     path = path,
                     displayName = entry.displayName,
                     sha256 = sha256(file),
+                    bitmap = bitmapSpec,
                 ),
             )
             uriById[fontId] = ConfigPackageCodec.FONT_URI_PREFIX + path
@@ -451,17 +491,23 @@ object ConfigPackageManager {
      * ⚠️ 必须去重：两个导入字体可以被用户改成同一个显示名
      * （字体库允许重名，因为 id 才是标识）。同名的话 zip 里会出现两条
      * 同名条目，后写的覆盖先写的 —— 表现是"导入后有一个字体变成了另一个"。
+     *
+     * @param extension 含点，例如 `.ttf` / `.png`
      */
-    private fun uniqueFileName(displayName: String, used: MutableSet<String>): String {
+    private fun uniqueFileName(
+        displayName: String,
+        used: MutableSet<String>,
+        extension: String = ".ttf",
+    ): String {
         val safe = displayName
             .replace(Regex("""[\\/:*?"<>|]"""), "_")
             .trim()
             .ifBlank { "font" }
 
-        var candidate = "$safe.ttf"
+        var candidate = "$safe$extension"
         var index = 2
         while (!used.add(candidate)) {
-            candidate = "$safe ($index).ttf"
+            candidate = "$safe ($index)$extension"
             index++
         }
         return candidate
@@ -844,6 +890,11 @@ object ConfigPackageManager {
      *
      * 两步：按哈希查本地是否已有（复用）→ 否则落盘并登记。
      *
+     * ⚠️ 图片字体走的是**另一套字体库**（[BitmapFontStore]）：
+     * 它要带上规格（网格 / 遮罩 / ascent），而且"同哈希复用"的判断
+     * 也简单得多 —— 规格是包内自带的，只要本地已有同哈希的图集，
+     * 直接复用那一条即可（同图 + 同规格 = 同字体）。
+     *
      * @return 本机字体 id；失败返回 null
      */
     private fun storeFont(
@@ -856,6 +907,17 @@ object ConfigPackageManager {
         if (data == null) {
             AppLog.w(TAG, "包里缺少字体文件：${info.path}")
             return null
+        }
+
+        /*
+         * 是不是图片字体，以 **manifest 里的规格**为准。
+         *
+         * 不看文件后缀：后缀只能说明"这是个 PNG"，而一个没带规格的 PNG
+         * 根本没法用 —— 那样还不如报成缺失、让上面那套"回落默认字体 +
+         * 在报告里列出来"的逻辑处理掉。
+         */
+        info.bitmap?.let { spec ->
+            return storeBitmapFont(data, info, spec, imported, reused)
         }
 
         // 内容去重：本地已有同哈希字体就直接复用（导入与内置都查，见 findBySha256）
@@ -874,6 +936,42 @@ object ConfigPackageManager {
 
         imported += stored.displayName
         return stored.id
+    }
+
+    /**
+     * 把一个包内**图片字体**落到本机字体库。
+     *
+     * 复用判据比矢量字体强：除了图集内容相同，还要求**规格也相同**
+     * （同哈希 + 同规格 = 同一个字体；图一样但网格不同就是两个字体）。
+     */
+    private fun storeBitmapFont(
+        data: ByteArray,
+        info: ConfigPackageCodec.FontFileInfo,
+        spec: com.something.sthkey.domain.font.bitmap.BitmapFontSpec,
+        imported: MutableList<String>,
+        reused: MutableList<String>,
+    ): String? {
+        val hash = sha256(data)
+
+        // 本地已有"同图 + 同规格"的，直接复用
+        BitmapFontStore.findByContent(hash) { existing ->
+            existing.copy(atlasFileName = "") == spec.copy(atlasFileName = "")
+        }?.let { existingId ->
+            val name = BitmapFontStore.displayNameOf(existingId) ?: info.displayName
+            reused += name
+            AppLog.i(TAG, "图片字体已在本地，直接复用：$name")
+            return existingId
+        }
+
+        val fontId = BitmapFontStore.registerImported(
+            atlasBytes = data,
+            displayName = info.displayName,
+            spec = spec,
+            sha256 = hash,
+        ) ?: return null
+
+        imported += BitmapFontStore.displayNameOf(fontId) ?: info.displayName
+        return fontId
     }
 
     private data class Outcome(

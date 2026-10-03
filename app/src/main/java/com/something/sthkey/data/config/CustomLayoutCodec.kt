@@ -1,4 +1,4 @@
-﻿package com.something.sthkey.data.config
+package com.something.sthkey.data.config
 
 import com.something.sthkey.core.log.AppLog
 import com.something.sthkey.domain.config.ANIMATION_DURATION_MAX
@@ -160,6 +160,10 @@ object CustomLayoutCodec {
         put("cornerRadiusEnabled", style.cornerRadiusEnabled)
         put("cornerRadiusPercent", style.cornerRadiusPercent.toDouble())
         put("fontId", style.fontId)
+        put("bitmapFontId", style.bitmapFontId)
+        // 字间距 / 行间距（相对字号的百分比，0 = 不动）
+        put("letterSpacing", style.letterSpacing.toDouble())
+        put("lineSpacing", style.lineSpacing.toDouble())
     }
 
     /*
@@ -446,6 +450,9 @@ object CustomLayoutCodec {
                 CustomLayout.CORNER_PERCENT_MAX,
             ),
             fontId = json.optString("fontId", defaults.fontId).ifBlank { DEFAULT_FONT_ID },
+            bitmapFontId = json.optString("bitmapFontId", ""),
+            letterSpacing = json.optDouble("letterSpacing", 0.0).toFloat(),
+            lineSpacing = json.optDouble("lineSpacing", 0.0).toFloat(),
         )
     }
 

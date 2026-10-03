@@ -1,4 +1,4 @@
-package com.something.sthkey
+﻿package com.something.sthkey
 
 import android.app.Application
 import android.os.Process
@@ -9,6 +9,7 @@ import com.something.sthkey.core.prefs.AppPrefs
 import com.something.sthkey.data.config.ConfigStore
 import com.something.sthkey.data.live2d.Live2DModelImporter
 import com.something.sthkey.domain.font.FontRegistry
+import com.something.sthkey.domain.font.bitmap.BitmapFontStore
 import com.something.sthkey.domain.live2d.Live2DModels
 import com.something.sthkey.domain.overlay.OverlayLayouts
 
@@ -62,6 +63,16 @@ class SthKeyApplication : Application() {
         FontRegistry.init(this)
         // 顺手清掉"记录还在、文件没了"的失效字体（用户清过数据等极端情况）
         FontRegistry.pruneMissing()
+
+        /*
+         * 图片字体（Minecraft 风格的位图图集）。
+         *
+         * ⚠️ 必须在 [FontRegistry.pruneMissing] **之前**初始化：
+         * `FontRegistry.all()` 会去问图片字体库有哪些条目
+         * （见 `FontRegistry.bitmapFonts`），没初始化就会漏掉它们。
+         */
+        BitmapFontStore.init(this)
+        BitmapFontStore.pruneMissing()
 
         // Live2D 模型库同理：导入的模型放在私有目录
         Live2DModels.init(this)

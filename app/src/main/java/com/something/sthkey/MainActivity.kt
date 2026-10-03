@@ -37,6 +37,9 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import android.content.Intent
+import com.something.sthkey.data.config.IncomingConfig
+import com.something.sthkey.ui.feature.config.IncomingConfigDialog
 import com.something.sthkey.core.log.AppLog
 import com.something.sthkey.core.prefs.AppPrefs
 import com.something.sthkey.ui.AppStage
@@ -67,19 +70,74 @@ import kotlinx.coroutines.delay
  */
 class MainActivity : ComponentActivity() {
 
+    /**
+     * 外部传进来的待导入配置包。
+     *
+     * ============================================================
+     * ⚠️ 关键是 [onCreate] 与 [onNewIntent] **都要走这里**
+     * ============================================================
+     * 冷启动（应用没在运行）时只有 `onCreate` 会拿到那个 Intent；
+     * 应用已在后台时只有 `onNewIntent` 会拿到。
+     *
+     * 只写 `onNewIntent` 的后果正是"第一次分享没用、再分享一次才行" ——
+     * 因为第一次是冷启动，走了 `onCreate` 而那里没处理。
+     * 所以两条路都调同一个 [handleIncomingIntent]，不存在只覆盖一条的情况。
+     *
+     * 用 Compose 状态（而不是普通字段）是为了让界面能**响应式**地
+     * 弹出确认框：分享进来时应用可能停在任意页面，甚至还在引导页。
+     */
+    private var incomingRequest by mutableStateOf<IncomingConfig.Request?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
         AppLog.i(TAG, "MainActivity 创建")
 
+        /*
+         * 冷启动这条路。`savedInstanceState == null` 才处理：
+         * 屏幕旋转等原因重建时系统会把**原来的** Intent 再给一次，
+         * 不判断的话每次转屏都会重新弹一次导入确认框。
+         */
+        if (savedInstanceState == null) {
+            handleIncomingIntent(intent)
+        }
+
         setContent {
             SthKeyTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    SthKeyApp()
+                    SthKeyApp(
+                        incomingRequest = incomingRequest,
+                        onIncomingHandled = { incomingRequest = null },
+                    )
                 }
             }
         }
+    }
+
+    /**
+     * 应用已在运行时收到新的 Intent（用户又分享/打开了一次）。
+     *
+     * ⚠️ 必须调 `setIntent`：不调的话 `getIntent()` 之后一直返回**旧的**
+     * 那个 Intent。这里虽然不依赖它，但保持这个约定能避免以后
+     * 有人读 `intent` 时拿到过期数据。
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncomingIntent(intent)
+    }
+
+    /**
+     * 从 Intent 里取出配置包并转成"待确认"状态。
+     *
+     * 注意这里**只是登记，不导入** —— 真正的导入在确认框里，
+     * 由用户点了「导入」才发生（见 `IncomingConfigDialog`）。
+     */
+    private fun handleIncomingIntent(intent: Intent?) {
+        val request = IncomingConfig.extract(intent) ?: return
+        AppLog.i(TAG, "收到外部配置包：action=${intent?.action}")
+        incomingRequest = request
     }
 
     private companion object {
@@ -94,7 +152,12 @@ class MainActivity : ComponentActivity() {
  * 引导完成后不应留在返回栈里，否则用户在主界面按返回键会退回引导页。
  */
 @Composable
-private fun SthKeyApp(viewModel: MainViewModel = viewModel()) {
+private fun SthKeyApp(
+    viewModel: MainViewModel = viewModel(),
+    /** 外部分享/打开进来的配置包；非 null 时弹确认框 */
+    incomingRequest: IncomingConfig.Request? = null,
+    onIncomingHandled: () -> Unit = {},
+) {
     // rememberSaveable：进程被系统回收重建时仍停留在用户当时的状态
     var stage by rememberSaveable { mutableStateOf(AppStage.SETUP.name) }
     var showAnnouncement by rememberSaveable { mutableStateOf(false) }
@@ -157,6 +220,30 @@ private fun SthKeyApp(viewModel: MainViewModel = viewModel()) {
             onDismiss = null,
         )
     }
+
+    /*
+     * ============================================================
+     * 外部分享/打开进来的配置包
+     * ============================================================
+     * 放在**最外层**（而不是某个页面里）：分享进来时应用可能停在任意页面，
+     * 也可能还在引导页 —— 挂在具体页面上就会漏掉那些情况。
+     *
+     * 导入成功后刷新配置列表：`ConfigListScreen` 按版本号重取列表，
+     * 不刷新的话用户切到配置页看不到刚导入的那一份
+     * （表现是"导入了但列表里没有，重启才出现"）。
+     */
+    IncomingConfigDialog(
+        request = incomingRequest,
+        onImported = {
+            viewModel.reloadConfigs()
+            /*
+             * 顺手切到配置页：用户刚导入一份配置，最可能想立刻看到它 / 改它。
+             * 停在原来的页面上会让人以为"导入完了但什么也没发生"。
+             */
+            stage = AppStage.MAIN.name
+        },
+        onDismiss = onIncomingHandled,
+    )
 }
 
 /**
