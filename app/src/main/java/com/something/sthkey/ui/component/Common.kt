@@ -3,16 +3,21 @@ package com.something.sthkey.ui.component
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.Icons
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -25,10 +30,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-
 /**
  * 页面骨架。
  *
@@ -152,6 +157,69 @@ fun SectionHint(
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = modifier.padding(horizontal = 4.dp),
     )
+}
+
+/**
+ * **可折叠**的分区标题。
+ *
+ * ============================================================
+ * 为什么需要它
+ * ============================================================
+ * 用户的原话:"优化一下键盘样式与手柄样式的配置编辑页，让现在的'外观'、'颜色'
+ * 等标题，变成可折叠的 box（就跟自定义编辑页一样），现在配置多，不方便找"。
+ *
+ * 配置项多起来之后，一页要滚很久才能找到想要的那一项。折叠之后
+ * 一屏能放下所有分区标题，找东西变成"先看标题、再展开"。
+ *
+ * ⚠️ **与 [SectionHeader] 的区别只有一个:能不能点。**
+ * 字号、颜色、边距全部沿用同一套，这样同一个页面里两种标题
+ * 看起来是一家人（`基本信息` / `其它` 用不可折叠的那种）。
+ *
+ * ⚠️ 右侧箭头是**必须的** —— 没有它用户不知道这里能点。
+ * 自定义编辑页的 `PanelGroup` 也是这么做的，两边保持一致。
+ *
+ * @param text 分区标题
+ * @param expanded 当前是否展开
+ * @param onToggle 点击标题时切换展开/收起
+ */
+@Composable
+fun CollapsibleSectionHeader(
+    text: String,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            /*
+             * ⚠️ `clickable` 要在 `padding` **之前** —— 这样整行
+             * （含标题左右两侧的空白）都是可点区域。
+             * 反过来写的话只有文字本身能点，用户点在文字旁边没反应，
+             * 会以为这个标题不能折叠。
+             */
+            .clickable(onClick = onToggle)
+            .padding(top = 8.dp, start = 4.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.weight(1f),
+        )
+
+        /* 箭头跟着展开状态翻转，告诉用户"点这里会发生什么" */
+        Icon(
+            imageVector = if (expanded) {
+                Icons.Default.KeyboardArrowUp
+            } else {
+                Icons.Default.KeyboardArrowDown
+            },
+            contentDescription = if (expanded) "收起" else "展开",
+            tint = MaterialTheme.colorScheme.primary,
+        )
+    }
 }
 
 /**

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import com.something.sthkey.domain.style.StyleCategory
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -27,6 +28,7 @@ import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.SaveAlt
+import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -751,17 +753,68 @@ private fun CreateConfigDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                /*
+                 * ============================================================
+                 * ⚠️ 样式按**分类**分组，而且整块可滚动
+                 * ============================================================
+                 * 第一版是把 5 个样式塞进**一个 `Row` + `weight(1f)`** ——
+                 * 于是每个只有屏幕的五分之一宽，"手柄"、"标准" 这些
+                 * 两三个字的标签全被挤成竖排或者省略号。
+                 *
+                 * 现在:
+                 *
+                 * - 按 `style.category` 分组（键盘 / 手柄 / 通用），每组一个
+                 *   小标题 —— 分组是**样式自己的属性**，UI 不写 `when`；
+                 * - 每组内**两列网格**（一行放得下两个，不至于挤）；
+                 * - 外层 `verticalScroll` + 高度上限 —— 以后样式更多时
+                 *   不会把"创建"按钮顶出屏幕（那个坑在快捷方式弹窗里踩过）。
+                 */
+                val stylesByCategory = remember(styles) {
+                    styles.groupBy { it.category }
+                }
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = STYLE_LIST_MAX_HEIGHT)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    styles.forEach { style ->
-                        StyleOption(
-                            style = style,
-                            selected = styleId == style.id,
-                            modifier = Modifier.weight(1f),
-                            onSelect = { if (style.enabled) styleId = style.id },
+                    /* 按枚举顺序显示，而不是 Map 的迭代顺序（那是不保证的） */
+                    StyleCategory.entries.forEach { category ->
+                        val items = stylesByCategory[category].orEmpty()
+                        if (items.isEmpty()) return@forEach
+
+                        Text(
+                            text = category.title,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
                         )
+
+                        /* 两列一行；奇数个时最后一行左边一个，右边留空 */
+                        items.chunked(2).forEach { row ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                row.forEach { style ->
+                                    StyleOption(
+                                        style = style,
+                                        selected = styleId == style.id,
+                                        modifier = Modifier.weight(1f),
+                                        onSelect = { if (style.enabled) styleId = style.id },
+                                    )
+                                }
+                                /*
+                                 * 奇数个时补一个空位，否则最后那个会**撑满整行**
+                                 * （`weight(1f)` 只有一个时它就是全部宽度）——
+                                 * 卡片尺寸与上面那行不一致，看起来像坏了。
+                                 */
+                                if (row.size == 1) {
+                                    Spacer(modifier = Modifier.weight(1f))
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -785,6 +838,14 @@ private fun CreateConfigDialog(
         },
     )
 }
+
+/**
+ * 新建对话框里样式列表的高度上限。
+ *
+ * ⚠️ 与"外层整块可滚动"配套：样式多起来（以后还会加预设）时，
+ * 不加限高会把「创建」按钮顶出屏幕 —— 那个坑在快捷方式弹窗里踩过一次。
+ */
+private val STYLE_LIST_MAX_HEIGHT = 260.dp
 
 /** 新建对话框里的样式选项卡片 */
 @Composable
@@ -856,6 +917,14 @@ private fun OverlayStyleDescriptor.icon(): ImageVector = when (iconKey) {
     OverlayStyleRegistry.ICON_KEYBOARD -> Icons.Default.Keyboard
     OverlayStyleRegistry.ICON_LIVE2D -> Icons.Default.Person
     OverlayStyleRegistry.ICON_CUSTOM -> Icons.Default.DashboardCustomize
+    /*
+     * 手柄样式。
+     *
+     * ⚠️ 两个手柄样式**共用同一个图标**（`ICON_GAMEPAD`）——
+     * 它们只是布局不同，用两个不同图标反而会让用户以为
+     * "这是两种不同的东西"。分组标题（"手柄"）已经说明了归属。
+     */
+    OverlayStyleRegistry.ICON_GAMEPAD -> Icons.Default.SportsEsports
     else -> Icons.Default.Tune
 }
 

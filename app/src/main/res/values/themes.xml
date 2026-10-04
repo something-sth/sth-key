@@ -12,4 +12,23 @@
         <item name="android:windowLightStatusBar" tools:targetApi="m">true</item>
     </style>
 
+    <!--
+        桌面快捷方式入口用的主题：**完全不显示**。
+
+        比"全屏透明"更彻底 —— 连窗口都不会创建，所以点快捷方式时
+        桌面**一点动画都没有**，就像什么都没发生（这正是我们要的：
+        用户的操作对象是悬浮窗，不是应用界面）。
+
+        ⚠️ `Theme.NoDisplay` 有一个硬性要求：Activity 必须在
+        `onResume()` **之前**调用 `finish()`。违反的话系统直接抛
+        `IllegalStateException`（"Activity did not call finish() prior to
+        onResume"）。所以 ShortcutActivity 的工作全部放在 onCreate，
+        且不能有任何异步等待。
+
+        ⚠️ 不要改成 `windowIsTranslucent` + `windowBackground=transparent`
+        的写法来"图个安全"：那样会真的创建一个透明窗口，
+        启动器会闪一下（有时还带缩放动画），反而不如 NoDisplay 干净。
+    -->
+    <style name="Theme.SthKey.Invisible" parent="android:Theme.NoDisplay" />
+
 </resources>

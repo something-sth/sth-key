@@ -1,12 +1,12 @@
 package com.something.sthkey.capture.shizuku
 
-import com.something.sthkey.capture.InputEvent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * `getevent -q` 输出解析的测试。
+ * `getevent` 输出解析的测试。
  *
  * ============================================================
  * 为什么这些用例值得写
@@ -15,136 +15,236 @@ import org.junit.Test
  * 只会"某些键不亮"。而按键不亮的排查成本极高（用户不知道为什么，
  * 我们看不出哪一步没对上）。
  *
- * 三个最容易错、且都真的会发生的点：
- * 1. **负数**：`getevent` 把字段按 int 打印，鼠标往左/上动是 `ffffffff`。
- *    用 `toInt(16)` 解析会**抛异常**，于是那半个方向的鼠标事件全丢 ——
- *    表现成"鼠标只能往右下动"，会被误判成硬件问题；
- * 2. **设备前缀**：一次监听多个设备时，每行会多一段 `/dev/input/event3:`；
- * 3. **非事件行**：设备切换头、空行、错误文本都要安全地丢弃而不是崩。
+ * ============================================================
+ * 样本要逐字照抄真实输出
+ * ============================================================
+ * 自己编样本，测的是"我以为的格式"，而不是 `getevent` 真实的格式 ——
+ * 那还不如不测。
+ *
+ * ⚠️ 以后在真机上抓到不一样的输出，**把样本补到这里**再加一条断言，
+ * 不要改代码去"顺手兼容"。
  */
 class GeteventParserTest {
 
-    /*
-     * ============================================================
-     * 基本格式
-     * ============================================================
-     */
+    /* ============================================================
+     * 旧格式（不带 -l）：单设备模式下的输出
+     * ============================================================ */
 
     @Test
-    fun `解析单设备的一行`() {
+    fun `解析没有设备前缀的一行`() {
         // KEY_Q 按下：type=1 code=16 value=1
         assertEquals(
-            InputEvent(type = 0x01, code = 0x10, value = 1),
+            ParsedLine.Event(device = null, type = 0x01, code = 0x10, value = 1, timestampMicros = 0L),
             GeteventParser.parse("0001 0010 00000001"),
         )
     }
 
     @Test
-    fun `解析按下与抬起`() {
-        assertEquals(
-            InputEvent(0x01, 0x10, InputEvent.VALUE_DOWN),
-            GeteventParser.parse("0001 0010 00000001"),
+    fun `解析带设备前缀的一行`() {
+        val parsed = GeteventParser.parse("/dev/input/event3: 0001 0010 00000001")
+
+        assertTrue(parsed is ParsedLine.Event)
+        assertEquals("/dev/input/event3", (parsed as ParsedLine.Event).device)
+        assertEquals(0x10, parsed.code)
+    }
+
+    /**
+     * ⚠️ 负值必须能解析。
+     *
+     * `getevent` 把字段按 int 打印，所以负数显示成 `ffffffff`。
+     * `"ffffffff".toInt(16)` 会抛 `NumberFormatException` ——
+     * 于是**鼠标往左/往上移动的事件被整条丢掉**，
+     * 表现为"鼠标只能往右下动"，很容易被误判成硬件问题。
+     */
+    @Test
+    fun `解析负数（鼠标往左上移动）`() {
+        val parsed = GeteventParser.parse("0002 0000 ffffffff") as ParsedLine.Event
+
+        assertEquals(0x02, parsed.type)
+        assertEquals(0, parsed.code)
+        assertEquals(-1, parsed.value)
+    }
+
+    /* ============================================================
+     * 新格式（-lt）：全局监听 + 时间戳 + 设备前缀
+     * ============================================================ */
+
+    @Test
+    fun `解析带时间戳与设备前缀的事件行`() {
+        val parsed = GeteventParser.parse(
+            "[   12345.678901] /dev/input/event3: 0001 0011 00000001",
         )
+
+        assertTrue("应当是事件", parsed is ParsedLine.Event)
+        val event = parsed as ParsedLine.Event
+        assertEquals("/dev/input/event3", event.device)
+        assertEquals(0x0001, event.type)
+        assertEquals(0x0011, event.code)
+        assertEquals(1, event.value)
+    }
+
+    /**
+     * ⚠️ 时间戳的数字**不能**参与字段解析。
+     *
+     * `12345` 与 `678901` 都是**合法十六进制** —— 如果实现只是
+     * "按空白拆字段"而不先剥掉时间戳，这里会解析出
+     * type=0x12345、code=0x678901 这种**看起来正常但完全错误**的结果。
+     *
+     * 症状是"按键全乱、鼠标往奇怪方向动"，很难联想到时间戳。
+     */
+    @Test
+    fun `时间戳不会被当成字段`() {
+        val parsed = GeteventParser.parse(
+            "[   12345.678901] /dev/input/event3: 0001 0011 00000001",
+        ) as ParsedLine.Event
+
+        assertEquals("type 必须是真正的第一个字段", 0x0001, parsed.type)
+        assertEquals("code 必须是真正的第二个字段", 0x0011, parsed.code)
+        assertEquals("value 必须是真正的第三个字段", 1, parsed.value)
+    }
+
+    @Test
+    fun `时间戳换算成微秒`() {
+        val parsed = GeteventParser.parse(
+            "[   12345.678901] /dev/input/event3: 0001 0011 00000001",
+        ) as ParsedLine.Event
+
+        assertEquals(12_345_678_901L, parsed.timestampMicros)
+    }
+
+    /** ⚠️ 小数位不足 6 位要**右补零**：`5.5` 是半秒，不是 55 微秒 */
+    @Test
+    fun `时间戳小数位不足时右补零`() {
+        val parsed = GeteventParser.parse(
+            "[      12.5] /dev/input/event3: 0001 0011 00000001",
+        ) as ParsedLine.Event
+
+        assertEquals("12.5 秒 = 12_500_000 微秒", 12_500_000L, parsed.timestampMicros)
+    }
+
+    /* ============================================================
+     * 设备公告 —— 热插拔的唯一来源
+     * ============================================================ */
+
+    @Test
+    fun `解析设备接入`() {
         assertEquals(
-            InputEvent(0x01, 0x10, InputEvent.VALUE_UP),
-            GeteventParser.parse("0001 0010 00000000"),
+            ParsedLine.Attached("/dev/input/event3"),
+            GeteventParser.parse("add device 5: /dev/input/event3"),
         )
     }
 
     @Test
-    fun `解析鼠标左键`() {
-        // BTN_LEFT = 0x110
+    fun `解析设备拔出`() {
         assertEquals(
-            InputEvent(0x01, 0x110, InputEvent.VALUE_DOWN),
-            GeteventParser.parse("0001 0110 00000001"),
+            ParsedLine.Detached("/dev/input/event3"),
+            GeteventParser.parse("remove device 5: /dev/input/event3"),
         )
     }
 
+    /**
+     * ⚠️ 公告行里**取不到路径**时也要认出来。
+     *
+     * 不同 ROM / toybox 版本打印的内容不完全一样（有的带完整路径，
+     * 有的只带节点序号）。取不到路径时返回**空路径的公告**，
+     * 让读取源走"清掉全部按键状态"这条保守路径 ——
+     * 那比"什么都不做、按键永久卡住"好得多。
+     */
     @Test
-    fun `容忍行首行尾空白`() {
-        // 从管道读回来的行可能带 \r（不同 toybox 版本），trim 之后要能解析
+    fun `公告行没有路径时仍然认出来`() {
         assertEquals(
-            InputEvent(0x01, 0x10, 1),
-            GeteventParser.parse("  0001 0010 00000001  "),
+            "接入",
+            ParsedLine.Attached(""),
+            GeteventParser.parse("add device 5: event3"),
+        )
+        assertEquals(
+            "拔出",
+            ParsedLine.Detached(""),
+            GeteventParser.parse("remove device 5: event3"),
         )
     }
 
-    /*
-     * ============================================================
-     * ⚠️ 负数：这条最重要
+    /* ============================================================
+     * ⚠️ 描述块绝不能被当成事件
      * ============================================================
      */
 
     /**
-     * 鼠标往左移动：`REL_X` = -1，`getevent` 打印成 `ffffffff`。
+     * 这是**最危险**的一类误判。
      *
-     * 如果解析器用 `toInt(16)`，这里会抛 NumberFormatException 并丢掉整行 ——
-     * 于是用户看到"鼠标只能往右下动"。这条测试就是钉住这个坑。
+     * `-lt` 在设备公告之后会打印一整个描述块，其中 `events:` 那一行
+     * **末尾恰好是一串十六进制**：
+     *
+     * ```
+     *   events:   KEY (0001): 0001 0002 0003 ...
+     * ```
+     *
+     * 宽松的"取最后三个字段"策略会把它解析成一个**假的输入事件** ——
+     * 采集里就凭空多出几个按下的键，而用户完全不知道为什么。
+     *
+     * 判据必须是"**这一行有没有时间戳前缀**"，不是"字段数够不够"。
      */
     @Test
-    fun `鼠标向左移动的负位移要能解析`() {
-        val event = GeteventParser.parse("0002 0000 ffffffff")
-
-        assertEquals(
-            "EV_REL / REL_X / -1",
-            InputEvent(type = InputEvent.EV_REL, code = InputEvent.REL_X, value = -1),
-            event,
+    fun `描述块里的 events 行不会被当成事件`() {
+        assertNull(
+            "`events:` 行末尾是十六进制，但它是描述块，不是事件",
+            GeteventParser.parse(
+                "  events:   KEY (0001): 0001 0002 0003 0004 0005 0006",
+            ),
         )
     }
 
     @Test
-    fun `鼠标向上移动的负位移要能解析`() {
-        assertEquals(
-            InputEvent(type = InputEvent.EV_REL, code = InputEvent.REL_Y, value = -1),
-            GeteventParser.parse("0002 0001 ffffffff"),
+    fun `描述块里的 name 行被忽略`() {
+        assertNull(
+            GeteventParser.parse("  name:     \"Xbox Wireless Controller\""),
         )
     }
 
     @Test
-    fun `向右下的正位移按原值解析`() {
-        assertEquals(
-            InputEvent(InputEvent.EV_REL, InputEvent.REL_X, 5),
-            GeteventParser.parse("0002 0000 00000005"),
-        )
+    fun `描述块里的其它行被忽略`() {
+        assertNull(GeteventParser.parse("  input props:  00000000 00000000"))
+        assertNull(GeteventParser.parse("  abs info:     ..."))
+        assertNull(GeteventParser.parse("  value:        0"))
     }
 
-    /*
-     * ============================================================
-     * 多设备前缀
+    /* ============================================================
+     * ⚠️ 把"不要用 -l"这个约定钉住
      * ============================================================
      */
 
-    @Test
-    fun `带设备路径前缀的行要能解析`() {
-        // 一次监听多个设备时，getevent 会给每行加设备前缀
-        assertEquals(
-            InputEvent(0x01, 0x10, 1),
-            GeteventParser.parse("/dev/input/event3: 0001 0010 00000001"),
-        )
-    }
-
-    @Test
-    fun `带前缀的负位移也要能解析`() {
-        assertEquals(
-            InputEvent(InputEvent.EV_REL, InputEvent.REL_X, -1),
-            GeteventParser.parse("/dev/input/event5: 0002 0000 ffffffff"),
-        )
-    }
-
-    @Test
-    fun `设备编号是两位数时同样能解析`() {
-        // event10 及以上：前缀变长，不能按固定列宽切
-        assertEquals(
-            InputEvent(0x01, 0x10, 1),
-            GeteventParser.parse("/dev/input/event12: 0001 0010 00000001"),
-        )
-    }
-
-    /*
-     * ============================================================
-     * 不该崩的行
-     * ============================================================
+    /**
+     * ⚠️ **这条测试断言的是"解析不了"，那是刻意的。**
+     *
+     * `getevent -l` 会把事件行换成符号名（`EV_KEY KEY_W DOWN`），
+     * 要支持它得带一张几百项的 `KEY_*` 名称表。
+     *
+     * 而它的失败方式**极其隐蔽**（踩过一次）：
+     *
+     * - 每一个真实按键事件都被丢掉；
+     * - 但**设备公告不受 `-l` 影响**，照样能解析；
+     * - 于是表现成"热插拔正常、设备数会更新，但悬浮窗毫无反应"。
+     *
+     * 一半对一半错，很容易以为是采集之外的地方坏了。
+     *
+     * 所以命令里只用 `-t`（见 `RootInputSource.COMMAND`）。
+     * **这条测试的作用是**：谁要是把 `-l` 加回命令里，
+     * 他会先看到这条测试失败，然后读到上面这段话。
      */
+    @Test
+    fun `带 -l 的符号名格式解析不了（所以命令里不能用 -l）`() {
+        assertNull(
+            "符号名格式没有十六进制字段，解析必然失败",
+            GeteventParser.parse("[   12345.678901] /dev/input/event3: EV_KEY KEY_W DOWN"),
+        )
+        assertNull(
+            GeteventParser.parse("[   12345.678901] /dev/input/event3: EV_REL REL_X 1"),
+        )
+    }
+
+    /* ============================================================
+     * 噪声
+     * ============================================================ */
 
     @Test
     fun `空行返回 null`() {
@@ -152,23 +252,22 @@ class GeteventParserTest {
         assertNull(GeteventParser.parse("   "))
     }
 
+    /** `getevent` 参数不认时会打印用法 —— 那不是事件，也不该崩 */
     @Test
-    fun `设备切换头返回 null`() {
-        // getevent 在多设备模式下会打印这种头，它不是事件
-        assertNull(GeteventParser.parse("add device 1: /dev/input/event3"))
-        assertNull(GeteventParser.parse("/dev/input/event3: could not get driver version"))
+    fun `用法提示与错误文本被忽略`() {
+        assertNull(
+            GeteventParser.parse(
+                "Usage: /dev/input/getevent [-t] [-n] [-r] [-s] [-S] [-c count] [device]",
+            ),
+        )
+        assertNull(GeteventParser.parse("could not open /dev/input/event99"))
+        assertNull(GeteventParser.parse("Permission denied"))
     }
 
+    /** 字段不足时不要硬凑出一个事件 */
     @Test
-    fun `字段不足三列返回 null`() {
-        assertNull(GeteventParser.parse("0001 0010"))
-        assertNull(GeteventParser.parse("0001"))
-    }
-
-    @Test
-    fun `字段不是十六进制时返回 null`() {
-        // 远端报错文本会混进同一个流（stderr 被合并），必须安全丢弃
-        assertNull(GeteventParser.parse("getevent: not found"))
-        assertNull(GeteventParser.parse("zzzz 0010 00000001"))
+    fun `字段不足的行返回 null`() {
+        assertNull(GeteventParser.parse("0001 0011"))
+        assertNull(GeteventParser.parse("[  1.000000] /dev/input/event3:"))
     }
 }

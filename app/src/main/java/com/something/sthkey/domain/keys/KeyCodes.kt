@@ -39,6 +39,14 @@ enum class KeyCategory(val label: String) {
     NAVIGATION("方向与导航"),
     NUMPAD("小键盘"),
     MOUSE("鼠标"),
+
+    /**
+     * 手柄按键。
+     *
+     * ⚠️ 单独一类而不是并进 [MOUSE]：两者虽然 evdev 码相邻（都在 `0x13x`），
+     * 但用户在界面上找的是"手柄"，混在鼠标里会让他以为不支持。
+     */
+    GAMEPAD("手柄"),
 }
 
 /**
@@ -60,9 +68,86 @@ object KeyCodes {
     const val BTN_SIDE = 275
     const val BTN_EXTRA = 276
 
+    /*
+     * ============================================================
+     * 手柄按键（evdev 码，与鼠标键同一段 0x13x）
+     * ============================================================
+     * ⚠️ 内核用的是**方位名**（SOUTH/EAST/NORTH/WEST），不是 A/B/X/Y ——
+     * 因为不同厂商的按键布局不同。对照关系见下面 `gamepad` 那段的注释。
+     *
+     * ⚠️ 值必须与 Linux `input-event-codes.h` 一致，写错就是"某个键不亮"。
+     */
+    const val BTN_SOUTH = 0x130
+    const val BTN_EAST = 0x131
+    const val BTN_NORTH = 0x133
+    const val BTN_WEST = 0x134
+    const val BTN_TL = 0x136
+    const val BTN_TR = 0x137
+    const val BTN_TL2 = 0x138
+    const val BTN_TR2 = 0x139
+    const val BTN_SELECT = 0x13a
+    const val BTN_START = 0x13b
+    const val BTN_MODE = 0x13c
+    const val BTN_THUMBL = 0x13d
+    const val BTN_THUMBR = 0x13e
+
+    /*
+     * 方向键的**按键报法**（0x220 那一族）。
+     *
+     * ⚠️ 另一批手柄把方向键报成 `ABS_HAT0X` / `ABS_HAT0Y` 两个轴 ——
+     * 两条路都要支持，见 `gamepad` 那段的说明。
+     */
+    const val BTN_DPAD_UP = 0x220
+    const val BTN_DPAD_DOWN = 0x221
+    const val BTN_DPAD_LEFT = 0x222
+    const val BTN_DPAD_RIGHT = 0x223
+
+    /**
+     * ============================================================
+     * 扳机的**伪键码** —— 不是 evdev 的码，是本应用自己造的
+     * ============================================================
+     * ⚠️ **扳机不是按键，是模拟轴** —— 这是本项目踩过的一个坑，
+     * 用户的原话是:
+     * **"配置里写的是LT和RT，但监听的是LB和RB，你逗我呢"**。
+     *
+     * evdev 的真实分工（本文件下面的键名表也印证了）:
+     *
+     * | 东西 | 报法 | 键码 |
+     * |---|---|---|
+     * | **LB** 左肩键 | **按键** | [BTN_TL] = `0x136` |
+     * | **RB** 右肩键 | **按键** | [BTN_TR] = `0x137` |
+     * | **LT** 左扳机 | **模拟轴** | `ABS_Z`（数字式手柄才用 [BTN_TL2]） |
+     * | **RT** 右扳机 | **模拟轴** | `ABS_RZ`（数字式手柄才用 [BTN_TR2]） |
+     *
+     * native monitor 把扳机作为 `0..1000` 的**轴**送过来，
+     * 而屏幕上的 LT/RT 是二进制的亮/不亮 —— 所以由采集层按阈值
+     * 折成"按下 / 抬起"，并用下面这两个码表示（见
+     * `CaptureController.setGamepadStick`）。
+     *
+     * ⚠️ 取值在 **`0x300` 以上**是有意的:evdev 的真实按键码最大到
+     * `BTN_TRIGGER_HAPPY40`（`0x2c0 + 39 = 0x2e7`），留出余量就不会
+     * 与任何真实键码撞车 —— 撞车的话"按 A 却亮了 LT"这种错极难查。
+     *
+     * ⚠️ 它们**只在本应用内部流转**（`pressedCodes` 里），
+     * 不会写到 evdev，也不需要设备认识。
+     */
+    const val PSEUDO_KEY_TRIGGER_LEFT = 0x300
+    const val PSEUDO_KEY_TRIGGER_RIGHT = 0x301
+
     /** 相对位移轴，键盘猫等需要鼠标移动的样式以后会用到 */
     const val REL_X = 0
     const val REL_Y = 1
+
+    /**
+     * 空格。
+     *
+     * ⚠️ 提成具名常量是为了让**手柄样式二**那个"长条键"引用它 ——
+     * 那个样式绑的就是空格（它模仿的是键盘的空格键）。
+     * 原来它在 [functionKeys] 里是字面量 `57`，从外面引不到。
+     *
+     * evdev: `KEY_SPACE = 57`。
+     */
+    const val KEY_SPACE = 57
 
     /*
      * ============================================================
@@ -143,7 +228,7 @@ object KeyCodes {
         add(AvailableKey(14, "BACKSPACE"))
         add(AvailableKey(15, "TAB"))
         add(AvailableKey(28, "ENTER", listOf("RETURN")))
-        add(AvailableKey(57, "SPACE"))
+        add(AvailableKey(KEY_SPACE, "SPACE"))
         add(AvailableKey(58, "CAPS_LOCK", listOf("CAPSLOCK")))
         add(AvailableKey(99, "SYSRQ", listOf("PRINT_SCREEN")))
         add(AvailableKey(70, "SCROLL_LOCK"))
@@ -207,6 +292,57 @@ object KeyCodes {
         AvailableKey(BTN_EXTRA, "MOUSE_EXTRA", listOf("EXTRA_MOUSE", "扩展键")),
     )
 
+    /**
+     * 手柄按键。
+     *
+     * ============================================================
+     * ⚠️ 名字用 **Xbox 的叫法**（A/B/X/Y），不是 evdev 的方位名
+     * ============================================================
+     * evdev 里它们是 `BTN_SOUTH` / `BTN_EAST` / `BTN_NORTH` / `BTN_WEST`
+     * —— 那是**方位**（下/右/上/左），因为不同厂商的布局不同。
+     *
+     * 但中文用户看到的、说的都是 A/B/X/Y。所以:
+     *
+     * - **常量名**保留 evdev 的方位名（`BTN_SOUTH`），便于与内核对照；
+     * - **显示名**用 A/B/X/Y，因为那是用户在界面上要找的东西。
+     *
+     * ⚠️ 对照关系（Xbox 布局）:
+     * ```
+     *        Y (NORTH)
+     *  X (WEST)   B (EAST)
+     *        A (SOUTH)
+     * ```
+     */
+    private val gamepad = listOf(
+        AvailableKey(BTN_SOUTH, "A", listOf("手柄A", "PAD_A")),
+        AvailableKey(BTN_EAST, "B", listOf("手柄B", "PAD_B")),
+        AvailableKey(BTN_WEST, "X", listOf("手柄X", "PAD_X")),
+        AvailableKey(BTN_NORTH, "Y", listOf("手柄Y", "PAD_Y")),
+        AvailableKey(BTN_TL, "LB", listOf("手柄LB", "L1", "左肩键")),
+        AvailableKey(BTN_TR, "RB", listOf("手柄RB", "R1", "右肩键")),
+        AvailableKey(BTN_TL2, "LT", listOf("手柄LT", "L2", "左扳机")),
+        AvailableKey(BTN_TR2, "RT", listOf("手柄RT", "R2", "右扳机")),
+        AvailableKey(BTN_SELECT, "BACK", listOf("手柄BACK", "SELECT", "视图键")),
+        AvailableKey(BTN_START, "START", listOf("手柄START", "菜单键")),
+        AvailableKey(BTN_MODE, "GUIDE", listOf("手柄GUIDE", "西瓜键", "HOME")),
+        AvailableKey(BTN_THUMBL, "LS", listOf("左摇杆按下", "L3", "THUMBL")),
+        AvailableKey(BTN_THUMBR, "RS", listOf("右摇杆按下", "R3", "THUMBR")),
+        /*
+         * 方向键的**按键报法**。
+         *
+         * ⚠️ 手柄的方向键有**两种报法**（见 `docs/input-capture.md`）:
+         * 1. 独立按键码（下面这四个）；
+         * 2. 两个轴 `ABS_HAT0X` / `ABS_HAT0Y`（实测的 Xbox 360 就是这种）。
+         *
+         * 两个都要有 —— 只认一种就会出现"方向键在某个手柄上没反应"。
+         * 轴报法由 `StickState.hat*` 承载，不在这张表里（它不是按键码）。
+         */
+        AvailableKey(BTN_DPAD_UP, "DPAD_UP", listOf("方向键上", "十字键上")),
+        AvailableKey(BTN_DPAD_DOWN, "DPAD_DOWN", listOf("方向键下", "十字键下")),
+        AvailableKey(BTN_DPAD_LEFT, "DPAD_LEFT", listOf("方向键左", "十字键左")),
+        AvailableKey(BTN_DPAD_RIGHT, "DPAD_RIGHT", listOf("方向键右", "十字键右")),
+    )
+
     /** 按分类组织的完整按键表 */
     val grouped: Map<KeyCategory, List<AvailableKey>> = linkedMapOf(
         KeyCategory.LETTER to letters,
@@ -217,6 +353,7 @@ object KeyCodes {
         KeyCategory.NAVIGATION to navigation,
         KeyCategory.NUMPAD to numpad,
         KeyCategory.MOUSE to mouse,
+        KeyCategory.GAMEPAD to gamepad,
     )
 
     val ALL: List<AvailableKey> = grouped.values.flatten()
@@ -256,6 +393,64 @@ object KeyCodes {
                 key.name.lowercase().startsWith(keyword) ||
                 key.aliases.any { it.lowercase().startsWith(keyword) }
         }
+    }
+
+    /**
+     * 按键选择器里的**大类**。
+     *
+     * ============================================================
+     * ⚠️ 为什么要在搜索之前先选大类
+     * ============================================================
+     * 用户的原话:
+     *
+     * > "应该在'添加一个按键'点击后先弹一个选择键位分类的窗口，
+     * >  选择键位在键盘分类还是手柄分类，否则可能会搞混，
+     * >  现在键盘手柄都挤在同一个栏里，有些用户没有经验，
+     * >  想调 A 这类按键就会同时搜索出键盘的 A 和手柄的 A"
+     *
+     * 这确实是个真问题:键盘的 `A`（`KEY_A` = 30）与手柄的 `A`
+     * （`BTN_SOUTH` = 304）搜出来**名字都叫 A**，只有 code 不同。
+     * 没有经验的人会随便点一个，然后"按了没反应"。
+     *
+     * ⚠️ 保留 [ALL] 这一项:高级用户知道自己要找什么，
+     * 强制两步会让改键变得很烦。
+     */
+    enum class PickerGroup(val label: String, val description: String) {
+        KEYBOARD("键盘", "字母、数字、符号、功能键、鼠标"),
+        GAMEPAD("手柄", "摇杆方向、面键、扳机、肩键、摇杆按下"),
+        ALL("全部", "不分类，显示所有按键（高级用法）"),
+    }
+
+    /** 这个按键属于哪个大类 */
+    fun groupOf(keyCode: Int): PickerGroup = when {
+        /*
+         * ⚠️ 用**键码范围**判断，而不是查表 ——
+         * 手柄按键在 evdev 里是连成一片的:
+         *
+         * ```
+         * 0x130..0x13e  BTN_SOUTH … BTN_THUMBR（面键 / 扳机 / 摇杆按下）
+         * 0x220..0x223  BTN_DPAD_*（方向键）
+         * 0x2c0..0x2e7  BTN_TRIGGER_HAPPY*（背键）
+         * 0x300+        扳机伪键码（本项目自造，见 PSEUDO_KEY_TRIGGER_*）
+         * ```
+         */
+        keyCode in 0x130..0x13e -> PickerGroup.GAMEPAD
+        keyCode in 0x220..0x223 -> PickerGroup.GAMEPAD
+        keyCode in 0x2c0..0x2e7 -> PickerGroup.GAMEPAD
+        keyCode >= 0x300 -> PickerGroup.GAMEPAD
+        else -> PickerGroup.KEYBOARD
+    }
+
+    /**
+     * 按大类过滤 + 检索。
+     *
+     * ⚠️ 与 [search] 的匹配规则**完全一致**（前缀匹配、支持键码数字）——
+     * 两份实现分叉的话，用户会看到"在全部里能搜到、在手柄里搜不到"。
+     */
+    fun searchIn(query: String, group: PickerGroup): List<AvailableKey> {
+        val base = search(query)
+        if (group == PickerGroup.ALL) return base
+        return base.filter { groupOf(it.keyCode) == group }
     }
 
     /** 是否为鼠标按键（影响 CPS 统计等后续特性） */

@@ -9,6 +9,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import com.something.sthkey.BuildConfig
 import com.something.sthkey.capture.CaptureController
+import com.something.sthkey.capture.OverlayController
 import com.something.sthkey.capture.OverlayService
 import com.something.sthkey.core.log.AppLog
 import com.something.sthkey.core.prefs.AppPrefs
@@ -154,16 +155,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val context = getApplication<Application>()
 
         if (enabled) {
-            if (!PermissionHelper.canDrawOverlays(context)) {
-                AppLog.w(TAG, "没有悬浮窗权限，取消开启（请在引导页授权）")
-                return
-            }
-            val next = OverlayLayouts.setEnabled(context, configId, true)
-            overlayEnabledIds = next
-            AppLog.i(TAG, "悬浮窗开关：$configId → 开（当前共 ${next.size} 个）")
-
-            OverlayService.start(context)
-            CaptureController.start()
+            /*
+             * ⚠️ 走 [OverlayController] 而不是在这里自己写一遍。
+             *
+             * 桌面快捷方式是**不经过界面**的入口，它也做同一件事。
+             * 两份实现的下场是"某个入口漏了一步"，而最容易漏的是
+             * "确保采集在跑" —— 表现是窗口出现了但按键不动，
+             * 看起来像采集坏了，其实只是没人去管它。
+             */
+            val ok = OverlayController.enableConfigs(
+                context = context,
+                configIds = listOf(configId),
+            )
+            if (!ok) return
+            overlayEnabledIds = OverlayLayouts.enabledIds(context)
+            AppLog.i(TAG, "悬浮窗开关：$configId → 开（当前共 ${overlayEnabledIds.size} 个）")
             return
         }
 
@@ -173,10 +179,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         if (next.isEmpty()) {
             OverlayService.stop(context)
-            CaptureController.stop()
-            AppLog.i(TAG, "已无悬浮窗，停止服务与采集")
+            /*
+             * ⚠️ 这里**不停采集**（原来会）。
+             *
+             * 采集是应用级的：只要应用活着就一直监听。
+             * 关掉最后一个悬浮窗只意味着"不画了"，不代表"不读按键了" ——
+             * 用户可能马上又要开，或者想先关掉窗口再插设备。
+             */
+            AppLog.i(TAG, "已无悬浮窗，停止服务（采集保持运行）")
         } else {
-            // 还有窗口开着：让服务把刚关掉的那个拆掉，其余窗口与采集都不受影响
+            // 还有窗口开着：让服务把刚关掉的那个拆掉，其余窗口不受影响
             OverlayService.refresh(context)
         }
     }
@@ -184,11 +196,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * 一次关掉全部悬浮窗（调试页用）。
      *
-     * 清空集合 + 停服务一起做：只停服务的话集合里还留着一串 id，
-     * 下次开任意一个开关会把它们**全部**一起拉起来。
+     * 走 [OverlayController.disableAll]：桌面快捷方式的"一键关闭"用的是
+     * **同一份**逻辑 —— 它多做了一件容易漏的事：清空集合。
      */
     fun clearAllOverlays() {
-        clearEnabled()
+        OverlayController.disableAll(getApplication())
+        overlayEnabledIds = OverlayLayouts.enabledIds(getApplication())
         AppLog.i(TAG, "已关闭全部悬浮窗（调试页操作）")
     }
 

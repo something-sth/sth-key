@@ -110,8 +110,10 @@
             </intent-filter>
 
             <!--
+                ============================================================
                 一次分享多个文件。我们只取第一个（见 `IncomingConfig`），
                 但不声明的话系统在某些应用的分享面板里会**不显示我们**。
+                ============================================================
             -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND_MULTIPLE" />
@@ -122,7 +124,53 @@
                 <data android:mimeType="application/zip" />
                 <data android:mimeType="application/x-zip-compressed" />
             </intent-filter>
+
+            <!--
+                桌面快捷方式的**声明清单**。
+
+                ⚠️ 必须挂在**应用的主 Activity** 上，哪怕快捷方式实际指向
+                的是 ShortcutActivity —— 系统按"应用入口"来读取这份清单。
+                挂错地方的表现是 `requestPinShortcut` 静默失败
+                （弹不出"要添加到主屏幕吗"那个确认框）。
+
+                ⚠️ `android:name` 的取值是固定的
+                `android.app.shortcuts`，不是我们自己起的名字。
+            -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
         </activity>
+
+        <!--
+            ============================================================
+            桌面快捷方式的入口：**完全不进前台**
+            ============================================================
+            快捷方式指向这里。它在 onCreate 里把工作转交给悬浮窗服务与采集，
+            然后**同步** finish()，用户看到的始终是桌面。
+
+            ⚠️ 主题必须是 NoDisplay（见 themes.xml 里的说明）：
+            它要求 Activity 在 onResume 之前结束，否则系统直接崩。
+            所以 onCreate 里不能有任何异步等待。
+
+            ⚠️ **不要加 `android:noHistory="true"`**：那会让 Activity
+            一不可见就销毁，而那时前台服务可能还没真正起来 ——
+            进程被判成"没有前台组件"就有被杀的风险，进程一死
+            Shizuku 的回调接收器也跟着没了。
+
+            ⚠️ 也**不要**加 `android:excludeFromRecents` 之外的花样：
+            它本来就不该出现在最近任务里，而 NoDisplay 已经保证了这点。
+
+            ⚠️ `taskAffinity=""` + `noHistory` 都不加的情况下，
+            它仍可能与 MainActivity 同任务栈。用
+            `android:taskAffinity=""` 让它独立于应用主任务，
+            这样"从桌面点快捷方式"不会把应用的主界面也带到前台。
+        -->
+        <activity
+            android:name=".shortcut.ShortcutActivity"
+            android:exported="true"
+            android:theme="@style/Theme.SthKey.Invisible"
+            android:taskAffinity=""
+            android:excludeFromRecents="true" />
 
         <!--
             悬浮窗服务：在 WindowManager 上叠加按键显示。

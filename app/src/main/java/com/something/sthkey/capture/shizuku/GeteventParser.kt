@@ -1,72 +1,239 @@
 package com.something.sthkey.capture.shizuku
 
-import com.something.sthkey.capture.InputEvent
-
 /**
- * `getevent -q` 输出的解析（**纯函数，可单元测试**）。
+ * `getevent` 输出的解析（**纯函数，可单元测试**）。
+ *
+ * [ShizukuGeteventInputSource] 与 [com.something.sthkey.capture.RootInputSource]
+ * 都只负责"读流、按行丢进来"，解析全在这里。
  *
  * ============================================================
- * 为什么要单独抽出来
+ * 支持两种输出格式
  * ============================================================
- * 这条通道拿到的是一串**文本**，而不是 root 通道那种二进制 `input_event`。
- * 解析错了不会崩，只会"某些键不亮" —— 正是最难查的那类问题。
+ * **已有格式**（不带 `-l`）：
+ * ```
+ * 0001 0011 00000001
+ * /dev/input/event3: 0001 0011 00000001
+ * ```
  *
- * 而解析逻辑本身不碰 Android、不碰 IO，所以没理由不把它做成纯函数钉住。
- * [ShizukuGeteventInputSource] 只负责"读流、按行丢进来"。
+ * **现在用的格式**（`-t`，时间戳 + 设备前缀）：
+ * ```
+ * add device 5: /dev/input/event3
+ *   name:     "Xbox Wireless Controller"
+ * [   12345.678901] /dev/input/event3: 0001 0011 00000001
+ * remove device 5: /dev/input/event3
+ * ```
  *
  * ============================================================
- * getevent 的输出格式（两种都要支持）
+ * ⚠️ **不支持 `getevent -l`**
  * ============================================================
- * `-q` 是 quiet，去掉时间戳。**注意它会同时去掉设备名**：
+ * `-l` 会把事件行从十六进制换成符号名：
  *
  * ```
- * 单设备：0001 0011 00000001
- * 多设备：/dev/input/event3: 0001 0011 00000001
+ * 不用 -l：  0001 0011 00000001
+ * 用了 -l：  EV_KEY KEY_W DOWN
  * ```
  *
- * 我们为了"一个进程监听全部设备"会一次传多个节点，所以**必须两种都能解析**。
- * 另外字段值可能是负数（`getevent` 打印的是有符号十进制），例如：
+ * 后者**解析不了**（要支持就得带一张几百项的 `KEY_*` 名称表），
+ * 而它的失败方式很隐蔽：**每一个真实按键事件都被丢掉，但设备公告
+ * 不受影响** —— 表现成"热插拔正常、设备数会更新，但悬浮窗毫无反应"。
+ * 一半对一半错，很容易以为是别的地方坏了。（这个坑踩过一次。）
+ *
+ * 所以 `getevent` 的命令里**只用 `-t`**。设备路径来自事件行的
+ * `/dev/input/eventN:` 前缀，与 `-l` 无关，不需要它。
+ *
+ * `GeteventParserTest` 里有一条测试把这个约定钉住了 ——
+ * 谁要是把 `-l` 加回去，那条测试会失败。
+ *
+ * ============================================================
+ * ⚠️ 为什么用"有没有时间戳"判定事件行
+ * ============================================================
+ * `-lt` 输出里除了事件行，还有**设备描述块**：
  *
  * ```
- * 0002 0000 ffffffff
+ * add device 5: /dev/input/event3
+ *   name:     "Xbox Wireless Controller"
+ *   events:   KEY (0001): ...
+ *   input props: ...
  * ```
  *
- * 这个值是 **-1**（鼠标往左移一格）。用 `toInt(16)` 去解析会抛异常 ——
- * 老老实实走"按 16 位无符号读、再按 32 位补回符号"这条路。
+ * 描述块里那些行如果被拿去解析，`name:` 之后的词会被当成十六进制字段试试看 ——
+ * 大部分会被拒绝（"name" 不是合法十六进制），但**"events" / "input" 这些
+ * 也全都不是**，所以看起来安全。可是 `events:   KEY (0001): 0001 0002 …`
+ * 这一行**末尾恰好是一串十六进制**，宽松的"取最后三个字段"策略会把它
+ * 解析成一个**假的输入事件** —— 于是采集里会凭空多出几个按键。
+ *
+ * 所以判据不能是"字段数够不够"，必须是"**这一行是不是以时间戳开头**"：
+ * 只有真正的事件行才有 `[ 12345.678901]` 前缀，描述块没有。
+ * 这是 `getevent -l` 的格式约定，比数空格可靠得多。
  */
 internal object GeteventParser {
 
-    /** 解析结果：三字段有效，或这一行不是事件（设备切换头、空行、报错文本） */
-    fun parse(line: String): InputEvent? {
+    /** `[  12345.678901]` 形式的时间戳前缀 */
+    private val TIMESTAMP = Regex("""^\[\s*(\d+)\.(\d+)]""")
+
+    /** `/dev/input/event3` */
+    private val DEVICE = Regex("""/dev/input/event\d+""")
+
+    /**
+     * 判断一行是不是**描述块**。
+     *
+     * ============================================================
+     * 判据：冒号后紧跟的第一个词**不是合法十六进制**
+     * ============================================================
+     * 两类行的形状对比：
+     *
+     * | 行 | 冒号后第一个词 |
+     * |---|---|
+     * | `/dev/input/event3: 0001 0011 00000001`（事件） | `0001` → **合法十六进制** |
+     * | `  name:     "Xbox …"`（描述） | `"Xbox` → 不是 |
+     * | `  events:   KEY (0001): …`（描述） | `KEY` → 不是 |
+     * | `  input props:  00000000`（描述） | `00000000` → **合法十六进制！** |
+     *
+     * ⚠️ 最后一行说明**不能只看第一个词** ——
+     * `input props:` 后面那串也是十六进制。所以还要做一件事：
+     * 描述块的行首是**缩进的**，而事件行不是。
+     *
+     * 两条一起用就稳了：
+     * - 有缩进 → 描述块（事件行从不缩进）
+     * - 冒号后第一个词不是十六进制 → 描述块
+     *
+     * 为什么不用"冒号后跟空白"：事件行的 `/dev/input/event3: 0001`
+     * 也是冒号后跟空白，那样会把**所有带设备前缀的事件行**都丢掉。
+     * （这个错误被测试抓到过一次。）
+     */
+    private fun isDescriptorLine(line: String): Boolean {
+        /* 描述块的行首一定缩进；事件行与公告行都不缩进 */
+        if (line.firstOrNull()?.isWhitespace() == true) return true
+
+        /*
+         * 没有冒号就不是描述块（裸事件行 `0001 0011 00000001` 走这里）。
+         */
+        val colon = line.indexOf(':')
+        if (colon < 0) return false
+
+        val afterColon = line.substring(colon + 1).trim().substringBefore(' ')
+        if (afterColon.isEmpty()) return false
+
+        /*
+         * 冒号后第一个词是合法十六进制 → 那是事件的第一个字段
+         * （可能是设备前缀后面的 `0001`）。
+         */
+        return afterColon.toLongOrNull(16) == null
+    }
+
+    /**
+     * 解析一行。
+     *
+     * @return 事件 / 设备接入 / 设备拔出；这一行不是有效内容时返回 null
+     */
+    fun parse(line: String): ParsedLine? {
         val trimmed = line.trim()
         if (trimmed.isEmpty()) return null
 
         /*
-         * 多设备时前缀形如 `/dev/input/event3:` —— 以冒号结尾。
-         * 用 lastIndexOf(' ') 而不是 `startsWith("/dev/")`：
-         * 万一输出格式变成带别的前缀（换 ROM、换 toybox 版本），
-         * 只要"最后三个字段是 type code value"就还能解析。
+         * 设备公告要**先判**：它们的行首不是时间戳，但也不能掉进
+         * "描述块"的忽略分支里 —— 那是热插拔的唯一来源。
          */
-        val body = trimmed.substringAfterLast(' ')
-        val afterType = trimmed.substringBeforeLast(' ', missingDelimiterValue = "")
-        if (afterType.isEmpty()) return null
-        val codeToken = afterType.substringAfterLast(' ')
-        val typeToken = afterType.substringBeforeLast(' ', missingDelimiterValue = "")
-        if (typeToken.isEmpty()) return null
+        parseDeviceAnnouncement(trimmed)?.let { return it }
 
-        // 设备前缀挂在 type 字段上：`/dev/input/event3: 0001`
-        val cleanType = typeToken.substringAfterLast(':').trim()
+        val timestamp = TIMESTAMP.find(trimmed)
 
         /*
-         * ⚠️ 设备前缀是"以冒号结尾的一整段" —— 它会被 substringAfterLast(':')
-         * 丢掉。但如果**没有**设备前缀，cleanType 就是 type 本身。
-         * 两种情况都安全，因为设备路径里除了结尾那个冒号不含别的冒号。
+         * 没有时间戳时，靠 [isDescriptorLine] 排除描述块。
+         *
+         * 有描述块特征的行一律不是事件 —— 其中 `events:` 那行末尾恰好是
+         * 一串十六进制，不排除的话会被解析成一个**假的输入事件**。
          */
-        val type = parseKernelInt(cleanType) ?: return null
-        val code = parseKernelInt(codeToken) ?: return null
-        val value = parseKernelInt(body) ?: return null
+        if (timestamp == null && isDescriptorLine(trimmed)) return null
 
-        return InputEvent(type, code, value)
+        /*
+         * 取时间戳**之后**的部分再解析字段。
+         *
+         * 不这么做的话，`12345` 与 `678901` 会被当成前两个十六进制字段 ——
+         * 恰好 `678901` 是合法十六进制，于是会解析出一个**错误的 type/code**。
+         * 这是个很隐蔽的坑：事件能解析出来，但类型与码全错。
+         */
+        val rest = if (timestamp != null) {
+            trimmed.substring(timestamp.range.last + 1).trim()
+        } else {
+            trimmed
+        }
+
+        return parseEvent(
+            text = rest,
+            timestampMicros = timestamp?.let { timestampMicros(it) } ?: 0L,
+        )
+    }
+
+    /**
+     * 解析事件本体：`[/dev/input/event3:] tttt cccc vvvvvvvv`
+     *
+     * @param text 时间戳之后的部分（可能带设备前缀）
+     */
+    private fun parseEvent(text: String, timestampMicros: Long): ParsedLine.Event? {
+        val device = DEVICE.find(text)?.value
+
+        /*
+         * 去掉设备前缀：它形如 `/dev/input/event3:`。
+         *
+         * 按**冒号**切而不是按空格：设备路径里不含空格，
+         * 而 `getevent` 在路径后面紧跟一个冒号。
+         */
+        val body = if (device != null) text.substringAfter(':').trim() else text
+
+        /*
+         * 按空白拆成字段。
+         *
+         * 用 `split` 而不是"取最后三个"的宽松策略：宽松策略会把
+         * 描述块里恰好以十六进制结尾的行也吃进来（见文件头的说明）。
+         * 严格三段反而更安全 —— 事件行的格式是固定的。
+         */
+        val parts = body.split(Regex("""\s+""")).filter { it.isNotEmpty() }
+        if (parts.size < 3) return null
+
+        val type = parseKernelInt(parts[0]) ?: return null
+        val code = parseKernelInt(parts[1]) ?: return null
+        val value = parseKernelInt(parts[2]) ?: return null
+
+        return ParsedLine.Event(
+            device = device,
+            type = type,
+            code = code,
+            value = value,
+            timestampMicros = timestampMicros,
+        )
+    }
+
+    /**
+     * 设备公告：`add device 5: /dev/input/event3` / `remove device 5: …`
+     *
+     * ⚠️ 只用**行首的动作词**判断，不强求一定能取到设备路径。
+     *
+     * 不同 ROM / toybox 版本的 `getevent` 这里打印的内容不完全一样
+     * （有的带完整路径，有的只带事件节点序号）。取不到路径时返回一个
+     * **空路径的公告**，让调用方走"清掉全部按键状态"这条保守路径 ——
+     * 那比"什么都不做、按键永久卡住"好得多。
+     */
+    private fun parseDeviceAnnouncement(line: String): ParsedLine? {
+        val attached = when {
+            line.startsWith("add device") -> true
+            line.startsWith("remove device") -> false
+            else -> return null
+        }
+
+        val device = DEVICE.find(line)?.value.orEmpty()
+        return if (attached) ParsedLine.Attached(device) else ParsedLine.Detached(device)
+    }
+
+    /** `[  12345.678901]` → 微秒 */
+    private fun timestampMicros(match: MatchResult): Long {
+        val seconds = match.groupValues[1].toLongOrNull() ?: return 0L
+        /*
+         * 小数部分要**右补零到 6 位**再当微秒：`5.5` 是半秒（500000µs），
+         * 直接拼成 `55` 会差三个数量级。
+         */
+        val fraction = match.groupValues[2].padEnd(6, '0').take(6).toLongOrNull() ?: 0L
+        return seconds * 1_000_000L + fraction
     }
 
     /**

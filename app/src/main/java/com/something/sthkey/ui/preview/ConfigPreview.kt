@@ -14,6 +14,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import com.something.sthkey.capture.StickState
+import com.something.sthkey.ui.overlay.gamepad.Gamepad2Content
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.custom.CustomLayout
 import com.something.sthkey.domain.style.KeyLayout
@@ -126,7 +128,7 @@ fun ConfigPreview(
             baseWidthDp = customBounds.width * pxToDp
             baseHeightDp = customBounds.height * pxToDp
         } else {
-            baseWidthDp = KeyLayout.BASE_WIDTH * pxToDp
+            baseWidthDp = KeyLayout.baseWidth(config) * pxToDp
             baseHeightDp = KeyLayout.baseHeight(config, previewCps) * pxToDp
         }
 
@@ -154,6 +156,8 @@ fun ConfigPreview(
                 slotIdOf = { code -> KeyLayout.codeToSlotMap(config)[code] },
                 baseWidth = windowed.bounds.width,
                 baseHeight = windowed.bounds.height,
+                /* 预览要跟着显示整体透明度 —— 否则预览与实际不一致 */
+                overallAlpha = config.customOpacityPercent.coerceIn(0, 100) / 100f,
                 /*
                  * 与悬浮窗一样自适应：按预览框实际给的空间反推缩放，
                  * 不会因为多层尺寸推算的误差而溢出。
@@ -164,6 +168,25 @@ fun ConfigPreview(
                  */
                 fitToContainer = true,
                 maxFitScale = fit,
+            )
+        } else if (KeyLayout.usesJoystickLayout(config)) {
+            /*
+             * 「手柄（标准）」：布局与键盘样式同源，只是 WASD 那块是摇杆。
+             *
+             * ⚠️ **必须在这里分发**，不能直接调 `KeyGrid` ——
+             * 它只认"键帽"，会把摇杆槽位当成一个普通键去画
+             * （一个空白 label 的键帽 = **一个黑色方块**，
+             * 用户描述就是"摇杆的组件变成了一个黑色直角正方形"）。
+             *
+             * 预览里摇杆画在**中位**（`StickState()` 默认全 0）——
+             * 那是它静止时的样子，也是用户最该看到的样子。
+             */
+            Gamepad2Content(
+                config = config,
+                sticks = StickState(),
+                pressedCodes = emptySet(),
+                scale = pxToDp * fit,
+                cpsBySlot = previewCps,
             )
         } else {
             KeyGrid(

@@ -2,6 +2,7 @@ package com.something.sthkey.domain.config
 
 import com.something.sthkey.domain.custom.CustomLayoutSettings
 import com.something.sthkey.domain.custom.defaultCustomComponents
+import com.something.sthkey.domain.style.KeyLayout
 import com.something.sthkey.domain.keys.KeyCodes
 import com.something.sthkey.domain.style.OverlayStyleDescriptor
 import com.something.sthkey.domain.style.OverlayStyleRegistry
@@ -392,6 +393,124 @@ data class KeyStrokesConfig(
     /** 鼠标 CPS 显示 + 模式 1..3 */
     val mouseCpsEnabled: Boolean = false,
     val mouseCpsMode: Int = 1,
+
+    /* ============================================================
+     * 「手柄（标准）」样式专属 —— 只在这些样式下有意义
+     * ============================================================ */
+
+    /**
+     * 摇杆的外观与观感设置（颜色 / 圆角 / 透明度 / 灵敏度 …）。
+     *
+     * ⚠️ 单独一个类而不是在这里再加十几个字段 —— 见 [JoystickStyle] 的说明。
+     */
+    val joystick: JoystickStyle = JoystickStyle(),
+
+    /**
+     * 是否显示**肩键**（LB / RB）。
+     *
+     * 画在 LT / RT 的**下方**，尺寸与它们相同。
+     *
+     * ⚠️ 默认 `false` —— 肩键用得比扳机少，多一行会占掉屏幕。
+     */
+    val showShoulderButtons: Boolean = false,
+
+    /**
+     * 是否显示 **A 键**（下方位键）。
+     *
+     * 这个样式里 A 是"跳跃"，是唯一一个不在摇杆 / 扳机里的常用键。
+     */
+    val showAButton: Boolean = true,
+
+    /**
+     * 是否显示 **SPACE**（空格槽位）。
+     *
+     * ⚠️ 在 gamepad2 里它与 [showAButton] 是**同一个屏幕位置**
+     * （都横跨两列、都在 LT/RT 下面那一行）——
+     * 键盘样式里的 `SPACE` 就是这个位置。
+     *
+     * 所以两个开关**同时打开会重叠**。设置页要让它们互斥:
+     * 打开一个就关掉另一个。
+     *
+     * ⚠️ 为什么保留两个而不是合成一个:键位映射里它们是两个槽位
+     * （`SPACE` 与 `A_BUTTON`），可以绑不同的手柄键。
+     */
+    val showSpaceKey: Boolean = false,
+
+    /**
+     * A 键**置顶** —— 把它挪到摇杆的正下方，LT / RT 整体下移一行。
+     *
+     * ============================================================
+     * 布局对比（尺寸完全不变，只挪位置）
+     * ============================================================
+     * ```
+     * 关闭:  左摇杆   右摇杆          开启:  左摇杆   右摇杆
+     *           LT  A  RT                       A       ← 挪到摇杆正下方
+     *             SPACE                       LT  ·  RT  ← 下移一行
+     *                                           SPACE
+     * ```
+     *
+     * ⚠️ 为什么有人要这个:拇指在摇杆上时，**右手拇指**够 A 键更近 ——
+     * A 挪到中间之后，两个拇指都够得着。
+     *
+     * ⚠️ **仅在 [showAButton] 为真时有意义** —— A 都不显示就无所谓置不置顶。
+     * 设置页要让这个开关跟着 [showAButton] 一起禁用。
+     */
+    val aButtonOnTop: Boolean = false,
+
+    /**
+     * **左右摇杆互换**（只换摇杆，不动键位映射）。
+     *
+     * 有些手柄（或某些游戏的设置）把左右摇杆的轴报反了，
+     * 于是"推左摇杆、屏幕上动的是右边那个"。
+     *
+     * ⚠️ 只交换**摇杆的轴来源**，不交换键位 —— 用户原话:
+     * "别的互换键位映射可以自己改不用加在这里"。
+     */
+    val swapSticks: Boolean = false,
+
+    /**
+     * 按键**高度的百分比**（`50..200`，`100` = 布局原值）。
+     *
+     * ============================================================
+     * 与 `scalePercent` 的区别（很容易混）
+     * ============================================================
+     * | 设置 | 影响 |
+     * |---|---|
+     * | `scalePercent` | **整体**缩放:窗口、间距、字号、所有东西 |
+     * | 本值 | **只**改键的高度（宽度与间距不动） |
+     *
+     * 用途:把键压扁一点好塞进屏幕，或者加高一点让字更好认 ——
+     * 而整体缩放做不到（那会连窗口一起变）。
+     */
+    val keyHeightPercent: Int = 100,
+
+    /**
+     * 按键**间距的百分比**（`50..400`，`100` = 布局原值 10）。
+     *
+     * ============================================================
+     * ⚠️ 它**不改变窗口宽度**
+     * ============================================================
+     * 用户的原话:"按键间距不能写死，要做成滑块供自行调整……
+     * 记得悬浮窗尺寸要算好"。
+     *
+     * 做法是**锁住外框、让键宽跟着让位**:
+     *
+     * ```
+     * 三列总跨度 = 260（固定）
+     * 键宽     = (260 − 2 × 间距) / 3
+     * 鼠标键宽 = (260 − 间距) / 2
+     * ```
+     *
+     * 于是间距调到 0 时键变宽、调到最大时键变窄，**窗口一直是 300 宽**。
+     *
+     * ⚠️ 反过来做（键宽固定、间距变）会让窗口宽度跟着变 ——
+     * 那不但要改样式注册值，还会让用户已经摆好的悬浮窗位置失效。
+     *
+     * ⚠️ 上限受几何限制:键宽要 `> 0`，所以间距必须 `< 130`。
+     * 取 `400%`（= 40）是保守的，真实夹取在 `KeyLayout` 里。
+     */
+    val keyGapPercent: Int = 100,
+
     /**
      * 模式 2 / 3 的 CPS 文本模板。
      *
@@ -450,6 +569,27 @@ data class KeyStrokesConfig(
      * [cpsTextTemplate] 那一套替换逻辑，不另造一套规则。
      */
     val custom: CustomLayoutSettings = CustomLayoutSettings(),
+
+    /**
+     * 自定义 Key 样式的**整体透明度**（百分比）。
+     *
+     * ============================================================
+     * 为什么单独开一个字段，而不是复用 [Opacity]
+     * ============================================================
+     * 用户的原话:"自定义 key 的配置编辑页加一个透明度调整（控制整体透明度），
+     * 不碰自定义编辑页"。
+     *
+     * ⚠️ [Opacity] 那一套是**按键样式**的:键帽/文字/描边/阴影，各自分
+     * 未按下与按下 —— 八个滑块。自定义 Key 的组件样式是**每个组件自己**的
+     * （在编辑器里逐个调），全局再放八个只会让人分不清哪个盖过哪个。
+     *
+     * ⚠️ 所以这一个管的是**整块画布**（所有组件一起淡），语义与
+     * Live2D 的 `Live2DSettings.opacityPercent` 一致 —— 那是另一个
+     * "只有整体透明度"的样式，两边的做法刻意保持对称。
+     *
+     * 默认 100（不透明）:新配置看起来必须是"正常的样子"。
+     */
+    val customOpacityPercent: Int = 100,
 ) {
     /** 样式描述；配置里存的样式 id 失效时自动回落到默认样式 */
     val style: OverlayStyleDescriptor
@@ -565,6 +705,117 @@ fun defaultKeyMappings(): List<KeyMapping> = listOf(
         id = "RMB",
         inputKeyCodes = listOf(KeyCodes.BTN_RIGHT),
         displayText = "RMB",
+    ),
+)
+
+/**
+ * 「手柄（标准）」样式的默认键位。
+ *
+ * ============================================================
+ * ⚠️ 显示的是**键鼠的名字**，绑的是**手柄的键**
+ * ============================================================
+ * 这个样式给"用手柄玩键鼠游戏"的人看 —— 屏幕上写的是他脑子里想的
+ * 键（LT / RT / A），而实际会亮的是他手上按的手柄键。
+ *
+ * | 槽位 | 显示 | 绑的键 |
+ * |---|---|---|
+ * | `LMB`（左） | `LT` | **扳机伪键码** `PSEUDO_KEY_TRIGGER_LEFT` |
+ * | `RMB`（右） | `RT` | **扳机伪键码** `PSEUDO_KEY_TRIGGER_RIGHT` |
+ * | `SPACE` | `A` | `BTN_SOUTH`（下方位） |
+ * | `SHIFT` | `L3` | `BTN_THUMBL`（左摇杆按下） |
+ *
+ * ============================================================
+ * ⚠️⚠️ LT/RT **不能**绑 `BTN_TL` / `BTN_TR` —— 那是 LB / RB
+ * ============================================================
+ * 这里犯过一次错，用户的原话是:
+ * **"配置里写的是LT和RT，但监听的是LB和RB，你逗我呢"**。
+ *
+ * evdev 的真实分工（本项目 `KeyCodes` 的键名表也印证了这一点）:
+ *
+ * | 东西 | 报法 | 键码 |
+ * |---|---|---|
+ * | **LB** 左肩键 | **按键** | `BTN_TL` = `0x136` |
+ * | **RB** 右肩键 | **按键** | `BTN_TR` = `0x137` |
+ * | **LT** 左扳机 | **模拟轴** | `ABS_Z`（数字式手柄才用 `BTN_TL2`） |
+ * | **RT** 右扳机 | **模拟轴** | `ABS_RZ`（数字式手柄才用 `BTN_TR2`） |
+ *
+ * `KeyCodes` 里的键名表写得很清楚:
+ * `AvailableKey(BTN_TL, "LB", …)` / `AvailableKey(BTN_TL2, "LT", …)`。
+ *
+ * 所以扳机要用**伪键码**（见 `KeyCodes.PSEUDO_KEY_TRIGGER_*` 的说明）——
+ * native 把扳机作为 `0..1000` 的轴送过来，采集层按阈值折成"按下 / 抬起"。
+ *
+ * ⚠️ 玩家当然可以自己改（配置页的键位映射是通用的）——
+ * 这里只是**默认值**。
+ *
+ * ⚠️ WASD 那四个位置**没有默认映射** —— gamepad2 里它们的位置
+ * 是摇杆（见 `KeyLayout.Id.JOYSTICK_*`），摇杆不绑键码。
+ * 留着的话配置页会列出四个"永远不会亮"的槽位。
+ */
+fun gamepad2KeyMappings(): List<KeyMapping> = listOf(
+    /*
+     * ⚠️ 槽位 id 用 **`A_BUTTON`**，不是 `SPACE`。
+     *
+     * `A_BUTTON` 就是屏幕上那个"A"（横跨两列、在 LT/RT 下面那张卡片），
+     * 对应键盘样式里 space 的位置 —— 用户的原话:"A 本身就指代 space"。
+     *
+     * ⚠️ `SPACE` 那个槽位在 gamepad2 里**默认隐藏**
+     * （`showSpaceKey = false`），所以不要往它上面绑东西。
+     */
+    KeyMapping(
+        id = KeyLayout.Id.A_BUTTON,
+        inputKeyCodes = listOf(KeyCodes.BTN_SOUTH),
+        displayText = "A",
+    ),
+    /*
+     * ⚠️ 这个槽位在游戏里代表 **Shift（潜行）**，而绑的是 **B 键**。
+     *
+     * 用户的原话:"那个 L3 对应的应该是 shift 键，但是 shift 在我的世界
+     * 对应的手柄按键应该是 B 键，这个需要调整"。
+     *
+     * 基岩版把潜行放在 **B** 上 —— 所以显示 `B`、实际绑 `BTN_EAST`。
+     *
+     * ⚠️ 槽位 id 仍是键盘样式的 `SHIFT`（位置的语义），
+     * 只有"绑哪个键 / 显示什么字"换成手柄的。
+     */
+    KeyMapping(
+        id = "SHIFT",
+        inputKeyCodes = listOf(KeyCodes.BTN_EAST),
+        displayText = "B",
+    ),
+    /*
+     * ⚠️ **左边是 LT、右边是 RT**。
+     *
+     * 键位映射的 `id` 沿用键盘样式的 `LMB` / `RMB`
+     * （左列那个 id 就是 `LMB`），而手柄上左扳机在左边 ——
+     * **屏幕上的位置**才决定用户按得对不对，不是语义。
+     */
+    KeyMapping(
+        id = "LMB",
+        inputKeyCodes = listOf(KeyCodes.PSEUDO_KEY_TRIGGER_LEFT),
+        displayText = "LT",
+    ),
+    KeyMapping(
+        id = "RMB",
+        inputKeyCodes = listOf(KeyCodes.PSEUDO_KEY_TRIGGER_RIGHT),
+        displayText = "RT",
+    ),
+    /*
+     * 肩键 —— 默认**隐藏**（`showShoulderButtons = false`），
+     * 用户打开"显示肩键"之后才出现在 LT/RT 下面。
+     *
+     * ⚠️ `BTN_TL` / `BTN_TR` **才是** LB / RB —— 见 [KeyCodes] 的键名表。
+     * （扳机那次就是错在这里:把 LT/RT 绑成了这两个。）
+     */
+    KeyMapping(
+        id = KeyLayout.Id.SHOULDER_L,
+        inputKeyCodes = listOf(KeyCodes.BTN_TL),
+        displayText = "LB",
+    ),
+    KeyMapping(
+        id = KeyLayout.Id.SHOULDER_R,
+        inputKeyCodes = listOf(KeyCodes.BTN_TR),
+        displayText = "RB",
     ),
 )
 

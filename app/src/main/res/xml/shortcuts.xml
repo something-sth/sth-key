@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    桌面快捷方式的**声明**。
+
+    ⚠️ 这里声明的两个快捷方式都**不会被自动创建**到桌面上，也不会出现在
+    长按图标弹出的快捷菜单里（`enabled="false"`）。
+
+    它们只是给系统一份"这个应用可能创建哪些快捷方式"的清单，真正钉到
+    桌面由用户在我们主页那个窗口里点确定、走
+    `ShortcutManagerCompat.requestPinShortcut()` 完成。
+
+    ⚠️ `shortcutId` 是**对外契约**：必须与 `ShortcutSettings` 里的取值一致，
+    而且**一旦发布就不要改** —— 用户桌面上已经钉好的快捷方式靠这个 id
+    找回自己。改了的话那些快捷方式会失效（点了没反应）。
+
+    ⚠️ **"启动悬浮窗"可以有多个**，它们的 id 由
+    `ShortcutSettings.nextLauncherId` **动态分配**（`launch_overlays_1`、
+    `launch_overlays_2`…）。下面那个 `launch_overlays_1` 只是这份清单的
+    **模板**：
+
+    - 系统按"这个应用会创建快捷方式"来读这份声明，
+      **不会**按前缀去匹配实际创建的 id；
+    - 写死一个 id 的话，第二次创建会**顶掉**第一个（系统认为是同一个
+      快捷方式）—— 用户看到的现象是"我只能加两个：一个启动的、
+      一个关闭的"。这正是第一版的 bug。
+
+    ⚠️ "一键关闭"只允许存在一个（多一个图标没有任何意义），
+    所以它的 id 是固定的。
+
+    ⚠️ `targetClass` 必须是 ShortcutActivity（不是 MainActivity）：
+    这是"不进前台"的关键，说明见它的类注释。
+-->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 启动一组配置的悬浮窗并重启采集；id 动态分配，这里只是模板 -->
+    <shortcut
+        android:enabled="false"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutId="launch_overlays_1"
+        android:shortcutLongLabel="@string/shortcut_launch_long"
+        android:shortcutShortLabel="@string/shortcut_launch_short">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetClass="com.something.sthkey.shortcut.ShortcutActivity"
+            android:targetPackage="com.something.sthkey" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+
+    <!-- 一键关闭所有悬浮窗 -->
+    <shortcut
+        android:enabled="false"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutId="disable_all_overlays"
+        android:shortcutLongLabel="@string/shortcut_disable_long"
+        android:shortcutShortLabel="@string/shortcut_disable_short">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetClass="com.something.sthkey.shortcut.ShortcutActivity"
+            android:targetPackage="com.something.sthkey" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+
+</shortcuts>

@@ -37,6 +37,7 @@ import com.something.sthkey.R
 import com.something.sthkey.core.log.AppLog
 import com.something.sthkey.core.prefs.AppPrefs
 import com.something.sthkey.data.config.ConfigStore
+import com.something.sthkey.domain.style.OverlayStyleRegistry
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.live2d.Live2DModels
 import com.something.sthkey.domain.overlay.OverlayLayout
@@ -47,6 +48,7 @@ import com.something.sthkey.ui.overlay.OVERLAY_PADDING_PX
 import com.something.sthkey.ui.overlay.OverlayContent
 import com.something.sthkey.ui.overlay.dpToPx
 import com.something.sthkey.ui.overlay.live2d.Live2DOverlayView
+import com.something.sthkey.domain.style.KeyLayout
 import com.something.sthkey.ui.overlay.overlayWindowHeightPx
 import com.something.sthkey.ui.overlay.overlayWindowWidthPx
 import com.something.sthkey.ui.overlay.toWindowPx
@@ -316,17 +318,19 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         instance = null
 
         /*
-         * 采集跟着窗口一起停。
+         * ⚠️ 这里**不停采集**。
          *
-         * 顺序很重要：先停采集再拆窗口 —— 反过来的话，
-         * 窗口拆掉后仍可能有一批事件在途，会往一个已经不存在的界面写状态。
+         * 原来是"采集跟着窗口一起停"。现在采集是应用级的
+         * （见 [syncWindows] 里的说明）—— 这个 Service 结束只意味着
+         * "没有窗口要画了"，与"还要不要读按键"无关。
+         *
+         * 采集只由两件事改变：[CaptureController.init] 启动它、
+         * 调试页的"重启监听"重来一次。
          */
-        CaptureController.stop()
-
         lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
         removeAllWindows()
         scope.cancel()
-        AppLog.i(TAG, "悬浮窗已停止")
+        AppLog.i(TAG, "悬浮窗已停止（采集保持运行）")
         super.onDestroy()
     }
 
@@ -396,18 +400,28 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         }
 
         /*
-         * 4. 采集的开关由"有没有窗口"决定，而不是由请求方决定。
+         * 4. 采集**不跟着窗口走**。
          *
-         * [CaptureController.start] 本身幂等：连续开多个开关只会真正启动一次，
-         * 这正是"多开不冲突"的落点。反过来只要还有窗口就不能停 ——
-         * 少判这一下就会出现"关掉一个窗口，剩下的窗口按键不动了"。
+         * ============================================================
+         * ⚠️ 这里原来会"没窗口就停采集"，现在不会了
+         * ============================================================
+         * 旧的判断是"采集的开关由有没有窗口决定"，理由是：
+         * 没有窗口时读按键没有意义、白耗电。
+         *
+         * 现在采集是**应用级**的：只要应用活着就一直监听。
+         *
+         * 为什么可以这样：全局监听下常驻不再是为了热插拔，但也没坏处 ——
+         * 空闲时没有事件就没有回调，一条进程加一个读取线程的开销可以忽略。
+         *
+         * 收益是**没有窗口时插上设备也立刻能用**，而且不会漏按键：
+         * 旧逻辑下"开悬浮窗"和"起采集"是同时发生的，
+         * 那一瞬间的按键会丢；现在采集早就在跑了。
+         *
+         * ⚠️ 所以这里**只**管窗口与服务自身，不再碰 CaptureController。
          */
         if (windows.isEmpty()) {
-            CaptureController.stop()
-            AppLog.i(TAG, "已没有悬浮窗，停止采集并结束服务")
+            AppLog.i(TAG, "已没有悬浮窗，结束服务（采集保持运行）")
             stopSelf()
-        } else {
-            CaptureController.start()
         }
     }
 
@@ -422,6 +436,71 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         val size = windowSizePx(config)
         val screen = OverlayBounds.screenSize(this)
         val density = resources.displayMetrics.density
+
+        /*
+         * ============================================================
+         * ⚠️ 这条日志把**三个坐标空间**一次摆出来
+         * ============================================================
+         * 手柄样式出过"内容全挤在角落、而且整体偏大"的问题，而窗口尺寸、
+         * Compose 的 dp、画布的像素**是三个不同的空间** ——
+         * 只看其中一个永远算不出问题在哪。所以四个值一起记:
+         *
+         * | 字段 | 含义 |
+         * |---|---|
+         * | 窗口 | `WindowManager` 拿到的**像素**尺寸 |
+         * | 基础 | 样式声明的**基础像素**尺寸 |
+         * | 缩放 | `KeyLayout.uiScale`（由缩放百分比换算） |
+         * | 密度 | `resources.displayMetrics.density` |
+         *
+         * 校验关系:
+         * ```
+         * 基础 × 缩放 × 密度 + 内边距×2  ≈  窗口
+         * ```
+         * 对不上就说明某一环用了错的密度、或漏乘了缩放。
+         *
+         * ⚠️ 放在**窗口创建**这里而不是 `updateWindowSize` ——
+         * 后者开头有个"尺寸没变就返回"的短路，首次创建根本不经过它。
+         */
+        val base = OverlayStyleRegistry.baseSizeOf(config)
+        AppLog.i(
+            TAG,
+            "窗口尺寸 ${size.first}×${size.second}px ｜ 基础 " +
+                "${base.width.toInt()}×${base.height.toInt()} ｜ 缩放 " +
+                "${"%.3f".format(KeyLayout.uiScale(config))} ｜ 密度 $density ｜ " +
+                "styleId=${config.styleId}",
+        )
+
+        /*
+         * ============================================================
+         * ⚠️ CPS 诊断
+         * ============================================================
+         * 用户报过两次"显示 CPS 打开后没效果"，而**从代码上看链路是通的** ——
+         * 所以需要真实数值定位是哪一环断了:
+         *
+         * | 字段 | 断了会怎样 |
+         * |---|---|
+         * | `开关` | 没打开 → 渲染层根本不显示 CPS |
+         * | `模式` | 1 = 接在主文字后 / 2 = 独立一行 / 3 = 键内两行 |
+         * | `独立槽位` | 布局里有没有 CPS 槽位（只有模式 2 有） |
+         * | `计数` | **有计数才说明"键码 → 槽位"的映射是对的** |
+         *
+         * ⚠️ 判读方法:
+         *
+         * - `计数` 全空而用户确实在按扳机 → 问题在**键位映射**
+         *   （槽位没绑上那个键码），与渲染无关；
+         * - 计数在涨而屏幕不变 → 问题在渲染或刷新。
+         */
+        val cpsSnapshot = CaptureSession.cpsSnapshotOf(config.id)
+        val cpsSlots = KeyLayout.keys(config)
+            .map { it.slotId }
+            .filter { it == KeyLayout.Id.CPS_L || it == KeyLayout.Id.CPS_R }
+        AppLog.i(
+            TAG,
+            "CPS 诊断 ｜ 开关=${config.mouseCpsEnabled} ｜ 模式=${config.mouseCpsMode} ｜ " +
+                "显示鼠标键=${config.showMouseButtons} ｜ " +
+                "独立槽位=${cpsSlots.ifEmpty { listOf("无") }} ｜ " +
+                "当前计数=${cpsSnapshot.ifEmpty { mapOf("（还没有计数）" to 0) }}",
+        )
 
         val params = WindowManager.LayoutParams(
             size.first,
@@ -908,7 +987,33 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         window.params.width = width
         window.params.height = height
         updateLayoutParams(window)
-        AppLog.d(TAG, "窗口 ${window.configId.take(8)} 尺寸更新为 ${width}×${height}")
+
+        /*
+         * ⚠️ 这条日志把"三个坐标空间"的换算一次性摆出来。
+         *
+         * 手柄样式出过"内容全挤在左上角、而且整体偏大"的问题，
+         * 而窗口尺寸、Compose 的 dp、画布的像素**是三个不同的空间** ——
+         * 只看其中一个永远算不出问题在哪。所以这里把四个数一起记:
+         *
+         * | 字段 | 含义 |
+         * |---|---|
+         * | 窗口 | `WindowManager` 拿到的**像素**尺寸 |
+         * | base | 样式声明的**基础像素**尺寸 |
+         * | pxPerBase | 基础像素 → 像素 的倍数（应为 `密度 × uiScale`） |
+         * | 密度 | `resources.displayMetrics.density` |
+         *
+         * 校验关系:**`base × pxPerBase ≈ 窗口`**（差值就是那圈内边距）。
+         * 对不上说明某一环用了错的密度或漏乘了缩放。
+         */
+        AppLog.i(
+            TAG,
+            "窗口尺寸 ${width}×${height}px ｜ 样式基础 " +
+                "${overlayWindowWidthPx(window.config).toInt()}×" +
+                "${overlayWindowHeightPx(window.config).toInt()} ｜ " +
+                "缩放 ${KeyLayout.uiScale(window.config)} ｜ " +
+                "密度 ${resources.displayMetrics.density} ｜ " +
+                "样式 ${window.config.styleId}",
+        )
 
         /*
          * 尺寸变了，可用余量也变了 —— 重新走一遍位置算法。

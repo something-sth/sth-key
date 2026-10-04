@@ -302,42 +302,28 @@ class KeyToCustomConverterTest {
     }
 
     /**
-     * 模式 2：CPS 单独一行 → 转成**文本组件**（它本来就不参与按键点亮）。
+     * ⚠️ **回归**:模式 2（独立 CPS 组件）已经删除。
      *
-     * ⚠️ 文字要用配置里的**模板**，不能用布局里已经替换过数字的那份 ——
-     * 后者会让这个组件永远停在转换那一刻的数字上。
+     * 用户的原话:"干脆在 gamepad2 这里把 cps 模式 2 删掉吧，太多组件
+     * 也不好安排，就留模式 1 和 3 就好了"。
+     *
+     * ⚠️ 所以"模式 2 转出两个独立文本组件"这件事**不该再发生** ——
+     * 转自定义之后如果还冒出两个只数左键 / 只数右键的 CPS 文本框，
+     * 那是没删干净。
      */
     @Test
-    fun `模式 2 转出两个文本组件且用模板而不是当时的数字`() {
+    fun `模式 2 不再转出独立的 CPS 文本组件`() {
         val config = keyConfig(cpsEnabled = true, cpsMode = 2)
-            .copy(cpsTextTemplate = "CPS: (cps)")
+        val withCps = convert(config)
+            .filterIsInstance<TextComponent>()
+            .filter { CustomLayout.hasCpsPlaceholder(it.text) }
 
-        val texts = convert(config).filterIsInstance<TextComponent>()
-
-        assertEquals(2, texts.size)
-        texts.forEach { text ->
-            assertEquals("必须是模板，不能是替换后的数字", "CPS: (cps)", text.text)
-            assertTrue(CustomLayout.hasCpsPlaceholder(text.text))
-        }
-    }
-
-    /** 模式 2 的左/右两个文本组件分别数左键与右键 */
-    @Test
-    fun `模式 2 的两个文本组件分别统计左右键`() {
-        val config = keyConfig(cpsEnabled = true, cpsMode = 2)
-        val texts = convert(config).filterIsInstance<TextComponent>()
-
-        val allGroups = texts.map { it.cpsKeyCodesPerPlaceholder.first() }
         assertTrue(
-            "应当一个数左键、一个数右键，实际：$allGroups",
-            allKeyCodesCoverBothButtons(allGroups),
+            "不该再有'独立 CPS 文本框'（当时是 2 个），实际 ${withCps.size} 个",
+            withCps.size <= 1,
         )
     }
 
-    private fun allKeyCodesCoverBothButtons(groups: List<List<Int>>): Boolean {
-        val flat = groups.flatten()
-        return KeyCodes.BTN_LEFT in flat && KeyCodes.BTN_RIGHT in flat
-    }
 
     /**
      * 模式 3：键内两行 → 用**转义的换行符**保留成两行。

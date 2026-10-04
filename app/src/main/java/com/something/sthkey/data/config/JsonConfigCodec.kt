@@ -9,6 +9,7 @@ import com.something.sthkey.domain.config.DEFAULT_CPS_TEMPLATE_MODE1
 import com.something.sthkey.domain.config.DEFAULT_FONT_ID
 import com.something.sthkey.domain.config.KeyMapping
 import com.something.sthkey.domain.config.KeyOutline
+import com.something.sthkey.domain.config.JoystickStyle
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.config.TextOffset
 import com.something.sthkey.domain.style.KeyLayout
@@ -178,6 +179,8 @@ object JsonConfigCodec {
         "styleId" to "悬浮窗样式",
         "keySize" to "按键大小",
         "keyGap" to "键间距",
+        "keyHeightPercent" to "按键高度",
+        "keyGapPercent" to "按键间距",
         "scalePercent" to "整体缩放",
         "textScalePercent" to "文字缩放",
         "cornerRadiusEnabled" to "圆角开关",
@@ -193,13 +196,126 @@ object JsonConfigCodec {
         "showMouseButtons" to "显示鼠标按键",
         "mouseCpsEnabled" to "显示 CPS",
         "mouseCpsMode" to "CPS 显示模式",
-        "cpsTextTemplate" to "CPS 文本（模式 2/3）",
+        "cpsTextTemplate" to "CPS 文本（模式 2）",
         "cpsTextTemplateMode1" to "CPS 文本（模式 1）",
+        "customOpacityPercent" to "自定义 Key 的整体透明度",
         "keyMappings" to "键位映射",
         "live2d" to "Live2D 设置",
         "custom" to "自定义 Key 布局",
     )
 
+    /* ============================================================
+     * 摇杆设置（`JoystickStyle`）
+     * ============================================================ */
+
+    /**
+     * 把摇杆设置编码成一个 JSON 对象。
+     *
+     * ⚠️ 单独一个子对象，而不是把十几个字段平铺到顶层 ——
+     * 那几个字段是**一组**（都属于摇杆），平铺之后
+     * `joystickCornerRatio` 和 `cornerRadiusPercent` 挨在一起，
+     * 读 JSON 的人分不清哪个是摇杆的、哪个是按键的。
+     *
+     * ⚠️ 缺字段时的默认值由 [decodeJoystick] 兜 ——
+     * 老配置里没有这个对象，解码时整块用默认值。
+     */
+    private fun encodeJoystick(style: JoystickStyle): JSONObject = JSONObject().apply {
+        put("sizeScale", style.sizeScale.toDouble())
+        put("cornerRatio", style.cornerRatio.toDouble())
+        put("opacity", style.opacity.toDouble())
+        put("color", style.color)
+        put("strokeColor", style.strokeColor)
+        put("strokeOpacity", style.strokeOpacity.toDouble())
+        put("strokeWidthRatio", style.strokeWidthRatio.toDouble())
+        put("ringColor", style.ringColor)
+        put("ringOpacity", style.ringOpacity.toDouble())
+        put("ringWidthRatio", style.ringWidthRatio.toDouble())
+        put("knobScale", style.knobScale.toDouble())
+        put("knobColor", style.knobColor)
+        put("knobOpacity", style.knobOpacity.toDouble())
+        put("knobCornerRatio", style.knobCornerRatio.toDouble())
+        put("knobStrokeColor", style.knobStrokeColor)
+        put("knobStrokeOpacity", style.knobStrokeOpacity.toDouble())
+        put("knobStrokeWidthRatio", style.knobStrokeWidthRatio.toDouble())
+        put("deadZone", style.deadZone.toDouble())
+        put("sensitivity", style.sensitivity.toDouble())
+        put("smoothingMs", style.smoothingMs.toDouble())
+    }
+
+    /**
+     * 解码摇杆设置。
+     *
+     * ⚠️ 每一项都**夹到合法范围**，而且范围与 `JoystickStyle` 里的
+     * 文档一致 —— 手改过的 JSON 可以塞进 `sensitivity: 999`，
+     * 那会让摇杆永远画在边上（而且不报错）。
+     *
+     * ⚠️ 传入 `null`（老配置没有这个对象）时整块用默认值 ——
+     * 这是**向后兼容**的关键:不能因为加了这个对象就让老配置读不出来。
+     */
+    /**
+     * 读取一个摇杆颜色，并把**可能残留的 alpha 清成不透明**。
+     *
+     * ============================================================
+     * ⚠️ 这是一次**数据修复**，不只是容错
+     * ============================================================
+     * 第一版的默认颜色带了 alpha（`0xB3000000`），而配置页的颜色控件
+     * （`HexColorRow`）只处理 RGB —— 用户**滑到"摇杆"那一栏**就会
+     * 把 alpha 抹成 `00`，颜色变成 `0x00xxxxxx`、渲染时全透明、
+     * **摇杆消失**，而且写进了存档（"除了重新创建一个配置，无法恢复"）。
+     *
+     * 现在不透明度只由 `opacity` 字段表达，颜色里的 alpha 一律忽略 ——
+     * 所以这里把读到的 alpha 强制成 `0xFF`。
+     *
+     * ⚠️ 这样**已经损坏的存档也能直接恢复**，不需要用户重建配置。
+     *
+     * ⚠️ 只保留低 24 位（RGB）:高 8 位无论是 `00`（被抹过）还是别的，
+     * 都不是用户选的"颜色"，而是历史遗留。
+     */
+    private fun readJoystickColor(json: JSONObject, key: String, fallback: Int): Int =
+        (json.optInt(key, fallback) and 0xFFFFFF) or 0xFF000000.toInt()
+    private fun decodeJoystick(json: JSONObject?): JoystickStyle {
+        val d = JoystickStyle()
+        if (json == null) return d
+        return JoystickStyle(
+            sizeScale = json.optDouble("sizeScale", d.sizeScale.toDouble())
+                .toFloat().coerceIn(0.3f, 3f),
+            cornerRatio = json.optDouble("cornerRatio", d.cornerRatio.toDouble())
+                .toFloat().coerceIn(0f, 0.5f),
+            opacity = json.optDouble("opacity", d.opacity.toDouble())
+                .toFloat().coerceIn(0f, 1f),
+            color = readJoystickColor(json, "color", d.color),
+            strokeColor = readJoystickColor(json, "strokeColor", d.strokeColor),
+            strokeOpacity = json.optDouble("strokeOpacity", d.strokeOpacity.toDouble())
+                .toFloat().coerceIn(0f, 1f),
+            strokeWidthRatio = json.optDouble("strokeWidthRatio", d.strokeWidthRatio.toDouble())
+                .toFloat().coerceIn(0f, 0.2f),
+            ringColor = readJoystickColor(json, "ringColor", d.ringColor),
+            ringOpacity = json.optDouble("ringOpacity", d.ringOpacity.toDouble())
+                .toFloat().coerceIn(0f, 1f),
+            ringWidthRatio = json.optDouble("ringWidthRatio", d.ringWidthRatio.toDouble())
+                .toFloat().coerceIn(0f, 0.2f),
+            knobScale = json.optDouble("knobScale", d.knobScale.toDouble())
+                .toFloat().coerceIn(0.2f, 2f),
+            knobColor = readJoystickColor(json, "knobColor", d.knobColor),
+            knobOpacity = json.optDouble("knobOpacity", d.knobOpacity.toDouble())
+                .toFloat().coerceIn(0f, 1f),
+            knobCornerRatio = json.optDouble("knobCornerRatio", d.knobCornerRatio.toDouble())
+                .toFloat().coerceIn(0f, 0.5f),
+            knobStrokeColor = readJoystickColor(json, "knobStrokeColor", d.knobStrokeColor),
+            knobStrokeOpacity = json.optDouble("knobStrokeOpacity", d.knobStrokeOpacity.toDouble())
+                .toFloat().coerceIn(0f, 1f),
+            knobStrokeWidthRatio = json.optDouble(
+                "knobStrokeWidthRatio",
+                d.knobStrokeWidthRatio.toDouble(),
+            ).toFloat().coerceIn(0f, 0.3f),
+            deadZone = json.optDouble("deadZone", d.deadZone.toDouble())
+                .toFloat().coerceIn(0f, 0.5f),
+            sensitivity = json.optDouble("sensitivity", d.sensitivity.toDouble())
+                .toFloat().coerceIn(0.2f, 3f),
+            smoothingMs = json.optDouble("smoothingMs", d.smoothingMs.toDouble())
+                .toFloat().coerceIn(0f, 300f),
+        )
+    }
     /** 取字段的中文说明；没有登记时回落到键名本身 */
     fun labelOf(key: String): String = KEY_LABELS[key] ?: key
 
@@ -262,6 +378,14 @@ object JsonConfigCodec {
         put("animationDurationSec", config.animationDurationSec.toDouble())
         put("showShiftKey", config.showShiftKey)
         put("showMouseButtons", config.showMouseButtons)
+        put("showShoulderButtons", config.showShoulderButtons)
+        put("showAButton", config.showAButton)
+        put("aButtonOnTop", config.aButtonOnTop)
+        put("showSpaceKey", config.showSpaceKey)
+        put("swapSticks", config.swapSticks)
+        put("keyHeightPercent", config.keyHeightPercent)
+        put("keyGapPercent", config.keyGapPercent)
+        put("joystick", encodeJoystick(config.joystick))
         put("mouseCpsEnabled", config.mouseCpsEnabled)
         put("mouseCpsMode", config.mouseCpsMode)
         put("cpsTextTemplate", config.cpsTextTemplate)
@@ -420,6 +544,15 @@ object JsonConfigCodec {
 
         // 自定义 Key 布局；同样与样式无关地照写（理由同上）
         put("custom", CustomLayoutCodec.encode(config.custom))
+
+        /*
+         * 自定义 Key 的**整体透明度**。
+         *
+         * ⚠️ 与上面那些字段一样"与样式无关地照写" —— 只在
+         * [StyleId.CUSTOM_KEY] 下有意义，但换样式时不该把它丢掉
+         * （用户可能只是临时切走看一眼，再切回来）。
+         */
+        put("customOpacityPercent", config.customOpacityPercent)
     }
 
     /*
@@ -517,8 +650,31 @@ object JsonConfigCodec {
                 .coerceIn(ANIMATION_DURATION_MIN, ANIMATION_DURATION_MAX),
             showShiftKey = json.optBoolean("showShiftKey", false),
             showMouseButtons = json.optBoolean("showMouseButtons", true),
+            showShoulderButtons = json.optBoolean("showShoulderButtons", false),
+            showAButton = json.optBoolean("showAButton", true),
+            aButtonOnTop = json.optBoolean("aButtonOnTop", false),
+            showSpaceKey = json.optBoolean("showSpaceKey", false),
+            swapSticks = json.optBoolean("swapSticks", false),
+            keyHeightPercent = json.optInt("keyHeightPercent", 100).coerceIn(50, 200),
+            keyGapPercent = json.optInt("keyGapPercent", 100).coerceIn(50, 400),
+            joystick = decodeJoystick(json.optJSONObject("joystick")),
             mouseCpsEnabled = json.optBoolean("mouseCpsEnabled", false),
-            mouseCpsMode = json.optInt("mouseCpsMode", 1).coerceIn(1, 3),
+            /*
+             * ⚠️ **模式 2（独立 CPS 组件）已删除** —— 老配置里存着 2 的
+             * 要迁移成 3（键内两行）。
+             *
+             * 不迁移的话它落在**空模式**上:布局不生成任何 CPS 内容，
+             * 表现是"CPS 打开了但什么都不显示" —— 而用户会以为是开关坏了。
+             *
+             * ⚠️ 界面上现在只有"模式 1 / 模式 2"两个按钮，但**内部编号
+             * 仍是 1 与 3** —— 改编号会让所有老配置静默变掉。
+             */
+            mouseCpsMode = json.optInt("mouseCpsMode", 1).let {
+                when {
+                    it == 2 -> 3
+                    else -> it.coerceIn(1, 3)
+                }
+            },
             cpsTextTemplate = json.optString("cpsTextTemplate", DEFAULT_CPS_TEMPLATE)
                 .ifBlank { DEFAULT_CPS_TEMPLATE },
             cpsTextTemplateMode1 = json.optString(
@@ -535,6 +691,12 @@ object JsonConfigCodec {
              * 与"老配置被切到自定义 Key"看到的是同一个起点。
              */
             custom = CustomLayoutCodec.decode(json.optJSONObject("custom")),
+
+            /*
+             * ⚠️ `coerceIn(0, 100)` —— 手改过的 JSON 可能塞进 500 或 -20，
+             * 不夹的话 alpha 会越界（>1 在某些设备上表现为整块不画）。
+             */
+            customOpacityPercent = json.optInt("customOpacityPercent", 100).coerceIn(0, 100),
         )
     }
 

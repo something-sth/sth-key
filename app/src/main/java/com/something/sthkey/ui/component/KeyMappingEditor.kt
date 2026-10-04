@@ -1,4 +1,4 @@
-﻿package com.something.sthkey.ui.component
+package com.something.sthkey.ui.component
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -67,12 +67,26 @@ fun KeyMappingEditor(
     mappings: List<KeyMapping>,
     onChange: (List<KeyMapping>) -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * 要**隐藏**的槽位 id。
+     *
+     * ⚠️ 给"摇杆"这类**不绑键码**的槽位用。
+     *
+     * 摇杆位置在布局里占一个 `KeyBox`（好让它参与尺寸计算），
+     * 但它没有"按下的键码"这个概念 —— 让它出现在键位映射列表里，
+     * 用户会去绑一个键，然后发现绑了没反应。
+     *
+     * 用户的原话:"摇杆有些功能或许需要单独配置"。
+     */
+    hiddenSlotIds: Set<String> = emptySet(),
 ) {
     /** 正在编辑绑定键的映射 id；null 表示没有打开对话框 */
     var editingId by remember { mutableStateOf<String?>(null) }
 
+    val visible = mappings.filter { it.id !in hiddenSlotIds }
+
     Column(modifier = modifier) {
-        mappings.forEachIndexed { index, mapping ->
+        visible.forEachIndexed { index, mapping ->
             if (index > 0) {
                 CardDivider()
             }
@@ -88,7 +102,7 @@ fun KeyMappingEditor(
         }
     }
 
-    val editing = mappings.firstOrNull { it.id == editingId }
+    val editing = visible.firstOrNull { it.id == editingId }
     if (editing != null) {
         KeyBindingDialog(
             mapping = editing,
@@ -230,6 +244,15 @@ fun MultiKeyPickerDialog(
     var codes by remember(initialCodes) { mutableStateOf(initialCodes) }
     var picking by remember { mutableStateOf(false) }
 
+    /**
+     * 已选中的大类；`null` = 还没选（也就是停在"大类选择"那一层）。
+     *
+     * ⚠️ 两层对话框用**两个状态**而不是一个枚举:
+     * `picking` 管"要不要弹"，`pickingGroup` 管"弹到第几层"。
+     * 合成一个的话"从搜索返回大类"这种回退很难表达。
+     */
+    var pickingGroup by remember { mutableStateOf<KeyCodes.PickerGroup?>(null) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
@@ -280,18 +303,111 @@ fun MultiKeyPickerDialog(
     )
 
     if (picking) {
-        KeyPickerDialog(
-            title = "选择按键",
+        /*
+         * ⚠️ 先选**大类**，再进搜索框。
+         *
+         * 用户的原话:"应该在'添加一个按键'点击后先弹一个选择键位分类的窗口，
+         * 选择键位在键盘分类还是手柄分类，否则可能会搞混……想调 A 这类按键
+         * 就会同时搜索出键盘的 A 和手柄的 A"。
+         *
+         * 所以这里弹的是 [KeyGroupPickerDialog]，它选中之后再弹
+         * [KeyPickerDialog]（带着大类过滤）。
+         */
+        KeyGroupPickerDialog(
             onDismiss = { picking = false },
+            onPicked = { group -> pickingGroup = group },
+        )
+    }
+
+    pickingGroup?.let { group ->
+        KeyPickerDialog(
+            title = "选择按键 · ${group.label}",
+            group = group,
+            onDismiss = {
+                /*
+                 * ⚠️ 返回时回到**大类选择**，而不是直接关掉整个流程。
+                 *
+                 * 用户选了"手柄"进去发现没有自己要的键（比如想绑键盘的 A），
+                 * 直接关掉的话要重新点"添加一个按键"再走一遍 ——
+                 * 回到大类那一层只需要再点一下。
+                 */
+                pickingGroup = null
+            },
             onPicked = { key ->
                 // 去重：同一个键加两次没有意义，而且会让"CPS 求和"重复计一次
                 if (key.keyCode !in codes) codes = codes + key.keyCode
                 picking = false
+                pickingGroup = null
             },
         )
     }
 }
 
+/**
+ * 按键选择器的**第一步**:选大类（键盘 / 手柄 / 全部）。
+ *
+ * ============================================================
+ * ⚠️ 为什么要这一步
+ * ============================================================
+ * 键盘的 `A`（`KEY_A` = 30）与手柄的 `A`（`BTN_SOUTH` = 304）
+ * 在搜索列表里**名字都叫 A**，只有 `code` 不同。
+ *
+ * 没有经验的用户会随便点一个，然后"按了没反应" —— 而那是
+ * **选错了大类**，不是功能坏了。用户的原话:
+ *
+ * > "有些用户没有经验，想调 A 这类按键就会同时搜索出键盘的 A
+ * >  和手柄的 A，所以这个是有必要做的"
+ *
+ * ⚠️ 保留"全部"这一项:高级用户知道自己要找什么（比如直接输 `304`），
+ * 强制两步会让改键变得很烦。
+ */
+@Composable
+private fun KeyGroupPickerDialog(
+    onDismiss: () -> Unit,
+    onPicked: (KeyCodes.PickerGroup) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("选择按键分类") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = "手柄和键盘上有一些同名的键（例如都叫 A），" +
+                        "先选分类可以避免搞混。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                KeyCodes.PickerGroup.entries.forEach { group ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onPicked(group) }
+                            .padding(vertical = 14.dp, horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = group.label,
+                                style = MaterialTheme.typography.bodyLarge,
+                            )
+                            Text(
+                                text = group.description,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
+    )
+}
 /**
  * 按键选择器。
  *
@@ -307,9 +423,16 @@ fun KeyPickerDialog(
     title: String,
     onDismiss: () -> Unit,
     onPicked: (AvailableKey) -> Unit,
+    /**
+     * 只看哪个大类。
+     *
+     * ⚠️ 默认 [KeyCodes.PickerGroup.ALL] —— 老调用方（直接弹选择器、
+     * 不经大类那一步的）行为完全不变，不需要跟着改。
+     */
+    group: KeyCodes.PickerGroup = KeyCodes.PickerGroup.ALL,
 ) {
     var query by remember { mutableStateOf("") }
-    val results = remember(query) { KeyCodes.search(query) }
+    val results = remember(query, group) { KeyCodes.searchIn(query, group) }
     val focusManager = LocalFocusManager.current
 
     AlertDialog(

@@ -10,7 +10,12 @@ import com.something.sthkey.domain.custom.CustomLayout
  * 需要改显示名称时改 [OverlayStyleDescriptor.label]，不要动 [id]。
  */
 object StyleId {
-    /** 内置按键显示样式 */
+    /**
+     * 内置按键显示样式。
+     *
+     * ⚠️ 它的**显示名**现在叫「键盘」,但这个 id **永远不要改** ——
+     * 见本对象的注释。
+     */
     const val KEYSTROKES = "keystrokes"
 
     /**
@@ -28,6 +33,28 @@ object StyleId {
      * 带空格的值在 JSON / 命令里都更容易出问题，而它是会写进用户配置的持久标识。
      */
     const val CUSTOM_KEY = "custom_key"
+
+    /**
+     * 手柄样式一：两个摇杆 + 方向键 + YXAB 圆形按键。
+     *
+     * ============================================================
+     * ⚠️ 命名里的序号是**预设编号**，不是"第几代"
+     * ============================================================
+     * `gamepad1` / `gamepad2` 是两套**并列的预设**（布局不同，没有优劣）。
+     * 以后再加预设就顺着排 `gamepad3`、`gamepad4` —— 这样一眼能看出
+     * 它们是同一族，而不用去读注册表。
+     *
+     * ⚠️ 同样的**一旦发布就不能改**（会被写进用户配置里）。
+     */
+    const val GAMEPAD1 = "gamepad1"
+
+    /**
+     * 手柄样式二：两个**方形**摇杆 + 一条长条键 + LMB/RMB。
+     *
+     * 布局按手柄的"标准"思路摆（左摇杆当 WASD、右摇杆当视角，
+     * 下面是空格与鼠标键）。
+     */
+    const val GAMEPAD2 = "gamepad2"
 }
 
 /**
@@ -64,7 +91,25 @@ data class OverlayStyleDescriptor(
     val enabled: Boolean,
     val iconKey: String,
     val baseSize: (KeyStrokesConfig, Map<String, Int>) -> OverlayBaseSize,
+    /**
+     * 新建配置页的分组（"键盘" / "手柄" / "通用"）。
+     *
+     * ⚠️ 用它分组而不是在 UI 里按 id 写 `when`：那样每加一个样式
+     * 就要改一次 UI，而分组本来就是样式自己的属性。
+     */
+    val category: StyleCategory = StyleCategory.KEYBOARD,
 )
+
+/**
+ * 新建配置页里样式的分组。
+ *
+ * 顺序即显示顺序 —— 用户最常用的（键盘）排在最前。
+ */
+enum class StyleCategory(val title: String) {
+    KEYBOARD("键盘"),
+    GAMEPAD("手柄"),
+    GENERAL("通用"),
+}
 
 /**
  * Live2D 的设计分辨率（像素）。
@@ -97,14 +142,105 @@ object OverlayStyleRegistry {
         register(
             OverlayStyleDescriptor(
                 id = StyleId.KEYSTROKES,
-                label = "Key",
+                /*
+                 * ⚠️ 显示名从 "Key" 改成了 "键盘"，**id 一个字都没动**。
+                 *
+                 * 这正是本文件开头那条约束的用法:用户配置里存的是
+                 * `StyleId.KEYSTROKES`（"keystrokes"），改 label 对
+                 * 已有配置**零影响**。反过来改了 id 就会让所有老配置
+                 * 落到"未知样式"的兜底分支上。
+                 */
+                label = "键盘",
                 description = "按键显示：可自定义键位、颜色、透明度、圆角",
                 enabled = true,
                 iconKey = ICON_KEYBOARD,
+                category = StyleCategory.KEYBOARD,
                 baseSize = { config, cpsBySlot ->
                     OverlayBaseSize(
-                        width = KeyLayout.BASE_WIDTH,
+                        /*
+                         * ⚠️ 按内容算，不是 `BASE_WIDTH` 常量 ——
+                         * "按键间距"滑块**只改位置、不改键宽**，所以间距一变
+                         * 内容宽度就跟着变（见 `KeyLayout.baseWidth`）。
+                         *
+                         * 用常量的话:间距调大 → 内容超出窗口**右边被裁**；
+                         * 调小 → 右边**一块空气**。那两种都真的发生过。
+                         */
+                        width = KeyLayout.baseWidth(config),
                         // 按内容算：模式 2 多一行、模式 3 键更高，用固定值会裁掉底部
+                        height = KeyLayout.baseHeight(config, cpsBySlot),
+                    )
+                },
+            ),
+        )
+
+        /*
+         * ============================================================
+         * ⚠️ gamepad1 暂时**下线**
+         * ============================================================
+         * 用户的原话:"gamepad1 配置暂时先不考虑了，先注释掉吧回头有时间再做，
+         * 我们现在主要做 gamepad2"。
+         *
+         * 它现在**只剩渲染代码**（`Gamepad1Content`），而 gamepad2 已经
+         * 走"键盘布局 + 摇杆"那条路并且有了完整的专属设置 ——
+         * 两个样式并存会让每次改摇杆都要改两处。
+         *
+         * ⚠️ 所以 `Gamepad1Content` / `GamepadLayout` 暂时**没有调用方**，
+         * 但**不要删** —— 回头重新上线时直接取消注释即可。
+         * （它引用的 `Joystick` 仍然在编译，不会因为没人用而失效。）
+         *
+         * ⚠️ 重新上线时记得:把 `Gamepad1Content` 里那两处
+         * `JoystickStyle()` 改成读 `config.joystick`，
+         * 否则 gamepad1 的摇杆会忽略用户的摇杆设置。
+         *///         register(
+//             OverlayStyleDescriptor(
+//                 id = StyleId.GAMEPAD1,
+//                 label = "手柄",
+//                 description = "两个摇杆 + 方向键 + YXAB 圆形按键",
+//                 enabled = true,
+//                 iconKey = ICON_GAMEPAD,
+//                 category = StyleCategory.GAMEPAD,
+//                 /*
+//                  * ⚠️ 尺寸**固定**，不随配置内容变。
+//                  *
+//                  * 与键盘样式不同:手柄样式的布局是定死的（两个摇杆 + 方向键
+//                  * + 四个圆键），没有"开 CPS 多一行"这种事。
+//                  * 所以不需要 `cpsBySlot` 参与计算。
+//                  */
+//                 baseSize = { _, _ ->
+//                     OverlayBaseSize(GamepadLayout.BASE_WIDTH, GamepadHeights.ONE)
+//                 },
+//             ),
+//         )
+
+        register(
+            OverlayStyleDescriptor(
+                id = StyleId.GAMEPAD2,
+                label = "标准",
+                description = "键盘布局，WASD 那块换成左摇杆",
+                enabled = true,
+                iconKey = ICON_GAMEPAD,
+                category = StyleCategory.GAMEPAD,
+                /*
+                 * ⚠️ 尺寸**与键盘样式同源**，因为布局本来就是同一个。
+                 *
+                 * `KeyLayout.keys()` 在 gamepad2 下只把 WASD 换成摇杆槽位，
+                 * 所以宽度就是 `BASE_WIDTH`、高度就是 `baseHeight()`
+                 * —— 与键盘样式调的是**同一个函数**。
+                 *
+                 * ⚠️ 这里踩过一个坑:改成键盘布局之后**忘了改这里的注册值**，
+                 * 于是窗口还是旧的 `600 × 266`。后果是两处:
+                 *
+                 * - 宽度 600 而内容只占 252 → **右边一大块空白**
+                 *   （用户描述:"右边有一大块空气，约占屏幕宽的三分之一"）；
+                 * - 高度 266 而内容需要 320 → **底部被裁掉**
+                 *   （用户描述:"A 键被裁剪了"）。
+                 *
+                 * 教训:样式的布局换了，**注册值必须跟着换**。
+                 * 两者的唯一真源是 `KeyLayout`，不要各写一份。
+                 */
+                baseSize = { config, cpsBySlot ->
+                    OverlayBaseSize(
+                        width = KeyLayout.baseWidth(config),
                         height = KeyLayout.baseHeight(config, cpsBySlot),
                     )
                 },
@@ -118,6 +254,7 @@ object OverlayStyleRegistry {
                 description = "键盘猫 / Live2D 模型，跟随按键与鼠标动作",
                 enabled = true,
                 iconKey = ICON_LIVE2D,
+                category = StyleCategory.GENERAL,
                 // Live2D 的尺寸是固定的设计分辨率，与配置内容无关
                 baseSize = { _, _ ->
                     OverlayBaseSize(LIVE2D_DESIGN_WIDTH, LIVE2D_DESIGN_HEIGHT)
@@ -132,6 +269,7 @@ object OverlayStyleRegistry {
                 description = "自己摆放按键与文本组件：位置、大小、颜色、对齐全部可调",
                 enabled = true,
                 iconKey = ICON_CUSTOM,
+                category = StyleCategory.GENERAL,
                 /*
                  * 尺寸 = 所有组件边框的**最小外接矩形**（见 CustomLayout.bounds）。
                  *
@@ -154,6 +292,7 @@ object OverlayStyleRegistry {
     const val ICON_KEYBOARD = "keyboard"
     const val ICON_LIVE2D = "live2d"
     const val ICON_CUSTOM = "custom"
+    const val ICON_GAMEPAD = "gamepad"
 
     fun register(descriptor: OverlayStyleDescriptor) {
         descriptors[descriptor.id] = descriptor
@@ -188,7 +327,7 @@ object OverlayStyleRegistry {
         val descriptor = descriptors[config.styleId] ?: descriptors[StyleId.KEYSTROKES]
         return descriptor?.baseSize?.invoke(config, cpsBySlot)
             // 兜底：注册表被清空这种不可能的情况，也要给出一个能画的尺寸
-            ?: OverlayBaseSize(KeyLayout.BASE_WIDTH, KeyLayout.baseHeight(config, cpsBySlot))
+            ?: OverlayBaseSize(KeyLayout.baseWidth(config), KeyLayout.baseHeight(config, cpsBySlot))
     }
 
     /** 当前默认样式 id */

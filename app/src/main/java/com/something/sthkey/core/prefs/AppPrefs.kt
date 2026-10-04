@@ -176,18 +176,21 @@ class AppPrefs private constructor(context: Context) {
      * ============================================================
      */
 
-    /**
-     * 用户是否希望采集处于开启状态。
+    /*
+     * ============================================================
+     * ⚠️ `captureEnabled` 已经**删掉**了
+     * ============================================================
+     * 它原来存的是"用户是否希望采集开着"，用来在进程重启后
+     * 恢复上次的意图 —— 那套逻辑是为"采集跟着悬浮窗开关走"服务的。
      *
-     * 与悬浮窗开关**分开存**：采集是"读输入设备"，悬浮窗是"画在屏幕上"，
-     * 两者以后可能独立开关（例如只采集不显示、或调试时只显示不采集）。
-     * 现在由悬浮窗开关联动，但数据上不耦合。
+     * 现在采集是**应用级**的：`CaptureController.init` 无条件启动它，
+     * 应用活着就一直监听，不跟着悬浮窗开关、也不跟着快捷方式走。
+     * 于是"上次的意图"这个概念不存在了，这个字段也就没有读者了。
+     *
+     * ⚠️ 老用户设备上 `capture_enabled` 这个键还会留在 SharedPreferences
+     * 里。**不用清理**：一个没人读的布尔值，几个字节，
+     * 而"启动时扫一遍偏好删旧键"反而会在每次冷启动多一次磁盘操作。
      */
-    var captureEnabled: Boolean
-        get() = prefs.getBoolean(KEY_CAPTURE_ENABLED, false)
-        set(value) {
-            prefs.edit().putBoolean(KEY_CAPTURE_ENABLED, value).apply()
-        }
 
     /*
      * ============================================================
@@ -455,6 +458,19 @@ class AppPrefs private constructor(context: Context) {
             prefs.edit().putString(KEY_EXPORT_METHOD, value.name).apply()
         }
 
+    /**
+     * 桌面快捷方式要启动的配置 id 清单（换行分隔）。
+     *
+     * 存在这里而不是塞进快捷方式的 Intent：Intent 一经钉到桌面就被系统
+     * **冻结**了，改它必须重新创建快捷方式。存偏好里就能"改了下次直接生效"。
+     * 详见 `ShortcutSettings`。
+     */
+    var shortcutConfigIds: String
+        get() = prefs.getString(KEY_SHORTCUT_CONFIG_IDS, "").orEmpty()
+        set(value) {
+            prefs.edit().putString(KEY_SHORTCUT_CONFIG_IDS, value).apply()
+        }
+
     companion object {
         /** 一行最少几个配置 */
         const val CONFIG_LIST_COLUMNS_MIN = 1
@@ -489,8 +505,7 @@ class AppPrefs private constructor(context: Context) {
         private const val KEY_BITMAP_FONTS = "bitmap_fonts"
         private const val KEY_IMPORTED_LIVE2D_MODELS = "imported_live2d_models"
         private const val KEY_OVERLAY_STATE_SYNCED = "overlay_state_synced"
-        private const val KEY_CAPTURE_ENABLED = "capture_enabled"
-        private const val KEY_OVERLAY_ENABLED = "overlay_enabled"
+            private const val KEY_OVERLAY_ENABLED = "overlay_enabled"
         private const val KEY_OVERLAY_ENABLED_IDS = "overlay_enabled_ids"
         private const val KEY_OVERLAY_LAYOUTS = "overlay_layouts"
         private const val KEY_OVERLAY_SCREEN_WIDTH = "overlay_screen_width"
@@ -508,6 +523,7 @@ class AppPrefs private constructor(context: Context) {
         private const val KEY_CONFIG_LIST_COMPACT_ACTIONS = "config_list_compact_actions"
         private const val KEY_CONFIG_LIST_COLUMNS = "config_list_columns"
         private const val KEY_EXPORT_METHOD = "export_method"
+        private const val KEY_SHORTCUT_CONFIG_IDS = "shortcut_config_ids"
 
         /**
          * 悬浮窗尚未被拖动过的位置标记。

@@ -554,6 +554,54 @@ fun ConfigEditorScreen(
 
                 CardDivider()
 
+                /*
+                 * ============================================================
+                 * 按键高度 / 按键间距 —— 放在「外观」，**不放在「行为」**
+                 * ============================================================
+                 * 用户的原话:"按键高度的滑块不应该加到行为这里，应该加到外观那吧，
+                 * 而且要注意位置……不要让按键高度滑块插在中间，因为刚刚发现 cps
+                 * 开启时多出的设置项内，按键高度就插进去了"。
+                 *
+                 * ⚠️ 教训是**别把全局项插进"开关展开的专属项"之间**:
+                 * 「描边」和「文字阴影」都是"开关 + 展开的专属项"，
+                 * 中间插一个无关的滑块会让它看起来像是那个开关的子项。
+                 * 所以这两个滑块紧跟在两个缩放之后、**在所有开关之前**。
+                 *
+                 * ⚠️ 两者的分工完全不同，界面文字必须说清:
+                 *
+                 * | 滑块 | 改什么 |
+                 * |---|---|
+                 * | **按键高度** | 键的**高度**（不影响宽度、不影响间距） |
+                 * | **按键间距** | 键的**位置**（窗口宽度会跟着变，**键本身不变大变小**） |
+                 *
+                 * ⚠️ 间距那条是用户专门纠正过的:"这个调整间距的效果也需要改进一下，
+                 * 不能调整组件大小，只是起到调整间距的效果，本质是改位置，尺寸不能改"。
+                 * 所以它的下限是 **0%**（键挨在一起），而不是"把键缩小"。
+                 */
+                SliderRow(
+                    label = "按键高度",
+                    value = editable.keyHeightPercent.toFloat(),
+                    valueRange = KEY_HEIGHT_PERCENT_MIN..KEY_HEIGHT_PERCENT_MAX,
+                    display = "${editable.keyHeightPercent}%",
+                    onValueChange = { value ->
+                        applyChange { it.copy(keyHeightPercent = value.roundToInt()) }
+                    },
+                )
+
+                CardDivider()
+
+                SliderRow(
+                    label = "按键间距",
+                    value = editable.keyGapPercent.toFloat(),
+                    valueRange = KEY_GAP_PERCENT_MIN..KEY_GAP_PERCENT_MAX,
+                    display = "${editable.keyGapPercent}%",
+                    onValueChange = { value ->
+                        applyChange { it.copy(keyGapPercent = value.roundToInt()) }
+                    },
+                )
+
+                CardDivider()
+
                 SwitchItem(
                     title = "圆角",
                     subtitle = "开启后可调整键帽圆角大小",
@@ -1000,7 +1048,18 @@ fun ConfigEditorScreen(
                 CardDivider()
 
                 SwitchItem(
-                    title = "显示 Shift 键",
+                    /*
+                     * ⚠️ 手柄样式下这个槽位是 **B 键**（`BTN_EAST`），不是 Shift ——
+                     * 布局用的是键盘布局，但键位映射换过了（见 `GamepadBindings`）。
+                     *
+                     * 标题不跟着变的话，手柄用户会看到一个"显示 Shift 键"的开关，
+                     * 而悬浮窗上那个位置明明写着 B —— 没人能猜到那是一回事。
+                     */
+                    title = if (KeyLayout.usesJoystickLayout(editable)) {
+                        "显示 B 键"
+                    } else {
+                        "显示 Shift 键"
+                    },
                     checked = editable.showShiftKey,
                     onCheckedChange = { enabled -> applyChange { it.copy(showShiftKey = enabled) } },
                 )
@@ -1015,15 +1074,87 @@ fun ConfigEditorScreen(
 
                 CardDivider()
 
+                /*
+                 * ============================================================
+                 * 手柄样式专属开关
+                 * ============================================================
+                 * 手柄样式（「标准」）的布局仍是键盘布局，只是 WASD 那两块
+                 * 换成了摇杆、并且多了扳机/肩键/A 键这些**手柄才有的键**。
+                 *
+                 * ⚠️ 只在手柄样式下显示 —— 键盘样式没有这些键，
+                 * 显示出来点了也没反应。
+                 *
+                 * ⚠️ 注意 **Shift 槽位在手柄样式里就是 A 键**（用户说过
+                 * "A 本身就指代 space"是误记，实际见 `GamepadBindings`）——
+                 * 所以标签要跟着样式变，见下面那个 `title`。
+                 */
+                if (KeyLayout.usesJoystickLayout(editable)) {
+                    SwitchItem(
+                        title = "显示肩键",
+                        subtitle = "LB / RB，显示在 LT / RT 那一行下面",
+                        checked = editable.showShoulderButtons,
+                        onCheckedChange = { enabled ->
+                            applyChange { it.copy(showShoulderButtons = enabled) }
+                        },
+                    )
+
+                    CardDivider()
+
+                    SwitchItem(
+                        title = "显示 A 键",
+                        subtitle = "独占一行，横跨两列",
+                        checked = editable.showAButton,
+                        onCheckedChange = { enabled ->
+                            applyChange { it.copy(showAButton = enabled) }
+                        },
+                    )
+
+                    CardDivider()
+
+                    SwitchItem(
+                        title = "A 键置顶",
+                        subtitle = "把 A 键那一行提到摇杆正下方（LT / RT 之上）",
+                        checked = editable.aButtonOnTop,
+                        /* 不显示 A 键时"置顶"没有意义 */
+                        enabled = editable.showAButton,
+                        onCheckedChange = { enabled ->
+                            applyChange { it.copy(aButtonOnTop = enabled) }
+                        },
+                    )
+
+                    CardDivider()
+
+                    SwitchItem(
+                        title = "摇杆互换",
+                        subtitle = "左右两个摇杆对调显示的数据",
+                        checked = editable.swapSticks,
+                        onCheckedChange = { enabled ->
+                            applyChange { it.copy(swapSticks = enabled) }
+                        },
+                    )
+
+                    CardDivider()
+                }
+
                 SwitchItem(
                     title = "显示 CPS",
-                    subtitle = "在鼠标键位旁显示每秒点击次数",
+                    subtitle = if (KeyLayout.usesJoystickLayout(editable)) {
+                        "在 LT / RT 上显示每秒扳机次数"
+                    } else {
+                        "在鼠标键位旁显示每秒点击次数"
+                    },
                     checked = editable.mouseCpsEnabled,
-                    enabled = editable.showMouseButtons,
+                    /*
+                     * ⚠️ **不再**用 `showMouseButtons` 做前置条件。
+                     *
+                     * 手柄样式的 LT/RT 也计数 CPS，而它的"显示鼠标按键"
+                     * 概念不同（槽位显示的是 LT/RT 的名字）——
+                     * 拿它当门槛会让手柄样式里 CPS 开关**点不动**。
+                     */
                     onCheckedChange = { enabled -> applyChange { it.copy(mouseCpsEnabled = enabled) } },
                 )
 
-                if (editable.mouseCpsEnabled && editable.showMouseButtons) {
+                if (editable.mouseCpsEnabled) {
                     CardDivider()
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
@@ -1033,11 +1164,32 @@ fun ConfigEditorScreen(
                         Spacer(modifier = Modifier.height(4.dp))
 
                         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                            val labels = listOf("模式 1", "模式 2", "模式 3")
+                            /*
+                             * ============================================================
+                             * ⚠️ 界面上只有**两个**模式，但内部编号是 `1` 与 `3`
+                             * ============================================================
+                             * 用户的原话:"干脆把 cps 模式 2 删掉吧，太多组件也不好
+                             * 安排，就留模式 1 和 3 就好了，模式 3 替代原来模式 2
+                             * 的位置，也就是原来的分段按钮，现在只保留模式 1、模式 2，
+                             * 但是模式 2 其实是现在的模式 3"。
+                             *
+                             * ⚠️ **不动内部编号**是有意的:`mouseCpsMode` 是
+                             * **持久化字段**，把 3 改成 2 会让所有老配置的模式
+                             * 静默变掉。所以只改**界面**（按钮数量与文字）。
+                             *
+                             * 老配置里存着 `2` 的会在**解码时迁移成 `3`**
+                             * （见 `JsonConfigCodec`）—— 否则它落在空模式上，
+                             * 表现就是"CPS 打开了但什么都不显示"。
+                             */
+                            val labels = listOf("模式 1", "模式 2")
+                            val modes = listOf(1, 3)
+
                             labels.forEachIndexed { index, label ->
                                 SegmentedButton(
-                                    selected = editable.mouseCpsMode == index + 1,
-                                    onClick = { applyChange { it.copy(mouseCpsMode = index + 1) } },
+                                    selected = editable.mouseCpsMode == modes[index],
+                                    onClick = {
+                                        applyChange { it.copy(mouseCpsMode = modes[index]) }
+                                    },
                                     shape = SegmentedButtonDefaults.itemShape(
                                         index = index,
                                         count = labels.size,
@@ -1052,9 +1204,8 @@ fun ConfigEditorScreen(
 
                         Text(
                             text = when (editable.mouseCpsMode) {
-                                1 -> "CPS 直接跟在 LMB / RMB 后面，数值为 0 时不显示"
-                                2 -> "LMB / RMB 下方单独一行显示 CPS"
-                                else -> "CPS 显示在 LMB / RMB 键内部（键会变高）"
+                                1 -> "CPS 直接跟在键面文字后面，数值为 0 时不显示"
+                                else -> "CPS 显示在键内部第二行（键会变高一点）"
                             },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1098,6 +1249,24 @@ fun ConfigEditorScreen(
                     }
                 }
             }
+        }
+
+        /*
+         * ============================================================
+         * 摇杆的专属分区（**只有手柄样式有**）
+         * ============================================================
+         * 用户的原话:"摇杆相关配置可以单独拉出来，不跟其他按键共同配置"，
+         * 位置指定为**「行为」与「键位映射」之间**。
+         *
+         * ⚠️ 放在 `} else {` **内部**:它属于"按键样式"这一套分区的一部分
+         * （手柄样式本来就是按键布局改了 WASD 那两块），
+         * 因此与"外观/颜色/行为"是并列的分区，顺序就按用户指定的位置。
+         *
+         * ⚠️ 内容在 `JoystickSections.kt`（本文件已经 1800 多行，
+         * 不再往里塞新东西）。
+         */
+        if (KeyLayout.usesJoystickLayout(editable)) {
+            joystickStyleSections(editable) { transform -> applyChange(transform) }
         }
 
         /*
@@ -1242,6 +1411,7 @@ fun ConfigEditorScreen(
                 KeyMappingEditor(
                     mappings = editable.keyMappings,
                     onChange = { mappings -> applyChange { it.copy(keyMappings = mappings) } },
+                    hiddenSlotIds = hiddenMappingSlots(editable),
                 )
             }
         }
@@ -1671,10 +1841,10 @@ private fun LazyListScope.customKeyStyleSections(
     item {
         SettingsCard {
             /*
-             * 只留"整体缩放"。
+             * 只留"整体缩放"与"整体透明度"。
              *
-             * 组件自己的大小在编辑器里逐个调；这个滑块管的是**整块画布**，
-             * 与其它样式含义一致：把内容与窗口一起放大。
+             * 组件自己的大小在编辑器里逐个调；这两个滑块管的是**整块画布**，
+             * 与其它样式含义一致：整体缩放把内容与窗口一起放大。
              */
             SliderRow(
                 label = "整体缩放",
@@ -1685,6 +1855,39 @@ private fun LazyListScope.customKeyStyleSections(
                 display = "${editable.scalePercent}%",
                 onValueChange = { value ->
                     applyChange { it.copy(scalePercent = value.toInt()) }
+                },
+            )
+
+            CardDivider()
+
+            /*
+             * ============================================================
+             * 整体透明度
+             * ============================================================
+             * 用户的原话:"自定义 key 的配置编辑页加一个透明度调整
+             * （控制整体透明度），不碰自定义编辑页"。
+             *
+             * ⚠️ 它是**整块画布**一起淡（所有组件），与 Live2D 那个
+             * "模型透明度"是同一种语义 —— 两个样式都只有整体一项。
+             *
+             * ⚠️ 这里**不提供**按键样式那种按元素分的八个滑块:
+             * 自定义 Key 的组件样式是每个组件自己的，在编辑器里逐个调，
+             * 全局再放八个只会让人分不清谁盖过谁。
+             *
+             * ⚠️ 下限 0（允许完全隐去）:与按键样式的透明度一致 ——
+             * 有独立滑块之后，"我不想要它"是合理需求。
+             *
+             * ⚠️ 渲染端用**一层 `graphicsLayer` 的整体 alpha**，不是把
+             * alpha 乘进每个组件的颜色 —— 见 `CustomKeyCanvas` 的说明。
+             */
+            SliderRow(
+                label = "整体透明度",
+                value = editable.customOpacityPercent.toFloat(),
+                valueRange = 0f..100f,
+                steps = 19,
+                display = "${editable.customOpacityPercent}%",
+                onValueChange = { value ->
+                    applyChange { it.copy(customOpacityPercent = value.toInt()) }
                 },
             )
         }
@@ -1818,7 +2021,7 @@ private const val CONVERT_CONFIRM_DELAY_MS = 1_000L
  * 与自定义编辑页共用同一份，"点数值改精确值"对两边同时生效。
  */
 @Composable
-private fun SliderRow(
+internal fun SliderRow(
     label: String,
     value: Float,
     valueRange: ClosedFloatingPointRange<Float>,

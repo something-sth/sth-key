@@ -21,6 +21,8 @@ import com.something.sthkey.domain.custom.CustomLayout
 import com.something.sthkey.domain.style.KeyLayout
 import com.something.sthkey.domain.style.OverlayStyleRegistry
 import com.something.sthkey.domain.style.StyleId
+import com.something.sthkey.ui.overlay.gamepad.Gamepad1Content
+import com.something.sthkey.ui.overlay.gamepad.Gamepad2Content
 import kotlinx.coroutines.delay
 
 /**
@@ -75,24 +77,47 @@ fun OverlayContent(
      * CPS 数值：只在**真的用到**时定时刷新。
      *
      * ============================================================
-     * ⚠️ 判据不能只看 Key 样式的那个开关（这里踩过坑）
+     * ⚠️ 判据是"这份布局里到底有没有 CPS 槽位"
      * ============================================================
-     * 原来这里写的是 `if (!current.mouseCpsEnabled) return` —— 那是 Key 样式的
-     * 配置项。自定义 Key 的组件可以绑 CPS，但它的 `mouseCpsEnabled` 是 false，
-     * 于是刷新循环根本不起来，数字**永远停在初始值不动**。
+     * 这里连着踩过两次坑，都是**判据与渲染不一致**造成的:
      *
-     * 正确判据是"这份配置到底用不用 CPS"，由样式自己回答：
-     * - Key 样式 → 看 mouseCpsEnabled（它还有"显示哪个位置"的额外逻辑）；
-     * - 自定义 Key → 看有没有哪个组件的**文字里写了 `(cps)` / `(cps2)`**
-     *   （`CustomLayout.usesCps`）。那就是"显示 CPS"这件事本身，
-     *   与渲染用的是同一个判据 —— 两边判据不同就会出现"定时器在跑但屏幕上没东西"。
+     * 1. 第一版只看 `mouseCpsEnabled` —— 那是 Key 样式的配置项。
+     *    自定义 Key 的组件可以绑 CPS，但它的 `mouseCpsEnabled` 是 false，
+     *    于是刷新循环根本不起来，数字**永远停在初始值**；
+     * 2. 第二版按样式分支（Key 看开关、自定义看组件文字），
+     *    ⚠️ 但**漏了「手柄（标准）」样式** —— 它走的是 `KeyLayout`，
+     *    于是"显示 CPS 打开后数字不动"（用户报的"CPS 开关无效"）。
+     *
+     * 现在改成**问布局本身**:
+     *
+     * - 走 `KeyLayout` 的样式（键盘 / 标准）→ 看 `keys()` 里
+     *   有没有 `CPS_L` / `CPS_R` 槽位。那就是"会不会画 CPS"这件事本身，
+     *   与渲染用的是**同一个函数、同一个判据**；
+     * - 自定义 Key → 看有没有组件的文字里写了 `(cps)` / `(cps2)`。
+     *
+     * ⚠️ 关键原则:**判据必须与渲染同源**。两边各写一套的话，
+     * 表现就是"定时器在跑但屏幕上没东西"或者反过来 ——
+     * 而这两种都极难从现象联想到原因。
      *
      * 另外数值取自**这份配置自己的计数器**（CaptureSession.cpsSnapshotOf）——
      * 用全局那个的话，别的配置也在数同一个位置时，数字会翻倍。
      */
     val cpsRefreshKey = when (current.styleId) {
         StyleId.CUSTOM_KEY -> CustomLayout.usesCps(current.custom.components)
-        else -> current.mouseCpsEnabled
+
+        /*
+         * ⚠️ 模式 1 的 CPS 接在主文字后面、**不在槽位里** —— 所以
+         * `mouseCpsEnabled` 也要算进去，不然模式 1 不会刷新。
+         *
+         * ⚠️ 用 `remember(config)` 缓存:这个表达式会跑一遍 `keys()`，
+         * 而 `OverlayContent` 是悬浮窗的根组合函数、重组很频繁 ——
+         * 每次重组都算一遍布局是白费功夫。
+         */
+        else -> remember(current) {
+            current.mouseCpsEnabled || KeyLayout.keys(current).any {
+                it.slotId == KeyLayout.Id.CPS_L || it.slotId == KeyLayout.Id.CPS_R
+            }
+        }
     }
     val configId = current.id
 
@@ -120,7 +145,40 @@ fun OverlayContent(
          * 按样式分流。（Live2D 不在这里 —— 它的宿主是 WebView，
          * 由 OverlayService 直接作为窗口根视图挂上去，见下面那段注释。）
          */
-        if (current.styleId == StyleId.CUSTOM_KEY) {
+        val sticks by CaptureSession.sticks.collectAsState()
+
+        if (current.styleId == StyleId.GAMEPAD1 || KeyLayout.usesJoystickLayout(current)) {
+            /*
+             * 手柄样式。
+             *
+             * ⚠️ 它们是**唯二**消费 [CaptureSession.sticks] 的样式 ——
+             * 那个通道装的是归一化后的摇杆状态（`-1..1`）。
+             * 键盘样式与自定义 Key 不看它（它们只有"按下/没按下"）。
+             *
+             * ⚠️ 判据用 `KeyLayout.usesJoystickLayout` 而不是
+             * `styleId == GAMEPAD2` —— 那个函数是"这个样式走不走
+             * 键盘布局 + 摇杆"的**唯一判据**，布局层与渲染层共用它。
+             * 这里再写一遍比较，加样式时就会漏一处。
+             */
+            val stickScale = factor * KeyLayout.uiScale(current)
+
+            if (current.styleId == StyleId.GAMEPAD1) {
+                Gamepad1Content(
+                    sticks = sticks,
+                    pressedCodes = pressedKeys,
+                    scale = stickScale,
+                )
+            } else {
+                Gamepad2Content(
+                    config = current,
+                    sticks = sticks,
+                    pressedCodes = pressedKeys,
+                    scale = stickScale,
+                    /* CPS 数值要传:鼠标键的 CPS 显示与键盘样式同一套 */
+                    cpsBySlot = cps,
+                )
+            }
+        } else if (current.styleId == StyleId.CUSTOM_KEY) {
             /*
              * 自定义 Key：画布上的一切由组件列表决定。
              *
@@ -160,6 +218,7 @@ fun OverlayContent(
                 slotIdOf = { code -> KeyLayout.codeToSlotMap(current)[code] },
                 baseWidth = windowed.bounds.width,
                 baseHeight = windowed.bounds.height,
+                overallAlpha = current.customOpacityPercent.coerceIn(0, 100) / 100f,
                 /*
                  * ⚠️ 必须自适应。
                  *

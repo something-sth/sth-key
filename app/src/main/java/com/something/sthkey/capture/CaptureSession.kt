@@ -60,6 +60,52 @@ object CaptureSession {
     /** 当前按下的输入键码集合 */
     val pressedKeys: StateFlow<Set<Int>> = _pressedKeys.asStateFlow()
 
+    /**
+     * 手柄的模拟量状态（摇杆、方向键）。
+     *
+     * ============================================================
+     * ⚠️ 为什么是**平行**的一条通道，而不是塞进 [pressedKeys]
+     * ============================================================
+     * [pressedKeys] 是**布尔**的（哪些键按着），而摇杆是**连续量**
+     * （`-1f .. 1f`）—— 塞不进去。
+     *
+     * 而给它换一种形状等于**动半个项目**：按键样式的渲染、CPS 统计、
+     * 桌面快捷方式、键位映射，全都在读 `pressedKeys`。
+     * 平行通道的代价只是多一个 `StateFlow`（几十字节），
+     * 换来的是**现有功能零风险**。
+     *
+     * ============================================================
+     * 为什么值已经是**归一化 + 去过死区**的
+     * ============================================================
+     * 消费方（悬浮窗）不该知道"这台手柄的 ADC 是几位的"、
+     * "它的死区是多少" —— 那些是设备细节，属于采集层。
+     * 到了这里只剩"摇杆推到了哪里"，`-1f .. 1f`。
+     */
+    private val _sticks = MutableStateFlow(StickState())
+
+    /** 当前摇杆 / 方向键状态 */
+    val sticks: StateFlow<StickState> = _sticks.asStateFlow()
+
+    /** 写左摇杆 */
+    fun setLeftStick(x: Float, y: Float) {
+        _sticks.value = _sticks.value.copy(lx = x, ly = y)
+    }
+
+    /** 写右摇杆 */
+    fun setRightStick(x: Float, y: Float) {
+        _sticks.value = _sticks.value.copy(rx = x, ry = y)
+    }
+
+    /** 写方向键（轴报法的手柄走这里；按键报法的走普通按键通道） */
+    fun setHat(x: Float, y: Float) {
+        _sticks.value = _sticks.value.copy(hatX = x, hatY = y)
+    }
+
+    /** 清空模拟量（停止采集、设备断开时用） */
+    fun clearSticks() {
+        _sticks.value = StickState()
+    }
+
     /** 采集状态（未监听 / 启动中 / 监听中 / 失败） */
     private val _state = MutableStateFlow(CaptureState.IDLE)
     val state: StateFlow<CaptureState> = _state.asStateFlow()

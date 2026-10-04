@@ -1,4 +1,4 @@
-﻿package com.something.sthkey.ui.feature.home
+package com.something.sthkey.ui.feature.home
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -17,11 +17,20 @@ import androidx.compose.material.icons.filled.DashboardCustomize
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import android.widget.Toast
+import androidx.compose.material.icons.filled.AddToHomeScreen
+import com.something.sthkey.data.shortcut.ShortcutPublisher
+import com.something.sthkey.data.shortcut.ShortcutSettings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import com.something.sthkey.data.shortcut.ShortcutIcons
+import java.io.File
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material.icons.filled.Refresh
@@ -89,10 +98,23 @@ private const val SUGGESTED_MAX_WINDOWS = 3
  * 去掉「显示按键悬浮窗」单一开关与「当前配置」，改成**所有配置的列表**：
  * 每一行是 `编辑按钮 + 配置名 + 开关`。
  *
- * - 开任意一个开关 → 启动监听；连续开多个 → **只启动一次**（服务层幂等）
- * - **全部关闭**才停止监听
+ * - 开任意一个开关 → 显示那个悬浮窗；连续开多个 → **只启动一次服务**（服务层幂等）
+ * - **全部关闭**只停止悬浮窗服务，**不停监听**（采集是应用级的，见下）
  * - 编辑按钮**仅在该悬浮窗开启时可点**，未开启时置灰 ——
  *   它的内容是"这个窗口在屏幕上怎么摆"，窗口都没开时调它没有意义
+ *
+ * ============================================================
+ * ⚠️ 采集（监听）不再跟着悬浮窗开关走
+ * ============================================================
+ * 只要应用活着，监听就一直进行：
+ *
+ * - 应用启动时自动开（`CaptureController.init` 无条件启动）；
+ * - 关掉全部悬浮窗**不停**它；
+ * - 调试页留了一个"重启监听"按钮，用来在出问题时手动重来。
+ *
+ * 为什么这样更好：全局监听下"插上设备就能用"本来就不需要任何操作，
+ * 而"采集跟着窗口走"反而会让**刚开窗口那一瞬间的按键丢掉**，
+ * 也会让"先插设备、再开窗口"的用户疑惑设备怎么没反应。
  *
  * 主页仍然**只做开关**：窗口怎么建、怎么摆全在 [OverlayService] 里。
  * 采集状态（没授权、服务没起来）以"状态卡"形式提示，但不提供复杂操作。
@@ -196,10 +218,70 @@ fun HomeScreen(
         }
     }
 
+    /*
+     * ============================================================
+     * 桌面快捷方式
+     * ============================================================
+     * 已勾选的配置从偏好里读 —— 快捷方式的 Intent 里**不带**配置清单
+     * （它钉到桌面就被系统冻结了，改不了），清单存在偏好里，
+     * 所以"改选择"只要更新偏好，不必让用户重新创建快捷方式。
+     */
+    val shortcutContext = LocalContext.current
+    var showShortcutDialog by remember { mutableStateOf(false) }
+
+
+    val shortcutConfigs = remember(configs) { configs.map { it.id to it.name } }
+
+    /*
+     * 用户自己传的图标。
+     *
+     * ⚠️ 只存在**内存**里、不落偏好：它是"这一次创建快捷方式想用哪张图"，
+     * 而快捷方式的图标在钉下去那一刻就被系统读走了 —— 之后留着这份文件
+     * 没有任何用处，反而会在私有目录里越积越多。
+     *
+     * 但**文件必须落盘**（`ShortcutIcons.saveCustomIcon`）：`IconCompat`
+     * 需要一份能解码的数据，而 SAF 给的 Uri 读权限是临时的。
+     */
+    var customIconFile by remember { mutableStateOf<File?>(null) }
+    var customIconBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+
+    val iconPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+
+        val file = ShortcutIcons.saveCustomIcon(shortcutContext, uri)
+        if (file == null) {
+            Toast.makeText(shortcutContext, "这张图片读不出来，换一张试试", Toast.LENGTH_LONG).show()
+            return@rememberLauncherForActivityResult
+        }
+
+        customIconFile = file
+        customIconBitmap = android.graphics.BitmapFactory.decodeFile(file.absolutePath)
+    }
+
     ScreenScaffold(
         title = "主页",
         subtitle = "打开某个配置的开关，即可在屏幕上看到它的悬浮窗（可同时开多个）",
         modifier = modifier,
+        actions = {
+            /*
+             * 与配置页的「导入配置」同一款按钮：文字比孤零零一个图标
+             * 更容易看懂，"快捷方式"这个图标本身没有公认语义。
+             */
+            OutlinedButton(
+                onClick = { showShortcutDialog = true },
+                modifier = Modifier.padding(end = 8.dp),
+            ) {
+                Icon(
+                    Icons.Default.AddToHomeScreen,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("桌面快捷方式")
+            }
+        },
     ) { innerPadding ->
         /*
          * ============================================================
@@ -335,6 +417,97 @@ fun HomeScreen(
 
     /*
      * ============================================================
+     * 桌面快捷方式设置
+     * ============================================================
+     * 勾选哪些配置 → 写入偏好 → 请求钉到桌面。
+     *
+     * ⚠️ **先写偏好、再钉快捷方式**，顺序不能反。
+     * 快捷方式的 Intent 是冻结的，它运行时读的是偏好；偏好没写好就钉，
+     * 用户第一次点那个图标会启动一个空清单。
+     */
+    if (showShortcutDialog) {
+        /*
+         * ⚠️ 刻意**不读"已创建了哪些快捷方式"**。
+         *
+         * 第一版做过一个列表 + 删除按钮，但应用**删不掉桌面上那个图标**
+         * （那是启动器管的），结果是"列表里没了、图标还在，而且已经变成
+         * 空壳"。删不干净比没有删除功能更糟，所以整块去掉了 ——
+         * 要删就让用户在桌面上长按删。
+         *
+         * 所以每次打开这个窗口都是"新建一个"。
+         */
+        val iconOptions = remember(showShortcutDialog, configs) {
+            buildIconOptions(shortcutContext, configs)
+        }
+
+        ShortcutSetupDialog(
+            configs = shortcutConfigs,
+            iconOptions = iconOptions,
+            customIconBitmap = customIconBitmap,
+            onPickCustomIcon = { iconPickerLauncher.launch(arrayOf("image/*")) },
+            onConfirm = { disableAll, configIds, iconId ->
+                showShortcutDialog = false
+
+                val icon = resolveIcon(
+                    context = shortcutContext,
+                    selectedId = iconId,
+                    configs = configs,
+                    customIconFile = customIconFile,
+                )
+
+                val error = if (disableAll) {
+                    /* 关闭类只允许一个，id 固定 */
+                    ShortcutPublisher.pinDisableShortcut(shortcutContext, "关闭悬浮窗", icon)
+                } else {
+                    /*
+                     * 每次都分配一个**新** id —— 于是每次都是"再加一个图标"，
+                     * 而不是替换掉已有的那一个。
+                     */
+                    val id = ShortcutSettings.nextLauncherId(shortcutContext)
+
+                    /*
+                     * 顺序：先写清单，再钉。
+                     *
+                     * ⚠️ Intent 钉下去就冻结了，它运行时读的是偏好 ——
+                     * 偏好没写好就钉，用户第一次点那个图标会启动一个空清单。
+                     */
+                    ShortcutSettings.setLauncherConfigIds(shortcutContext, id, configIds)
+                    ShortcutPublisher.pinLaunchShortcut(
+                        context = shortcutContext,
+                        shortcutId = id,
+                        /*
+                         * 名称：一份配置就用它的名字，多份就用数量。
+                         *
+                         * ⚠️ 名称与图标一样，在钉下去那一刻定下，之后改配置
+                         * **不会**自动更新 —— 这是系统限制。界面上有说明。
+                         */
+                        label = if (configIds.size == 1) {
+                            configs.firstOrNull { it.id == configIds.first() }?.name
+                                ?: "启动悬浮窗"
+                        } else {
+                            "启动 ${configIds.size} 个悬浮窗"
+                        },
+                        icon = icon,
+                    )
+                }
+
+                /*
+                 * 失败必须说清：否则用户点完确定、桌面什么都没多出来，
+                 * 只能怀疑是不是坏了。最常见的原因是启动器不支持
+                 * （部分国产 ROM 的自研桌面）。
+                 */
+                Toast.makeText(
+                    shortcutContext,
+                    error ?: "已请求添加到桌面，请在系统弹窗里确认",
+                    Toast.LENGTH_LONG,
+                ).show()
+            },
+            onDismiss = { showShortcutDialog = false },
+        )
+    }
+
+    /*
+     * ============================================================
      * 悬浮窗设置弹窗
      *
      * 只在这个窗口开着时才可能打开（编辑按钮那时才可点），
@@ -464,6 +637,7 @@ private fun styleIcon(config: KeyStrokesConfig) = when (
     OverlayStyleRegistry.ICON_LIVE2D -> Icons.Default.Person
     OverlayStyleRegistry.ICON_KEYBOARD -> Icons.Default.Keyboard
     OverlayStyleRegistry.ICON_CUSTOM -> Icons.Default.DashboardCustomize
+            OverlayStyleRegistry.ICON_GAMEPAD -> Icons.Default.SportsEsports
     else -> Icons.Default.Tune
 }
 

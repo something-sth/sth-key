@@ -279,14 +279,43 @@ fun CustomKeyCanvas(
      * 因为它有一条"只缩小、不放大"的规则 —— 不留上限时内容会被撑满预览框。
      */
     maxFitScale: Float = Float.MAX_VALUE,
+    /**
+     * **整体透明度**（0..1）。
+     *
+     * ============================================================
+     * ⚠️ 只对自定义 Key 样式生效，而且只影响"画出来的东西"
+     * ============================================================
+     * 用户的原话:"自定义 key 的配置编辑页加一个透明度调整（控制整体透明度）"。
+     *
+     * ⚠️ 作用点是**画布里的内容**（按键与文字），不是窗口本身 ——
+     * 窗口级 alpha 看起来一样，但那会连窗口的触摸/合成一起改，
+     * 而且换样式时不好解释。内容级只影响眼睛看到的东西。
+     *
+     * ⚠️ 用 [Modifier.graphicsLayer] 而不是把 alpha 逐个乘进每个组件的颜色:
+     * 后者要给"组件底色 / 文字色 / 描边色 / 阴影色 / CPS 文字"每一处都乘一遍，
+     * 漏一处就会出现"调了透明度，但某个东西不跟着淡"。而且描边与阴影
+     * **叠加**的地方会重复相乘，比别处更淡。
+     *
+     * ⚠️ `alpha >= 1` 时**不挂这个 modifier** —— 绝大多数配置都是 100%，
+     * 不必为它们多开一层离屏合成。
+     */
+    overallAlpha: Float = 1f,
 ) {
+    val alphaLayer = if (overallAlpha < 1f) {
+        Modifier.graphicsLayer { alpha = overallAlpha.coerceIn(0f, 1f) }
+    } else {
+        Modifier
+    }
+
     if (!fitToContainer) {
         CanvasMeasurement.recordExact(
             widthPx = baseWidth * scale * LocalDensity.current.density,
             heightPx = baseHeight * scale * LocalDensity.current.density,
         )
         Box(modifier = modifier.size((baseWidth * scale).dp, (baseHeight * scale).dp)) {
-            CustomKeyCanvasContent(settings, pressedCodes, scale, cpsBySlot, slotIdOf)
+            Box(modifier = alphaLayer) {
+                CustomKeyCanvasContent(settings, pressedCodes, scale, cpsBySlot, slotIdOf)
+            }
         }
         return
     }
@@ -312,7 +341,9 @@ fun CustomKeyCanvas(
                 )
                 .align(Alignment.Center),
         ) {
-            CustomKeyCanvasContent(settings, pressedCodes, fittedScale, cpsBySlot, slotIdOf)
+            Box(modifier = alphaLayer) {
+                CustomKeyCanvasContent(settings, pressedCodes, fittedScale, cpsBySlot, slotIdOf)
+            }
         }
     }
 }

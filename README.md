@@ -68,6 +68,12 @@ Live2D 模型一起打包。
 配置列表的排版可以在设置页调：是否显示描述、是否把导出/复制/删除收进
 「更多」菜单、一行显示几个。
 
+### 桌面快捷方式
+
+在主页点右上角就能创建桌面图标：**点它启动悬浮窗并重启监听，全程不打开应用界面**。
+可以指定这个图标启动哪几份配置，图标也能自己选（每份配置一张、或自己传图）。
+另有一个「一键关闭所有悬浮窗」的快捷方式。
+
 ---
 
 ## 环境要求
@@ -121,11 +127,13 @@ app/src/main/java/com/something/sthkey/
 | 文档 | 内容 |
 |---|---|
 | [docs/shizuku.md](docs/shizuku.md) | Shizuku 通道选型、直连后端、启动策略与踩过的坑 |
+| [docs/input-capture.md](docs/input-capture.md) | 输入读取层：`getevent` 命令与解析、热插拔、设备拔出时的按键释放 |
 | [docs/custom-key.md](docs/custom-key.md) | 自定义 Key 的布局模型与坐标系 |
 | [docs/multi-overlay.md](docs/multi-overlay.md) | 多重悬浮窗、位置与边界 |
 | [docs/live2d.md](docs/live2d.md) | Live2D 样式契约与模型处理 |
 | [docs/bitmap-font.md](docs/bitmap-font.md) | 图片字体（Minecraft 位图字体）：格式规范、截取算法、缩放与阴影，以及踩过的坑 |
 | [docs/config-package.md](docs/config-package.md) | 配置包（`.sthkey`）：包结构、导出/导入、外部分享导入的接法 |
+| [docs/shortcut.md](docs/shortcut.md) | 桌面快捷方式：不进前台的启动路径、动作契约、图标生成 |
 
 ---
 

@@ -1,3 +1,18 @@
 <resources>
     <string name="app_name">sth key</string>
+
+    <!--
+        桌面快捷方式的名称。
+
+        ⚠️ 这里只是**声明用的兜底值**：真正钉到桌面时用的是
+        `ShortcutInfoCompat.Builder.setShortLabel()` 里给的名字
+        （见 ShortcutPublisher），那份才是用户看到的。
+
+        两份都留着是因为 `shortcuts.xml` 缺少 label 会让资源校验失败，
+        而那个文件是给系统看"这个应用可能创建哪些快捷方式"的清单。
+    -->
+    <string name="shortcut_launch_short">启动悬浮窗</string>
+    <string name="shortcut_launch_long">启动这组配置的悬浮窗</string>
+    <string name="shortcut_disable_short">关闭悬浮窗</string>
+    <string name="shortcut_disable_long">关闭所有悬浮窗</string>
 </resources>

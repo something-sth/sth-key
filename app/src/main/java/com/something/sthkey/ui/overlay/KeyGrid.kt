@@ -86,7 +86,7 @@ fun KeyGrid(
 ) {
     Box(
         modifier = modifier.size(
-            (KeyLayout.BASE_WIDTH * scale).dp,
+            (KeyLayout.baseWidth(config) * scale).dp,
             // 高度按内容算，不能用固定值 —— 否则 Shift + CPS 行同时开启时底部会被裁
             (KeyLayout.baseHeight(config, cpsBySlot) * scale).dp,
         ),
@@ -101,6 +101,39 @@ fun KeyGrid(
             )
         }
     }
+}
+
+/**
+ * 单独画**一个**键帽。
+ *
+ * ============================================================
+ * 为什么要有这个入口
+ * ============================================================
+ * 「手柄（标准）」样式（gamepad2）的布局**就是键盘样式**：
+ * 同样的行结构、同样的鼠标键与空格、同样的字号/描边/CPS ——
+ * 唯一区别是 WASD 那块换成了一个摇杆。
+ *
+ * 所以它需要"自己摆位置、但要画得**与键盘样式逐像素一致**"。
+ * 把 [OverlayKey] 单独暴露出来做这件事，比让它去复制一份绘制代码好:
+ * 复制的那份迟早会与键盘样式分叉（改了键盘忘了手柄），
+ * 而分叉的表现是"两个样式看起来不一样"，很难说清哪个才是对的。
+ *
+ * ⚠️ 位置由调用方给（[centerX] / [topY] 都是**基础坐标**），
+ * 因为 gamepad2 的槽位是从 [KeyLayout.keys] 拿的 —— 与键盘样式同源。
+ */
+@Composable
+internal fun OverlayKeySlot(
+    box: KeyBox,
+    pressedCodes: Set<Int>,
+    config: KeyStrokesConfig,
+    scale: Float,
+) {
+    OverlayKey(
+        box = box,
+        pressed = box.codes.any { it in pressedCodes },
+        config = config,
+        scale = scale,
+    )
 }
 
 /**

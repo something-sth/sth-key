@@ -8,6 +8,9 @@ import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.config.defaultConfig
 import com.something.sthkey.domain.config.duplicate
 import com.something.sthkey.domain.config.resetParamsToDefault
+import com.something.sthkey.domain.config.gamepad2KeyMappings
+import com.something.sthkey.domain.config.defaultKeyMappings
+import com.something.sthkey.domain.style.StyleId
 import com.something.sthkey.domain.style.OverlayStyleRegistry
 import java.util.UUID
 
@@ -154,12 +157,33 @@ class ConfigStore private constructor(context: Context) {
         description: String,
         styleId: String,
     ): KeyStrokesConfig {
+        val resolvedStyle = OverlayStyleRegistry.resolveOrDefault(styleId).id
+
+        /*
+         * ⚠️ 键位映射要按样式给**不同的默认值**
+         * ============================================================
+         * 「手柄（标准）」（gamepad2）的槽位显示的是键鼠的名字，
+         * 但实际该绑**手柄**的键（基岩版:RT=攻击、LT=挖掘、A=跳跃）。
+         *
+         * 用键盘那套默认值（`BTN_LEFT` / `BTN_RIGHT` / `KEY_SPACE`）的话，
+         * 用户拿手柄按半天**一个键都不会亮** —— 而他会以为是监听坏了。
+         *
+         * ⚠️ 必须**在创建时**换，不能只改 `defaultKeyMappings()` ——
+         * 那个是键盘样式的默认值，改了会连累键盘用户。
+         */
+        val mappings = if (resolvedStyle == StyleId.GAMEPAD2) {
+            gamepad2KeyMappings()
+        } else {
+            defaultKeyMappings()
+        }
+
         val created = defaultConfig().copy(
             id = UUID.randomUUID().toString(),
             name = name.trim().ifEmpty { "新配置" },
             description = description.trim(),
             builtIn = false,
-            styleId = OverlayStyleRegistry.resolveOrDefault(styleId).id,
+            styleId = resolvedStyle,
+            keyMappings = mappings,
         )
         configs.add(created)
         persist()

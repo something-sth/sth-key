@@ -42,7 +42,6 @@ import java.io.InputStream
  *
  * 字节码证实了这一点（方法名在常量池里，但可见性是 private）。
  * 官方 javadoc 还写明 **"planned to be removed from Shizuku API 14"**。
- * 也就是说 Axon-Input 手写事务号不是炫技，是被逼的。
  *
  * ============================================================
  * ⚠️ 代价与脆弱点（升级 Shizuku 前先看这里）
