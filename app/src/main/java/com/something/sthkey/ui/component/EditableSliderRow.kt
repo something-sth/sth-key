@@ -53,11 +53,36 @@ import androidx.compose.runtime.LaunchedEffect
  * 并禁用确定 —— 静默截断会让用户以为"输入生效了"，
  * 然后对着一个自己没输过的值发懵。
  *
- * @param display 滑条旁显示的文本（可以带单位，例如 `45%`）；
- *   打开编辑框时取其中的数字部分
+ * @param display 滑条旁显示的文本（可以带单位，例如 `45%`）
+ * @param editValue 打开编辑框时**填进去的数字**；`null` = 用 [value] 本身
  * @param suffix 单位后缀（`%` / `°` 等）；空表示纯数字
  * @param step 输入框的粒度：1 = 整数；0.1 = 允许一位小数
  * @param onBeginDrag 拖动开始（用来合并撤销记录）；不拖滑块时不会被调用
+ *
+ * ============================================================
+ * ⚠️⚠️ `editValue` 是干什么的（"显示 45% 但输入框里是 0.225"那个 bug）
+ * ============================================================
+ * 有些字段在数据里存的是 **`0..1` 的比例**（`JoystickStyle.cornerRatio` 等），
+ * 而界面上习惯用**百分比**显示。默认行为下:
+ *
+ * | 位置 | 显示 |
+ * |---|---|
+ * | 滑块旁边（[display]） | `45%` |
+ * | **点开输入框**（`value`） | **`0.225`** ← 对不上 |
+ *
+ * ⚠️ 用户的原话:"手柄摇杆的圆角滑块是百分比调整，但是点击数字弹出输入框，
+ * 数值居然不一样……不明不白的"。
+ *
+ * ⚠️ 这里**不用"加个 suffix 后缀"糊过去** —— 那只是让输入框多显示一个 `%`，
+ * 里面的数字仍然是 `0.225`，用户还是得自己换算。
+ *
+ * 正解是让调用方**明确给出"输入框该填什么"**:
+ * - 单位一致的字段（绝大多数）→ 不传，`editValue` 默认就是 `value`；
+ * - 存比例、显示百分比的字段 → 传**换算后的显示值**，
+ *   并在 `onValueChange` 里换算回去。
+ *
+ * ⚠️ 参数叫 `editValue` 而不是"自动按 suffix 猜"是刻意的:
+ * 换算比例只有调用方知道（`÷100`？`÷1000`？），组件去猜必然猜错。
  */
 @Composable
 fun EditableSliderRow(
@@ -70,6 +95,7 @@ fun EditableSliderRow(
     steps: Int = 0,
     suffix: String = "",
     step: Float = 1f,
+    editValue: Float? = null,
     labelStyle: TextStyle? = null,
     valueStyle: TextStyle? = null,
     onBeginDrag: (() -> Unit)? = null,
@@ -134,7 +160,11 @@ fun EditableSliderRow(
     if (showEditor) {
         NumberEditorDialog(
             label = label.ifBlank { display },
-            initial = value,
+            /*
+             * ⚠️ 填进输入框的是 [editValue]（给了的话），不是滑块自己的 `value` ——
+             * 这是"显示 45% 但输入框里是 0.225"那个问题的修复点。
+             */
+            initial = editValue ?: value,
             range = range,
             suffix = suffix,
             step = step,

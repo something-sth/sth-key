@@ -11,6 +11,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.ui.draw.clipToBounds
+import com.something.sthkey.core.prefs.CanvasColorPreset
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
@@ -80,8 +84,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.something.sthkey.core.prefs.AppPrefs
 import com.something.sthkey.core.log.AppLog
 import com.something.sthkey.domain.config.KeyStrokesConfig
+import com.something.sthkey.domain.custom.JoystickDirection
+import com.something.sthkey.domain.custom.DEFAULT_KEYBOARD_JOYSTICK_KEYS
+import com.something.sthkey.domain.keys.KeyCodes
+import com.something.sthkey.ui.component.KeyPickerDialog
+import com.something.sthkey.domain.custom.JoystickComponent
 import com.something.sthkey.domain.custom.CustomComponent
 import com.something.sthkey.domain.custom.CustomLayout
 import com.something.sthkey.domain.custom.CustomLayoutDraft
@@ -172,9 +182,22 @@ fun CustomLayoutEditorScreen(
     showWindowFrame: Boolean = true,
     /** 画布上是否画出**当前选中组件**的边框 */
     showSelectedFrame: Boolean = true,
+    /**
+     * 画布**底色**（预设之一）。
+     *
+     * ⚠️ 与上面两个开关**同一个性质**:它是"怎么看画布"的偏好，
+     * 存在应用级偏好里（`AppPrefs.editorCanvasColor`），
+     * 所以**不随配置导出**、也不影响悬浮窗与预览。
+     *
+     * ⚠️ 类型是 [CanvasColorPreset] 而不是 `Int` ——
+     * 存的是**预设 id**，不是色值（用户提的:"这样更方便存储"）。
+     */
+    canvasColor: CanvasColorPreset = CanvasColorPreset.DEFAULT,
     /** 「更多」里切换这两个全局选项 */
     onShowWindowFrameChange: (Boolean) -> Unit = {},
     onShowSelectedFrameChange: (Boolean) -> Unit = {},
+    /** 「更多」里改画布底色（**分段按钮**，只在这几个预设之间切换） */
+    onCanvasColorChange: (CanvasColorPreset) -> Unit = {},
     onPanelSideChange: (EditorPanelSide) -> Unit = {},
 ) {
     /*
@@ -189,6 +212,13 @@ fun CustomLayoutEditorScreen(
         mutableStateOf<String?>(draft.current.components.firstOrNull()?.id)
     }
     var editingKeysFor by remember { mutableStateOf<KeyComponent?>(null) }
+    /*
+     * ⚠️ 「摇杆-键盘」的四个键位:必须带**第几个方向** —— 只存组件的话，
+     * 点「下」也会改到「上」（与 `editingCpsKeysFor` 带占位符下标同一个理由）。
+     */
+    var editingJoystickKeyFor by remember {
+        mutableStateOf<Pair<JoystickComponent, Int>?>(null)
+    }
     var editingCpsKeysFor by remember { mutableStateOf<Pair<TextComponent, Int>?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
     var showResetDialog by remember { mutableStateOf(false) }
@@ -424,6 +454,7 @@ fun CustomLayoutEditorScreen(
             onPickBitmapFont = { showBitmapFontPicker = true },
             onPickKeys = { key -> editingKeysFor = key },
             onPickCpsKeys = { text, index -> editingCpsKeysFor = text to index },
+            onPickJoystickKey = { joystick, index -> editingJoystickKeyFor = joystick to index },
         )
     }
 
@@ -498,6 +529,7 @@ fun CustomLayoutEditorScreen(
                         modifier = Modifier.weight(1f),
                         showWindowFrame = showWindowFrame,
                         showSelectedFrame = showSelectedFrame,
+                        canvasColor = canvasColor,
                     )
                 } else {
                     CanvasPreview(
@@ -506,6 +538,7 @@ fun CustomLayoutEditorScreen(
                         modifier = Modifier.weight(1f),
                         showWindowFrame = showWindowFrame,
                         showSelectedFrame = showSelectedFrame,
+                        canvasColor = canvasColor,
                     )
                     VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     SidePanelSlot(side = side, content = panelContent)
@@ -517,6 +550,7 @@ fun CustomLayoutEditorScreen(
                 selectedId = selectedId,
                 showWindowFrame = showWindowFrame,
                 showSelectedFrame = showSelectedFrame,
+                canvasColor = canvasColor,
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
@@ -545,6 +579,87 @@ fun CustomLayoutEditorScreen(
                 draft.add(created)
                 selectedId = created.id
                 showAddDialog = false
+            },
+        )
+    }
+
+    /*
+     * 「摇杆-键盘」的某一个方向键。
+     *
+     * ⚠️⚠️ 这段代码我上一版**漏了**（只声明了状态、也接了回调，但忘了写这个弹窗）
+     * —— 表现是"点了四个方向的按钮**一点反应都没有**"。编译能过、
+     * 布局也在，所以从代码上看不出问题，只有真机点一下才发现。
+     *
+     * ⚠️ 用**单键**选择器 [KeyPickerDialog]，不是多键的 `MultiKeyPickerDialog`
+     * —— 一个方向绑多个键没有意义（"上"同时按两个键还是"上"），
+     * 而那会让"哪个键是上"变得说不清。
+     */
+    /*
+     * 「摇杆-键盘」的某一个方向键。
+     *
+     * ============================================================
+     * ⚠️ 用**与按键组件完全相同**的 [MultiKeyPickerDialog]
+     * ============================================================
+     * 用户的原话:
+     *
+     * > 你不用与别的配置相同的 UI 是不想做多选吗，但是做了多选也没什么影响啊，
+     * > 你考虑一堆有的没的干啥
+     *
+     * ⚠️ 他说得对。我上一版为了"一个方向只该绑一个键"这个洁癖，
+     * **专门换成了单键的 [KeyPickerDialog]** —— 结果:
+     *
+     * | 代价 | 说明 |
+     * |---|---|
+     * | 多一条**没人走过的路径** | 而它恰好在那次改动的排查里掩盖了真正的问题 |
+     * | 用户要面对两套选择器 | 同一个编辑器里"选键"有两种交互 |
+     * | 收益 | **只有"能防止用户绑两个键"** |
+     *
+     * ⚠️ 而"绑两个键"根本不算问题:八段式那边对"这一向绑了哪几个键"
+     * 本来就没规定（多了也只是多个键能触发同一向）。
+     * **为了一个不是问题的约束去换 UI，是我把简单事做复杂了。**
+     */
+    editingJoystickKeyFor?.let { (joystick, index) ->
+        MultiKeyPickerDialog(
+            title = "选择「${
+                JoystickDirection.all.getOrNull(index)?.label ?: "第 ${index + 1} 个"
+            }」方向监听的键",
+            hint = "这一向可以绑**多个**键，任意一个按下都算这一向。" +
+                "例如左右 Ctrl 是两个不同的键码，两个都选上才会都触发。",
+            /*
+             * ⚠️ 直接就是**这一向的那一组键** —— 数据模型也是"每一向一组键"
+             * （`List<List<Int>>`），所以这里不需要任何转换。
+             *
+             * ⚠️ 我上一版是"内部一个键、外部多选" —— 于是要
+             * `listOf(it)` 包一层、确认时再 `firstOrNull()` 拆回来。
+             * 那种来回转换就是"内外不一致"的味道（用户点出来的）。
+             */
+            initialCodes = joystick.inputKeyCodes.getOrNull(index) ?: emptyList(),
+            emptyHint = "当前未绑定任何按键（这一向不会触发）",
+            onDismiss = { editingJoystickKeyFor = null },
+            onConfirm = { codes ->
+                /*
+                 * ⚠️ 按下标**只替换那一项（那一组键）**，其余三向原样保留 ——
+                 * 重建整个列表会把用户配好的另外三向冲掉。
+                 *
+                 * ⚠️ 列表可能不足四项（老配置/残缺 JSON），先按默认键位补齐长度。
+                 * 补的是"一组"（默认那一向的键位），不是单个键。
+                 */
+                val next = joystick.inputKeyCodes.toMutableList()
+                while (next.size < JoystickDirection.all.size) {
+                    next += DEFAULT_KEYBOARD_JOYSTICK_KEYS.getOrElse(next.size) {
+                        listOf(KeyCodes.KEY_W)
+                    }
+                }
+                /*
+                 * ⚠️ **整组替换** —— 不再是"只取第一个"。
+                 *
+                 * ⚠️ 清空（`codes` 为空）也是合法的:"这一向不绑键"。
+                 * 写空列表**不会**让后面几向错位（外层顺序是靠下标定位的），
+                 * 只是这一向永远不触发 —— 与按键组件"没绑定就不亮"一致。
+                 */
+                next[index] = codes
+                draft.replace(joystick.copy(inputKeyCodes = next))
+                editingJoystickKeyFor = null
             },
         )
     }
@@ -785,6 +900,58 @@ fun CustomLayoutEditorScreen(
                         checked = showSelectedFrame,
                         onCheckedChange = onShowSelectedFrameChange,
                     )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    /*
+                     * ============================================================
+                     * 画布底色
+                     * ============================================================
+                     * 用户的原话:
+                     *
+                     * > 我想加一个**画布色值调节**（不随配置导出，只是本地选项，
+                     * > 存储逻辑与刚刚提到的两个 switch 相同），因为现在画布是
+                     * > **白色的**，如果我要**测试白色描边**，就看不出粗细
+                     *
+                     * 后来他改了口径:
+                     *
+                     * > 我觉得可以**换个组件**来写，**不搞自定义色值画布**了，
+                     * > 只搞那几个预设，但是不是用 button 写，而是**分段按钮**，
+                     * > 这样也**更方便存储**吧
+                     *
+                     * ⚠️ 所以这里用 [SingleChoiceSegmentedButtonRow]，
+                     * 与摇杆那几处"平滑/精准""常规/平滑"的分段按钮**同一个写法**
+                     * （`SegmentedButtonDefaults.itemShape(index, count)` 那种）。
+                     *
+                     * ⚠️ 换掉 `HexColorRow` 之后少了一整条路径:
+                     * 十六进制输入、合法性校验、失焦提交、错误提示都不需要了，
+                     * 而存档也从"色值"变成"预设 id"（见 [CanvasColorPreset]）。
+                     */
+                    Text(text = "画布底色", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        text = "只有画布变，悬浮窗与预览不受影响；" +
+                            "这个颜色**不跟随系统深色模式**，所以换成深色之后" +
+                            "白色描边看得清。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        CanvasColorPreset.entries.forEachIndexed { index, preset ->
+                            SegmentedButton(
+                                selected = preset == canvasColor,
+                                onClick = { onCanvasColorChange(preset) },
+                                shape = SegmentedButtonDefaults.itemShape(
+                                    index = index,
+                                    count = CanvasColorPreset.entries.size,
+                                ),
+                            ) {
+                                Text(preset.label)
+                            }
+                        }
+                    }
                 }
             },
             confirmButton = {
@@ -1085,6 +1252,14 @@ private fun CanvasPreview(
     modifier: Modifier = Modifier,
     showWindowFrame: Boolean = true,
     showSelectedFrame: Boolean = true,
+    /**
+     * 画布**底色**（ARGB）。
+     *
+     * ⚠️ 由「编辑器选项」里的「画布底色」控制，存在应用级偏好里 ——
+     * 见 `AppPrefs.editorCanvasColor`（那里解释了为什么它**不跟主题**、
+     * 也**不随配置导出**）。
+     */
+    canvasColor: CanvasColorPreset = CanvasColorPreset.DEFAULT,
 ) {
     val canvasWidth = CustomLayout.canvasWidth(settings.components)
     val canvasHeight = CustomLayout.canvasHeight(settings.components)
@@ -1122,7 +1297,31 @@ private fun CanvasPreview(
 
     BoxWithConstraints(
         modifier = modifier
-            .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+            /*
+             * ============================================================
+             * ⚠️⚠️ 画布底色铺在**整个预览区**，不是只铺中间那个方块
+             * ============================================================
+             * 用户的原话:
+             *
+             * > 你这变色的地方就**一小块正方形**啊，你应该变**整个画布**吧
+             *
+             * ⚠️ 我第一版把 `.background(canvasColor)` 加在了中间那个
+             * `600×scale` 的 Box 上 —— 于是只有那个方块变色，
+             * 周围一圈仍是主题色。**看起来就是"一块补丁"**。
+             *
+             * ⚠️ 现在改在这一层（[CanvasPreview] 的根，也就是用户眼里的
+             * "整个画布区域"），所以底色铺满、无边缝。
+             *
+             * ⚠️ 顺带把"跟随系统深色模式"这件事也解决了:
+             * 原来这里读的是 `MaterialTheme.colorScheme.surfaceContainerLowest`
+             * （主题色，深色模式会变暗），现在读的是一个**明确的 ARGB** ——
+             * 那正是用户要的"调系统深色模式画布不该跟着变"。
+             *
+             * ⚠️ 中间那个方块上**不再重复铺一次**底色:
+             * 同一块区域铺两层同色是白费，而且两层不一致时会出现
+             * 一圈不该有的边（正是这个 bug 的来源）。
+             */
+            .background(Color(canvasColor.argb))
             /*
              * ⚠️ 必须裁剪到自己的边界。
              *
@@ -1200,6 +1399,18 @@ private fun CanvasPreview(
                     (canvasWidth * scaleDp).dp,
                     (canvasHeight * scaleDp).dp,
                 )
+                /*
+                 * ⚠️ 这一层**不铺底色** —— 底色由预览区根那一层铺满
+                 * （见 [CanvasPreview] 里 `.background(Color(canvasColor.argb))` 的说明）。
+                 *
+                 * ⚠️ 我第一版在这里铺过一次，结果是"只有中间那个方块变色、
+                 * 周围一圈还是主题色"（用户的原话:"你这变色的地方就
+                 * **一小块正方形**啊"）。**同一块区域铺两层同色是白费**，
+                 * 两层不一致时反而会出现一圈不该有的边。
+                 *
+                 * ⚠️ 这里只负责画**网格与窗口边框**（`drawBehind`），
+                 * 它们画在父层的底色**之上**。
+                 */
                 .drawBehind {
                     drawCanvasFrame(
                         scale = scaleDp,
@@ -1265,6 +1476,8 @@ private fun CanvasPreview(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(6.dp),
+            /* ⚠️ 画布底色可调，角标要按它换深浅才看得见 */
+            canvasColor = canvasColor,
         )
     }
 }
@@ -1338,19 +1551,65 @@ private fun ZoomBadge(
     zoom: Float,
     onReset: () -> Unit,
     modifier: Modifier = Modifier,
+    /** 画布底色 —— 角标要按它的明暗自适应（见下面那段说明） */
+    canvasColor: CanvasColorPreset = CanvasColorPreset.DEFAULT,
 ) {
     Surface(
         onClick = onReset,
         modifier = modifier,
         shape = MaterialTheme.shapes.small,
-        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.85f),
+        /*
+         * ============================================================
+         * ⚠️ 角标颜色**按画布底色的明暗自适应**
+         * ============================================================
+         * 它原来是半透明的主题色（`surfaceContainerHigh`）—— 那在
+         * "画布跟着主题走"的年代是对的。
+         *
+         * ⚠️ 但画布底色现在是**用户随便调的**（见 [CanvasPreview]）:
+         * 把画布调成浅色后，浅色的角标就**糊在浅底上看不见了**。
+         *
+         * ⚠️ 所以改成按底色的**感知亮度**二选一:
+         *
+         * | 画布 | 角标 |
+         * |---|---|
+         * | 亮（白/浅灰） | **深色**底 + 白字 |
+         * | 暗（深灰/黑） | **浅色**底 + 黑字 |
+         *
+         * ⚠️ 用**固定的深浅两套**而不是继续跟主题:角标要对比的是
+         * **画布**，不是应用主题 —— 跟着主题走正是它现在会看不见的原因。
+         */
+        color = if (canvasColor.argb.isLightCanvas()) {
+            Color(0xCC202020)
+        } else {
+            Color(0xCCF0F0F0)
+        },
     ) {
         Text(
             text = "${(zoom * 100).roundToInt()}%",
             style = MaterialTheme.typography.labelSmall,
+            color = if (canvasColor.argb.isLightCanvas()) Color.White else Color.Black,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
         )
     }
+}
+
+/**
+ * 这个画布底色算不算"亮色" —— 决定角标该用深色还是浅色。
+ *
+ * ⚠️ 用**感知亮度**（`0.299R + 0.587G + 0.114B`）而不是简单的
+ * `(r+g+b)/3`:人眼对绿最敏感、对蓝最不敏感，等权平均会把
+ * 纯蓝（`#0000FF`，看起来很深）算成中等亮度，于是给它配浅色角标、
+ * 结果在深蓝上看不清。
+ *
+ * ⚠️ 阈值取 `0.6` 而不是 `0.5`:偏保守一点，宁可给亮底配深角标 ——
+ * 白底上出现浅角标是最常见的难看情况（默认底色就是白的）。
+ */
+private fun Int.isLightCanvas(): Boolean {
+    val r = (this shr 16) and 0xFF
+    val g = (this shr 8) and 0xFF
+    val b = this and 0xFF
+    /* 0..255 → 0..1 */
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255.0 > 0.6
 }
 
 /**

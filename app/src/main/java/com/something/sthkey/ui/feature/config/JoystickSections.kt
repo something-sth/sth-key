@@ -16,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.something.sthkey.domain.config.JoystickStyle
+import com.something.sthkey.ui.feature.custom.JoystickWidthSlider
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.style.KeyLayout
 import com.something.sthkey.ui.component.collapsibleSection
@@ -72,6 +73,36 @@ internal fun LazyListScope.joystickStyleSections(
     applyChange: ((KeyStrokesConfig) -> KeyStrokesConfig) -> Unit,
 ) {
     val js = editable.joystick
+
+    /*
+     * ============================================================
+     * 描边 / 内圆的 dp 基准（**与渲染公式一一对应**）
+     * ============================================================
+     * 渲染那边（`Joystick.kt`）是:
+     *
+     * ```
+     * val strokeWidth = sideBase * style.strokeWidthRatio * pxPerBase
+     * val knobStrokeWidth = knobDiameter * style.knobStrokeWidthRatio * pxPerBase
+     * ```
+     *
+     * 而 `sideBase` 就是**摇杆槽位的宽度**（`Gamepad2Content` 直接把
+     * `KeyLayout.keys()` 给出的那个 `box` 传进去）—— 所以这里从**同一个函数**
+     * 取，不自己再算一份（自己算必然与布局漂开）。
+     *
+     * ⚠️ 单位是**基础坐标**，它与 dp 是 1:1
+     * （用户在「位置与尺寸」里看到的宽高数字就是 dp）。
+     */
+    val stickSizeDp = KeyLayout.keys(editable)
+        .firstOrNull { it.slotId == KeyLayout.Id.JOYSTICK_LEFT }
+        ?.width
+        ?: 0f
+
+    /*
+     * ⚠️ 帽直径的 `coerceIn(0.2f, 2f)` 与渲染那边**必须一致** ——
+     * 存档时可以存超出范围的值，渲染会夹，而这里不夹的话
+     * 算出来的 dp 基准就和真实画出来的不一样（描边数值会对不上）。
+     */
+    val knobDiameterDp = stickSizeDp * js.knobScale.coerceIn(0.2f, 2f)
 
     collapsibleSection(
         expanded = "joystick:摇杆" in expandedSections,
@@ -170,18 +201,22 @@ internal fun LazyListScope.joystickStyleSections(
 
             CardDivider()
 
-            SliderRow(
+            /*
+             * ⚠️ 基线宽用 **dp**，不是千分号 —— 与按键/文本组件的「描边宽度」一致。
+             * 见 [JoystickWidthSlider] 的说明。
+             */
+            JoystickWidthSlider(
                 label = "描边粗细",
+                style = js,
                 value = js.strokeWidthRatio,
-                valueRange = 0f..0.1f,
-                display = if (js.strokeWidthRatio <= 0f) {
-                    "不显示"
-                } else {
-                    "%.1f‰".format(js.strokeWidthRatio * 1000f)
+                baseDp = stickSizeDp,
+                applyRatio = { s, r -> s.copy(strokeWidthRatio = r) },
+                maxDp = JoystickStyle.STROKE_WIDTH_MAX_DP,
+                onStyleChange = { next ->
+                    applyChange { it.copy(joystick = next) }
                 },
-                onValueChange = { v ->
-                    applyChange { it.copy(joystick = it.joystick.copy(strokeWidthRatio = v)) }
-                },
+                /* ⚠️ 与同页的 SliderRow 一致（16dp / 10dp），否则长短不齐 */
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
             )
         }
     }
@@ -215,18 +250,18 @@ internal fun LazyListScope.joystickStyleSections(
 
             CardDivider()
 
-            SliderRow(
+            JoystickWidthSlider(
                 label = "内圆粗细",
+                style = js,
                 value = js.ringWidthRatio,
-                valueRange = 0f..0.06f,
-                display = if (js.ringWidthRatio <= 0f) {
-                    "不显示"
-                } else {
-                    "%.0f‰".format(js.ringWidthRatio * 1000f)
+                baseDp = stickSizeDp,
+                applyRatio = { s, r -> s.copy(ringWidthRatio = r) },
+                maxDp = JoystickStyle.RING_WIDTH_MAX_DP,
+                onStyleChange = { next ->
+                    applyChange { it.copy(joystick = next) }
                 },
-                onValueChange = { v ->
-                    applyChange { it.copy(joystick = it.joystick.copy(ringWidthRatio = v)) }
-                },
+                /* ⚠️ 与同页的 SliderRow 一致（16dp / 10dp），否则长短不齐 */
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
             )
         }
     }
@@ -333,18 +368,19 @@ internal fun LazyListScope.joystickStyleSections(
 
             CardDivider()
 
-            SliderRow(
+            JoystickWidthSlider(
                 label = "摇杆帽描边粗细",
+                style = js,
                 value = js.knobStrokeWidthRatio,
-                valueRange = 0f..0.3f,
-                display = if (js.knobStrokeWidthRatio <= 0f) {
-                    "不显示"
-                } else {
-                    "%.0f‰".format(js.knobStrokeWidthRatio * 1000f)
+                /* ⚠️ 帽描边的基数是**帽直径**，与渲染里的公式一致 */
+                baseDp = knobDiameterDp,
+                applyRatio = { s, r -> s.copy(knobStrokeWidthRatio = r) },
+                maxDp = JoystickStyle.KNOB_STROKE_WIDTH_MAX_DP,
+                onStyleChange = { next ->
+                    applyChange { it.copy(joystick = next) }
                 },
-                onValueChange = { v ->
-                    applyChange { it.copy(joystick = it.joystick.copy(knobStrokeWidthRatio = v)) }
-                },
+                /* ⚠️ 与同页的 SliderRow 一致（16dp / 10dp），否则长短不齐 */
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
             )
         }
     }

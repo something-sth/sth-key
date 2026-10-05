@@ -22,6 +22,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import com.something.sthkey.core.prefs.CanvasColorPreset
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -427,24 +428,35 @@ private fun MainScaffold(
                         val prefs = remember(context) { AppPrefs.get(context) }
                         var panelSide by remember { mutableStateOf(prefs.editorPanelSide) }
                         var autoChosen by remember { mutableStateOf(!prefs.editorPanelSideChosen) }
-                        // 画布边框的两个开关（在设置页切换，这里只读）
+                        /*
+                         * 画布的两个边框开关 + 画布底色。
+                         *
+                         * ⚠️ 它们都在**编辑器页的「更多」**里改（不在设置页 ——
+                         * 这句注释以前写的是"在设置页切换"，已经过时）。
+                         * 这里持有状态是因为编辑器页要能立刻看到效果，
+                         * 同时写回 `AppPrefs` 让它**下次进来还记得**。
+                         */
                         var showWindowFrame by remember {
                             mutableStateOf(prefs.editorShowWindowFrame)
                         }
                         var showSelectedFrame by remember {
                             mutableStateOf(prefs.editorShowSelectedFrame)
                         }
+                        var canvasColor by remember {
+                            mutableStateOf(prefs.editorCanvasColor)
+                        }
 
                         /*
-                         * 从设置页回来时重新读一次偏好。
+                         * 回到这个页面时重新读一次偏好。
                          *
-                         * 这两个开关在**另一个页面**改，而这里是 `remember` 的
-                         * 局部状态 —— 不刷新的话用户改完返回，画布还是旧的。
+                         * 它们是 `remember` 的局部状态，而可能在别处被改
+                         * （例如多窗口/进程重建）—— 不重读的话画布还是旧的。
                          * key 用当前路由，于是每次回到这个页面都会重读。
                          */
                         LaunchedEffect(currentRoute) {
                             showWindowFrame = prefs.editorShowWindowFrame
                             showSelectedFrame = prefs.editorShowSelectedFrame
+                            canvasColor = prefs.editorCanvasColor
                         }
 
                         CustomLayoutEditorScreen(
@@ -465,6 +477,17 @@ private fun MainScaffold(
                             onShowSelectedFrameChange = { show ->
                                 showSelectedFrame = show
                                 prefs.editorShowSelectedFrame = show
+                            },
+                            canvasColor = canvasColor,
+                            onCanvasColorChange = { argb ->
+                                /*
+                                 * ⚠️ 与上面两个开关**同一个存法**:
+                                 * 写进 `AppPrefs`（应用级偏好），不是这份配置 ——
+                                 * 所以**导出配置时不会带上它**，也不会影响
+                                 * 悬浮窗与配置预览（用户明确要求"只是本地选项"）。
+                                 */
+                                canvasColor = argb
+                                prefs.editorCanvasColor = argb
                             },
                             onPanelSideChange = { picked ->
                                 panelSide = picked

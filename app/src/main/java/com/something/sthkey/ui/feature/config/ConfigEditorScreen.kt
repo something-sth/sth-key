@@ -2151,6 +2151,33 @@ internal fun SliderRow(
     onValueChange: (Float) -> Unit,
     modifier: Modifier = Modifier,
     steps: Int = 0,
+    /**
+     * **编辑框专用**的取值:显示单位下的 `(当前值, 合法范围)`。
+     *
+     * ============================================================
+     * ⚠️⚠️ 只有"显示单位 ≠ 存储单位"的字段才需要它
+     * ============================================================
+     * 绝大多数滑块不用传:它们**存的就是显示的那个数**
+     * （按键组件的 `cornerRadiusPercent` 存 `16`、显示 `16%`），
+     * 滑块与输入框天然一致。
+     *
+     * ⚠️ 但摇杆那组字段存的是 **`0..1` 的比例**（`cornerRatio` / `opacity` …），
+     * 而界面按**百分比**显示 —— 默认行为下:
+     *
+     * | 位置 | 显示 |
+     * |---|---|
+     * | 滑块旁边 | `45%` |
+     * | **点开输入框** | **`0.225`** ← 用户报的"不明不白"就是这个 |
+     *
+     * 传了它之后，输入框按显示单位工作:填 `45`、范围 `0..50`、
+     * 粒度也按 `0..50` 算，与滑块旁边的 `45%` 完全对得上。
+     *
+     * ⚠️ **值与范围打包成一个参数**（而不是两个可选参数）是刻意的:
+     * 分开传就会有人只给值不给范围，那时输入框会拿"显示单位的数字"
+     * 去比"比例的范围"，合法的 `45` 被标红成越界 ——
+     * 一个很难联想到原因的 bug。
+     */
+    edit: EditValue? = null,
 ) {
     EditableSliderRow(
         label = label,
@@ -2160,11 +2187,27 @@ internal fun SliderRow(
         onValueChange = onValueChange,
         modifier = modifier.padding(horizontal = 16.dp, vertical = 10.dp),
         steps = steps,
-        step = stepOf(valueRange),
+        editValue = edit?.value,
+        /*
+         * ⚠️ 粒度按**输入框实际用的那个范围**算 ——
+         * 用比例算的话 `0..0.5` 会给出 `0.01` 的粒度，
+         * 而输入框里其实是 `0..50` 的整数。
+         */
+        step = stepOf(edit?.range ?: valueRange),
         labelStyle = MaterialTheme.typography.bodyLarge,
         valueStyle = MaterialTheme.typography.labelLarge,
     )
 }
+
+/**
+ * 编辑框的"显示单位"取值 —— 见 [SliderRow] 的 `edit` 参数。
+ *
+ * ⚠️ 值与范围**必须一起给**:只给值不给范围会让输入框拿错范围去校验。
+ */
+internal data class EditValue(
+    val value: Float,
+    val range: ClosedFloatingPointRange<Float>,
+)
 
 /**
  * 文字偏移的取值上下限。

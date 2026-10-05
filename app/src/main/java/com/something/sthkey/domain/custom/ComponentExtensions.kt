@@ -187,19 +187,61 @@ fun CustomComponent.withTextStyle(style: ComponentStyle): CustomComponent {
     return textual.withStyle(style)
 }
 
-/** 组件的类型名；UI 列表与调试信息共用一处 */
+/**
+ * 组件的类型名；UI 列表与调试信息共用一处。
+ *
+ * ============================================================
+ * ⚠️ 三种摇杆必须**分别报名字**（用户报过这个）
+ * ============================================================
+ * 用户的原话:"自定义编辑页内，创建出来的键盘摇杆和鼠标摇杆**都是显示
+ * 「左摇杆」字样**，不过实际配置是正确的"。
+ *
+ * ⚠️ 成因:三种摇杆**共用同一个数据类** [JoystickComponent]，而
+ * [summary] 原来一律返回 `side.label` —— 对键盘/鼠标摇杆来说
+ * 那个"左摇杆"是**一个用不上的字段**（它们没有左右之分）。
+ *
+ * ⚠️ 所以显示要按 [JoystickComponent.source] 分。用户还要求
+ * "手柄摇杆也修改一下，现在只是左摇杆、右摇杆，改成**手柄**左摇杆、
+ * **手柄**右摇杆" —— 那在 [summary] 里加前缀。
+ */
 fun CustomComponent.typeLabel(): String = when (this) {
     is KeyComponent -> "按键"
     is TextComponent -> "文本"
-    is JoystickComponent -> "摇杆"
+    is JoystickComponent -> when (source) {
+        JoystickSource.GAMEPAD -> "手柄摇杆"
+        JoystickSource.KEYBOARD -> "键盘摇杆"
+        JoystickSource.MOUSE -> "鼠标摇杆"
+    }
 }
 
-/** 组件在列表里显示的一行摘要 */
+/**
+ * 组件在列表里显示的一行摘要。
+ *
+ * ⚠️ 它是**用户唯一能区分几个摇杆的地方**（画布上它们长得一样），
+ * 所以必须写清"这个摇杆在听什么":
+ *
+ * | 组件 | 摘要 |
+ * |---|---|
+ * | 手柄摇杆 | `手柄左摇杆` / `手柄右摇杆` |
+ * | 键盘摇杆 | `WASD` |
+ * | 鼠标摇杆 | `鼠标位移` |
+ *
+ * ⚠️ 手柄那两个的"手柄"前缀是用户明确要求的:不写的话，
+ * 三个摇杆的摘要会是"左摇杆 / WASD / 鼠标位移" —— 只有第一个
+ * 看不出它在跟手柄，而它恰恰最需要说明。
+ */
 fun CustomComponent.summary(): String = when (this) {
     is KeyComponent -> label.ifBlank { "（无键名）" }
     is TextComponent -> text.ifBlank { "（空文本）" }
-    /* 摇杆没有文字，摘要就是它监听哪一边 —— 那是它唯一的"内容" */
-    is JoystickComponent -> side.label
+    /*
+     * ⚠️ **按来源分**:键盘/鼠标摇杆没有"左/右"可言，
+     * 报 `side.label` 就是那个"都显示左摇杆"的 bug。
+     */
+    is JoystickComponent -> when (source) {
+        JoystickSource.GAMEPAD -> "手柄${side.label}"
+        JoystickSource.KEYBOARD -> "WASD"
+        JoystickSource.MOUSE -> "鼠标位移"
+    }
 }
 
 /*

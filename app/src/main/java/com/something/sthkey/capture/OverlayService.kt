@@ -21,6 +21,7 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.unit.dp
@@ -546,9 +547,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
          * 那时 [windowRef] 一定已经赋值。
          */
         var windowRef: OverlayWindow? = null
-        val view = createOverlayView(config) {
-            windowRef?.configState ?: mutableStateOf(config)
-        }
+        val view = createOverlayView(config) { windowRef }
         setupDragListener(view, params, config.id)
 
         /*
@@ -556,12 +555,21 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
          *
          * 必须在 addView 之前拿到：Live2DOverlayView 构造完就会开始加载页面，
          * 页面就绪后可能马上就有位移进来，晚开一步就会漏掉开头那一小段。
+         *
+         * ============================================================
+         * ⚠️ **所有样式都开**（原来只有 Live2D 开）
+         * ============================================================
+         * 自定义 Key 样式新增了「摇杆-鼠标」组件，它要读这条流
+         * （见 `CustomKeyCanvas` 的 `mouseMotion` 参数）。
+         *
+         * ⚠️ 开一条流是**很便宜**的（一个几十字节的窗口对象，见
+         * [CaptureSession.openMouseMotion]），而漏开的后果是
+         * "那个摇杆永远不动" —— 一个很难联想到原因的故障。
+         *
+         * ⚠️ 与"采集层不该按样式分支"那条约定也一致:采集这边只管喂数据，
+         * **谁来消费由各视图自己决定**（Live2D 视图、自定义画布各自订阅）。
          */
-        val motion = if (config.styleId == StyleId.KEYBOARD_CAT) {
-            CaptureSession.openMouseMotion()
-        } else {
-            null
-        }
+        val motion = CaptureSession.openMouseMotion()
 
         return try {
             windowManager.addView(view, params)
@@ -643,7 +651,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         }
 
         var windowRef: OverlayWindow? = null
-        val view = createOverlayView(config) { windowRef?.configState ?: mutableStateOf(config) }
+        val view = createOverlayView(config) { windowRef }
         setupDragListener(view, params, configId)
 
         // 重建视图也要重开一条位移流：旧视图那条的零点属于上一个页面，
@@ -803,7 +811,25 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
      */
     private fun createOverlayView(
         config: KeyStrokesConfig,
-        configState: () -> State<KeyStrokesConfig>,
+        /**
+         * 这个窗口（**后填的取值函数**）。
+         *
+         * ============================================================
+         * ⚠️ 为什么是 lambda 而不是直接传 `OverlayWindow`
+         * ============================================================
+         * 视图要在 `addView` 之前建好，而窗口要在 `addView` 之后才能建 ——
+         * 两者互为前提。用"后填的取值函数"把环打开:Compose 的**首次组合**
+         * 发生在 attach 之后，那时 `windowRef` 一定已赋值。
+         *
+         * ⚠️ 这个 lambda 在组合里会被调用，所以它返回的对象要能提供两样东西:
+         * 配置状态（`configState`），以及**鼠标位移流**
+         * （`motion`，自定义 Key 的「摇杆-鼠标」组件读它）。
+         *
+         * ⚠️ 位移流**必须在组合里 `collectAsState` 订阅**，不能只取一次
+         * 当前值 —— `StateFlow` 的"值是快照"这件事不会让 Compose 重组，
+         * 只取一次的话那个摇杆会永远停在第一帧的位置。
+         */
+        window: () -> OverlayWindow?,
     ): View =
         if (config.styleId == StyleId.KEYBOARD_CAT) {
             Live2DOverlayView(this).apply {
@@ -828,8 +854,19 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 setViewTreeSavedStateRegistryOwner(this@OverlayService)
                 setContent {
                     SthKeyTheme {
+                        val win = window()
                         OverlayContent(
-                            config = configState(),
+                            config = win?.configState ?: remember { mutableStateOf(config) },
+                            /*
+                             * ⚠️ **位移流在组合里订阅**（`collectAsState`），
+                             * 不能只取一次当前值 —— `StateFlow` 的值是快照，
+                             * 只取一次不会让 Compose 重组，那个摇杆会永远
+                             * 停在第一帧的位置。
+                             *
+                             * ⚠️ 没有位移流时给 `null`：鼠标摇杆画成居中静止
+                             * （编辑器画布与配置预览也是这个表现）。
+                             */
+                            mouseMotionFlow = win?.motion,
                             // 内边距按像素换算成 dp，与窗口尺寸的口径保持一致
                             modifier = Modifier.padding(
                                 (OVERLAY_PADDING_PX / resources.displayMetrics.density).dp,

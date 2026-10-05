@@ -3,6 +3,8 @@ package com.something.sthkey.ui.overlay
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import kotlinx.coroutines.flow.StateFlow
+import com.something.sthkey.capture.MouseMotion
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
@@ -66,9 +68,26 @@ fun OverlayContent(
 fun OverlayContent(
     config: State<KeyStrokesConfig>,
     modifier: Modifier = Modifier,
+    /**
+     * 这个窗口的**鼠标位移流**（自定义 Key 的「摇杆-鼠标」组件读它）。
+     *
+     * ⚠️ 传**流**而不是当前值:值是一个快照，Compose 不会因为"流里的值变了"
+     * 而重组（只有读到 `State` 才会）。所以订阅必须在组合里做。
+     *
+     * ⚠️ `null` = 没有鼠标数据源 → 鼠标摇杆画成居中静止
+     * （编辑器画布与配置预览也是这个表现，它们根本不传）。
+     */
+    mouseMotionFlow: StateFlow<MouseMotion>? = null,
 ) {
     val pressedKeys by CaptureSession.pressedKeys.collectAsState()
     val density = LocalDensity.current.density
+
+    /*
+     * ⚠️ `collectAsState` 必须**无条件调用**（Kotlin 里 `if (flow != null)` 包住
+     * 会让"有流/没流"两种情况的 `remember` 槽位数量不同，Compose 会错乱）。
+     * 没有流时拿一个常量默认值，代价是零。
+     */
+    val mouseMotion = mouseMotionFlow?.collectAsState()?.value ?: MouseMotion()
 
     val factor = KeyLayout.pxToDpFactor(density)
     val current = config.value
@@ -227,6 +246,8 @@ fun OverlayContent(
                  * "纯静态就行了"（与 Key 组件的按下动画一样，编辑器不演示动效）。
                  */
                 sticks = sticks,
+                /* ⚠️ 只有「摇杆-鼠标」组件用它；其它样式的调用点不传 */
+                mouseMotion = mouseMotion,
                 /*
                  * ⚠️ 必须自适应。
                  *

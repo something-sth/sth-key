@@ -185,4 +185,4 @@ sdk.dir=/path/to/Android/Sdk
 
 ## 交流
 
-QQ 群：**908887474**（暗号 `sthkey`）
+QQ 群：**908887474**

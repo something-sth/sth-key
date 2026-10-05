@@ -13,7 +13,18 @@ import com.something.sthkey.domain.custom.CustomLayout
 import com.something.sthkey.domain.custom.CustomLayoutSettings
 import com.something.sthkey.domain.custom.DEFAULT_CPS_KEY_CODES
 import com.something.sthkey.domain.custom.KeyComponent
+import com.something.sthkey.domain.custom.JOYSTICK_THRESHOLD_MIN
+import com.something.sthkey.domain.custom.JOYSTICK_SENSITIVITY_MIN
+import com.something.sthkey.domain.custom.JOYSTICK_SENSITIVITY_MAX
+import com.something.sthkey.domain.custom.JOYSTICK_SMOOTHING_MAX_MS
+import com.something.sthkey.domain.custom.JoystickFollowMode
+import com.something.sthkey.domain.custom.DEFAULT_KEYBOARD_JOYSTICK_KEYS
+import com.something.sthkey.domain.custom.JOYSTICK_FOLLOW_DURATION_MIN
+import com.something.sthkey.domain.custom.JOYSTICK_FOLLOW_DURATION_MAX
 import com.something.sthkey.domain.custom.JoystickComponent
+import com.something.sthkey.domain.custom.JoystickSource
+import com.something.sthkey.domain.custom.KeyboardJoystickFeel
+import com.something.sthkey.domain.custom.MouseJoystickFeel
 import com.something.sthkey.domain.custom.StickSide
 import com.something.sthkey.domain.custom.TextComponent
 import org.json.JSONArray
@@ -144,12 +155,132 @@ object CustomLayoutCodec {
             }
 
             is JoystickComponent -> {
-                /* 监听哪一边；用 `StickSide.id` 而不是枚举名 —— 改枚举名不该弄坏配置 */
+                /*
+                 * ⚠️ **必须写成是哪一种摇杆** —— 三种摇杆共用 [JoystickComponent]
+                 * 这一个类（键鼠摇杆除外，它们的 `source` 不同）。
+                 *
+                 * ⚠️ 不写的话读回来**全变成手柄摇杆**（[JoystickSource] 的默认值），
+                 * 表现是"加了摇杆-键盘，重启后它开始跟手柄动"。
+                 */
+                put("joystickSource", component.source.id)
+
+                /*
+                 * 监听哪一边；用 `StickSide.id` 而不是枚举名 —— 改枚举名不该弄坏配置。
+                 *
+                 * ⚠️ 键盘/鼠标摇杆没有左右之分，但**照样写** ——
+                 * 省掉它会让"手柄摇杆 → 键盘摇杆 → 又切回手柄"时
+                 * 原来选的右摇杆丢掉。一个字段几个字节，不值得省。
+                 */
                 put("stickSide", component.side.id)
                 put("joystick", JsonConfigCodec.encodeJoystick(component.joystick))
+                /*
+                 * ⚠️⚠️ **四个方向各自的一组键必须写** —— 嵌套数组，
+                 * 与文本组件的 `cpsKeyCodesPerPlaceholder` 同一个形状。
+                 *
+                 * ⚠️ 我漏过一次（只补了编码漏了解码），也漏过"形状"
+                 * （内部一个键、外部让用户多选）。编解码**成对**检查，
+                 * 形状与选择器**一致** —— 这两条都是踩出来的。
+                 *
+                 * ⚠️ 三种摇杆**都写**（虽然只有键盘用得到）——
+                 * 与 `stickSide` 同理:切过去又切回来时键位还在。
+                 */
+                put(
+                    "inputKeyCodes",
+                    JSONArray().apply {
+                        component.inputKeyCodes.forEach { group ->
+                            put(JSONArray().apply { group.forEach { put(it) } })
+                        }
+                    },
+                )
+                put("keyboardFeel", encodeKeyboardFeel(component.keyboardFeel))
+                put("mouseFeel", encodeMouseFeel(component.mouseFeel))
             }
         }
     }
+
+    /**
+     * 「摇杆-键盘」的手感。
+     *
+     * ⚠️ 四个字段**一个都不能漏** —— 少了哪个，用户在那儿的改动就
+     * "重启后自己变回去"。
+     *
+     * ⚠️⚠️ 我第一版就漏了 `mode` 与 `durationMs`（后加的两个字段）:
+     * 编译正常、界面上也看不出问题，**只有重启才会发现"常规/平滑"变了**。
+     * 这种"写得出来、存不进去"的漏字段是本项目反复吃过的亏 ——
+     * 所以这里刻意把四个 `put` 排在一起，加字段时一眼能看出缺哪个。
+     */
+    private fun encodeKeyboardFeel(feel: KeyboardJoystickFeel): JSONObject = JSONObject().apply {
+        put("threshold", feel.threshold.toDouble())
+        put("mode", feel.mode.id)
+        put("smoothingMs", feel.smoothingMs.toDouble())
+        put("durationMs", feel.durationMs.toDouble())
+    }
+
+    /**
+     * 「摇杆-鼠标」的手感 —— 见 [encodeKeyboardFeel] 的说明。
+     *
+     * ⚠️ 只有两项。原来还有 `recenterDelayMs` / `recenterMs`（自动回中），
+     * 那个功能已经删除 —— 老配置里多出来的这两个字段**会被忽略**
+     * （解码只读它认识的键），所以不需要迁移。
+     */
+    private fun encodeMouseFeel(feel: MouseJoystickFeel): JSONObject = JSONObject().apply {
+        put("sensitivity", feel.sensitivity.toDouble())
+        put("smoothingMs", feel.smoothingMs.toDouble())
+    }
+
+    /**
+     * 读「摇杆-键盘」的手感。
+     *
+     * ⚠️ **每一项都夹进合法范围** —— 手改过的 JSON 或来自更新版本的配置里
+     * 可能是任意值，而那些值会一路进到弹簧公式里（`smoothingMs = 0` 会除零、
+     * 负值会让弹簧反向）。与 [JsonConfigCodec.decodeJoystick] 的取舍一致。
+     */
+    private fun decodeKeyboardFeel(json: JSONObject?): KeyboardJoystickFeel {
+        val d = KeyboardJoystickFeel()
+        if (json == null) return d
+        return KeyboardJoystickFeel(
+            threshold = json.optDouble("threshold", d.threshold.toDouble())
+                .toFloat().coerceIn(JOYSTICK_THRESHOLD_MIN, 1f),
+            /*
+             * ⚠️ 用 `fromId` 而不是 `valueOf`:手改过的 JSON 里可能是空串，
+             * `valueOf` 会抛异常、整份配置都读不出来。
+             * 认不出来时回退到**常规**（新默认）。
+             */
+            mode = JoystickFollowMode.fromId(json.optString("mode")),
+            smoothingMs = json.optDouble("smoothingMs", d.smoothingMs.toDouble())
+                .toFloat().coerceIn(0f, JOYSTICK_SMOOTHING_MAX_MS),
+            durationMs = json.optDouble("durationMs", d.durationMs.toDouble())
+                .toFloat()
+                .coerceIn(JOYSTICK_FOLLOW_DURATION_MIN, JOYSTICK_FOLLOW_DURATION_MAX),
+        )
+    }
+
+    /**
+     * 读「摇杆-鼠标」的手感 —— 夹取的理由见 [decodeKeyboardFeel]。
+     *
+     * ⚠️ 老配置里可能还带着 `recenterDelayMs` / `recenterMs`（已删除的功能），
+     * 这里**不读它们**就够了 —— 多余字段不会让解析失败，
+     * 也不需要写迁移代码。
+     */
+    private fun decodeMouseFeel(json: JSONObject?): MouseJoystickFeel {
+        val d = MouseJoystickFeel()
+        if (json == null) return d
+        return MouseJoystickFeel(
+            sensitivity = json.optDouble("sensitivity", d.sensitivity.toDouble())
+                .toFloat().coerceIn(JOYSTICK_SENSITIVITY_MIN, JOYSTICK_SENSITIVITY_MAX),
+            smoothingMs = json.optDouble("smoothingMs", d.smoothingMs.toDouble())
+                .toFloat().coerceIn(0f, JOYSTICK_SMOOTHING_MAX_MS),
+        )
+    }
+
+    /*
+     * ⚠️ 键鼠摇杆手感的取值上下限**不在本文件** —— 它们是
+     * [com.something.sthkey.domain.custom] 里的 `JOYSTICK_*` 常量。
+     *
+     * 理由:依赖方向是 `data → domain`。把真源放在这边的话
+     * `domain` 就得反过来引用 `data`（而实测本项目 `domain` 层
+     * 一个 `import ...data...` 都没有，那是有意的）。
+     */
 
     /**
      * 组件的类型 id。
@@ -161,8 +292,29 @@ object CustomLayoutCodec {
     private fun typeIdOf(component: CustomComponent): String = when (component) {
         is KeyComponent -> ComponentType.KEY.id
         is TextComponent -> ComponentType.TEXT.id
-        is JoystickComponent -> ComponentType.JOYSTICK.id
+        /*
+         * ⚠️ 三种摇杆**必须分开写** —— 它们共用 [JoystickComponent] 这个类，
+         * 只靠 `is` 判断的话三个都会写成 `joystick`，读回来全变手柄摇杆
+         * （[JoystickComponent.source] 的默认值）。
+         *
+         * ⚠️ 用 `source` 反查而不是写死三个字符串:枚举里新增一种时
+         * **这里自动跟上**，而写死的话会静默把新类型存成手柄摇杆。
+         */
+        is JoystickComponent -> ComponentType.of(component.source).id
     }
+
+    /*
+     * ⚠️ **"输入源 ↔ 组件类型"的映射不在本文件**，它是
+     * [ComponentType.of] / [ComponentType.joystickSource]（`domain` 层）。
+     *
+     * 理由有两个:
+     *
+     * 1. **依赖方向**是 `data → domain`，反过来会让领域层被存档格式绑住
+     *    （实测 `domain` 层一个 `import ...data...` 都没有，那是有意的）；
+     * 2. `domain` 的 `ComponentFactory.typeOf` **也要用它**（生成 id 前缀）——
+     *    ⚠️ 我第一版就是两处各写了一份，而 `typeOf` 那份漏了分叉、
+     *    把所有摇杆都当成手柄摇杆。**两份映射必然漂开。**
+     */
 
     private fun encodeStyle(style: ComponentStyle): JSONObject = JSONObject().apply {
         put("fillUp", style.fillUp)
@@ -294,13 +446,33 @@ object CustomLayoutCodec {
                         )
                     }
 
-                    ComponentType.JOYSTICK -> add(
+                    /*
+                     * ⚠️ 三个摇杆类型**共用一个分支** —— 它们只差 `source`，
+                     * 而 `source` 已经由"存的是哪个 type"确定了。
+                     *
+                     * ⚠️ 写三份的话，以后改一处（比如给手感加字段）
+                     * 必然漏掉另外两处 —— 那正是本项目反复吃过的亏。
+                     */
+                    ComponentType.JOYSTICK,
+                    ComponentType.JOYSTICK_KEYBOARD,
+                    ComponentType.JOYSTICK_MOUSE,
+                    -> add(
                         JoystickComponent(
                             id = id,
                             x = geometry.x,
                             y = geometry.y,
                             width = geometry.width,
                             height = geometry.height,
+                            /*
+                             * ⚠️ `source` **从 `type` 反推**，不读 JSON 里那个
+                             * `joystickSource` 字段 —— 两者不一致时（手改过的 JSON）
+                             * 以**类型**为准:类型决定界面上显示成哪一种，
+                             * 也决定它出现在哪个分组里。
+                             *
+                             * ⚠️ JSON 里那个字段照样写（见 encode），
+                             * 但它只是给人看的冗余信息，不是真源。
+                             */
+                            source = ComponentType.joystickSource(type),
                             /*
                              * ⚠️ 用 `StickSide.fromId` 而不是 `valueOf`:
                              * 手改过的 JSON 里可能是空串或别的写法，
@@ -317,6 +489,32 @@ object CustomLayoutCodec {
                             joystick = JsonConfigCodec.decodeJoystick(
                                 item.optJSONObject("joystick"),
                             ),
+                            /*
+                             * ⚠️⚠️ 四个方向的键位**必须读**，形状是嵌套数组
+                             * （每一向一组键）—— 与编码端、与选择器三者一致。
+                             *
+                             * ⚠️ 这个字段我漏过**两次**:
+                             * 1. 只补了编码端、漏了解码端（存了读不回来）；
+                             * 2. 内部一个键、外部用多选（选了只存第一个）。
+                             *
+                             * ⚠️ 教训:**编解码成对检查、形状与 UI 一致。**
+                             *
+                             * ⚠️ 兼容旧的扁平格式（`[30,31,32,33]`）——
+                             * 那种是"每一向一个键"，包成单元素组即可。
+                             * 判断方法:数组的**第一项是数字还是数组**。
+                             *
+                             * ⚠️ 不能用 `decodeKeyCodes` 直接兜底:它对缺失
+                             * 返回 `emptyList()`（那是**按键组件**"没绑就不亮"的
+                             * 语义）。而摇杆全空的话四个方向都不触发，
+                             * 比"回退默认"更糟。
+                             */
+                            inputKeyCodes = decodeJoystickKeys(
+                                item.optJSONArray("inputKeyCodes"),
+                            ),
+                            keyboardFeel = decodeKeyboardFeel(
+                                item.optJSONObject("keyboardFeel"),
+                            ),
+                            mouseFeel = decodeMouseFeel(item.optJSONObject("mouseFeel")),
                         ),
                     )
                 }
@@ -336,6 +534,51 @@ object CustomLayoutCodec {
     private fun number(json: JSONObject, key: String, fallback: Float): Float =
         json.optDouble(key, fallback.toDouble()).toFloat().coerceIn(COORD_MIN, COORD_MAX)
 
+    /**
+     * 读「摇杆-键盘」的**四个方向键位**（每一向一组键）。
+     *
+     * ============================================================
+     * ⚠️ 这个字段我漏过两次，所以这里把两种历史格式都认下来
+     * ============================================================
+     * | 格式 | 来自 | 处理 |
+     * |---|---|---|
+     * | `[[87],[65],[83],[68]]` | 当前（每一向一组键） | 直接用 |
+     * | `[87,65,83,68]` | 我上一版（每一向一个键） | **包成单元素组** |
+     * | 缺失 / 空 | 老配置 | 回退 [DEFAULT_KEYBOARD_JOYSTICK_KEYS] |
+     *
+     * ⚠️ 判断方法是"第一项是数字还是数组" —— `JSONArray.optJSONArray(0)`
+     * 对数字返回 `null`，对数组返回那个数组。不需要额外版本号。
+     *
+     * ⚠️ 外层项数不足四时**不补齐** —— 缺的那一向就是"没绑键"
+     * （那一向不触发），与按键组件"没绑定就不亮"同一个取舍。
+     * 补了反而看不出配置是坏的。
+     */
+    private fun decodeJoystickKeys(array: JSONArray?): List<List<Int>> {
+        if (array == null || array.length() == 0) return DEFAULT_KEYBOARD_JOYSTICK_KEYS
+
+        /* ⚠️ 扁平老格式:每一项都是数字 */
+        if (array.optJSONArray(0) == null) {
+            val flat = decodeKeyCodes(array)
+            return if (flat.isEmpty()) {
+                DEFAULT_KEYBOARD_JOYSTICK_KEYS
+            } else {
+                /* 每一向一个键 → 包成单元素组，保持"上/左/下/右"的顺序 */
+                flat.map { listOf(it) }
+            }
+        }
+
+        /* ⚠️ 当前格式:每一项是一个数组（某一向绑的所有键） */
+        return buildList {
+            for (index in 0 until array.length()) {
+                /*
+                 * ⚠️ 空的**内层**要保留（"这一向不绑键"是有意义的选择），
+                 * 跳过它会让后面几向整体前移、上下左右全乱 ——
+                 * 与 `decodeCpsKeyCodesPerPlaceholder` 同一个坑。
+                 */
+                add(decodeKeyCodes(array.optJSONArray(index)))
+            }
+        }
+    }
     private fun decodeKeyCodes(array: JSONArray?): List<Int> {
         if (array == null) return emptyList()
         return buildList {

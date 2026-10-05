@@ -16,7 +16,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
 import androidx.compose.runtime.remember
 import com.something.sthkey.ui.component.bitmapSpecOf
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -44,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.something.sthkey.core.log.AppLog
 import com.something.sthkey.domain.config.AnimationMode
+import com.something.sthkey.domain.config.JoystickStyle
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.config.ShadowMode
 import com.something.sthkey.domain.custom.JoystickComponent
@@ -53,6 +59,14 @@ import com.something.sthkey.ui.overlay.gamepad.baseOffset
 import com.something.sthkey.capture.StickState
 import com.something.sthkey.domain.style.KeyBox
 import com.something.sthkey.ui.overlay.gamepad.JoystickSlot
+import com.something.sthkey.capture.MouseMotion
+import com.something.sthkey.domain.custom.JoystickFollowMode
+import com.something.sthkey.domain.custom.JOYSTICK_FOLLOW_DURATION_MIN
+import com.something.sthkey.domain.custom.JOYSTICK_FOLLOW_DURATION_MAX
+import com.something.sthkey.domain.custom.JoystickSource
+import com.something.sthkey.domain.custom.MouseJoystickFeel
+import com.something.sthkey.domain.custom.keyboardJoystickVector
+import com.something.sthkey.domain.custom.mouseJoystickStep
 import com.something.sthkey.domain.custom.CustomComponent
 import com.something.sthkey.domain.custom.CustomLayout
 import com.something.sthkey.domain.custom.CustomLayoutSettings
@@ -320,6 +334,19 @@ fun CustomKeyCanvas(
      * 悬浮窗则传真实数据（见 `OverlayContent`）。
      */
     sticks: StickState = StickState(),
+    /**
+     * 这个窗口的**鼠标位移流**（只给「摇杆-鼠标」组件用）。
+     *
+     * ============================================================
+     * ⚠️ 默认 `null` = 没有鼠标数据源 → 鼠标摇杆画成居中静止
+     * ============================================================
+     * 编辑器画布与配置预览都走默认值 —— 与 [sticks] 同一个取舍
+     * （用户要求编辑器画布"纯静态就行了"）。
+     *
+     * ⚠️ 悬浮窗**必须传**，否则「摇杆-鼠标」加进去就是死的
+     * （一个永远居中的摇杆，看起来像坏了）。
+     */
+    mouseMotion: MouseMotion? = null,
 ) {
     val alphaLayer = if (overallAlpha < 1f) {
         Modifier.graphicsLayer { alpha = overallAlpha.coerceIn(0f, 1f) }
@@ -334,7 +361,7 @@ fun CustomKeyCanvas(
         )
         Box(modifier = modifier.size((baseWidth * scale).dp, (baseHeight * scale).dp)) {
             Box(modifier = alphaLayer) {
-                CustomKeyCanvasContent(settings, pressedCodes, scale, cpsBySlot, slotIdOf, sticks)
+                CustomKeyCanvasContent(settings, pressedCodes, scale, cpsBySlot, slotIdOf, sticks, mouseMotion)
             }
         }
         return
@@ -362,7 +389,7 @@ fun CustomKeyCanvas(
                 .align(Alignment.Center),
         ) {
             Box(modifier = alphaLayer) {
-                CustomKeyCanvasContent(settings, pressedCodes, fittedScale, cpsBySlot, slotIdOf, sticks)
+                CustomKeyCanvasContent(settings, pressedCodes, fittedScale, cpsBySlot, slotIdOf, sticks, mouseMotion)
             }
         }
     }
@@ -377,6 +404,7 @@ private fun CustomKeyCanvasContent(
     cpsBySlot: Map<String, Int>,
     slotIdOf: (Int) -> String?,
     sticks: StickState,
+    mouseMotion: MouseMotion?,
 ) {
     settings.components.forEach { component ->
         /*
@@ -394,6 +422,13 @@ private fun CustomKeyCanvasContent(
                 component = component,
                 scale = scale,
                 sticks = sticks,
+                /*
+                 * ⚠️ 键盘摇杆要读当前按住了哪些键 —— 与按键组件 `isPressed`
+                 * 用的是**同一份** `pressedCodes`，所以"按 W 时 W 键帽亮、
+                 * 摇杆-键盘也指向上"天然同步，不需要第二条数据通道。
+                 */
+                pressedCodes = pressedCodes,
+                mouseMotion = mouseMotion,
             )
             return@forEach
         }
@@ -448,6 +483,8 @@ private fun JoystickComponentView(
     component: JoystickComponent,
     scale: Float,
     sticks: StickState,
+    pressedCodes: Set<Int>,
+    mouseMotion: MouseMotion?,
 ) {
     /*
      * 边长取组件宽高里**较小**的那个:摇杆的三层几何（圆角、内圆半径、
@@ -466,22 +503,89 @@ private fun JoystickComponentView(
         height = side,
     )
 
+    val style = effectiveJoystickStyle(component)
+
     /*
-     * ⚠️ 哪一边由组件自己的 `side` 决定 —— **不看**「标准」样式那个
-     * "摇杆互换"开关:自定义画布上可以同时放好几个摇杆，
-     * 一个全局开关会让它们一起翻，而且和组件上写的"左/右"矛盾。
+     * ============================================================
+     * ⚠️⚠️ 这里就是"三层分离"的第二层入口
+     * ============================================================
+     * 三种摇杆**只在这里分叉**，往下（[JoystickSlot] → [Joystick] 的弹簧）
+     * 完全共用同一套渲染 —— 用户的原话:"渲染 UI 这一块要考虑怎么写"，
+     * 而答案是**基本不用写**，因为 [JoystickSlot] 只吃 `(x, y)`。
+     *
+     * ⚠️ 坐标系:X 右为正、**Y 下为正**（屏幕坐标），与
+     * [com.something.sthkey.capture.StickState] 一致 —— 见
+     * `JoystickInput.kt` 文件头那段（那里记着一次"两个摇杆 Y 都反了"的翻车）。
      */
-    val (rawX, rawY) = when (component.side) {
-        StickSide.LEFT -> sticks.lx to sticks.ly
-        StickSide.RIGHT -> sticks.rx to sticks.ry
+    val (x, y) = when (component.source) {
+        JoystickSource.GAMEPAD -> {
+            /*
+             * ⚠️ 哪一边由组件自己的 `side` 决定 —— **不看**「标准」样式那个
+             * "摇杆互换"开关:自定义画布上可以同时放好几个摇杆，
+             * 一个全局开关会让它们一起翻，而且和组件上写的"左/右"矛盾。
+             */
+            val (rawX, rawY) = when (component.side) {
+                StickSide.LEFT -> sticks.lx to sticks.ly
+                StickSide.RIGHT -> sticks.rx to sticks.ry
+            }
+            /*
+             * 死区与灵敏度与「标准」样式一样，在渲染前做一次
+             * （见 [JoystickStyle.displayValue]）。
+             *
+             * ⚠️ **只有手柄摇杆走这一步**:那两个参数是给会漂移的连续轴用的，
+             * 键盘的八段式没有死区可言，鼠标那边用的是它自己的灵敏度。
+             */
+            style.displayValue(rawX) to style.displayValue(rawY)
+        }
+
+        JoystickSource.KEYBOARD -> {
+            /*
+             * ⚠️ **键位来自组件自己的映射**（`inputKeyCodes`），不写死 WASD ——
+             * 用户的原话:"因为这**不能写死**，有的用户可能会用别的按键"。
+             *
+             * ⚠️⚠️ **这里只算目标，不做动画** —— 位置的计算全部在
+             * [Joystick] 的帧循环里（见它的 `linearDurationMs` 参数）。
+             *
+             * 用户的原话:
+             *
+             * > 这回有反应了但是**一卡一卡的**，说明你还是踩了之前的坑，
+             * > 你应该**参照手柄摇杆的渲染方式**，只有动画自己写
+             *
+             * ⚠️ 我上一版**在这个组合阶段算位置并写 State**，于是 Compose
+             * 每帧都要"再组合一次才安定" —— 那就是"一卡一卡"的来源。
+             * 现在这里只剩**纯计算、零 State**（与手柄摇杆算 `targetX` 一样），
+             * 平滑交给弹簧、常规交给帧循环里的线性跟随。
+             */
+            keyboardJoystickVector(
+                pressedCodes = pressedCodes,
+                keys = component.inputKeyCodes,
+                threshold = component.keyboardFeel.threshold,
+            )
+        }
+
+        JoystickSource.MOUSE -> {
+            /*
+             * ⚠️ **纯累加**（[rememberMouseJoystickOffset]）—— 鼠标停下后目标
+             * 停在原地，**没有回中**。
+             *
+             * ⚠️ 回中已按用户要求删除:
+             *
+             * > 算了，我们还是不做回中了，清理一下吧，回中等有精力再做
+             *
+             * ⚠️ 它试了四版都没做稳，最后一版让摇杆**彻底不动** ——
+             * 完整原因见 [rememberMouseJoystickOffset] 的说明
+             * （一句话:回中需要跨重组存活的帧循环，而那不是 Compose effect
+             * 能保证的事）。
+             *
+             * ⚠️ 帽子的**平滑没有丢** —— 那是外层 [JoystickSlot] 的弹簧在做。
+             */
+            rememberMouseJoystickOffset(component.id, component.mouseFeel, mouseMotion)
+        }
     }
 
-    /* 死区与灵敏度与「标准」样式一样，在渲染前做一次（见 JoystickStyle.displayValue） */
-    val style = component.joystick
-
     JoystickSlot(
-        x = style.displayValue(rawX),
-        y = style.displayValue(rawY),
+        x = x,
+        y = y,
         box = box,
         scale = scale,
         style = style,
@@ -505,7 +609,181 @@ private fun JoystickComponentView(
             top = component.y + (component.height - side) / 2f,
             scale = scale,
         ),
+        /*
+         * ⚠️⚠️ **常规模式的动画在这里生效** —— 位置由 [Joystick] 的帧循环
+         * 按这个时长**线性插值**算出来；`0` = 走弹簧（平滑模式 / 手柄 / 鼠标）。
+         *
+         * 用户的原话:"你应该参照手柄摇杆的渲染方式，**只有动画自己写**"。
+         * ⚠️ 所以这里只传一个数 —— **渲染路径一个字都没改**。
+         */
+        linearDurationMs = linearDurationMsOf(component),
     )
+}
+
+/**
+ * 这个组件要不要走**线性跟随**，以及走多久。
+ *
+ * ⚠️ 只有「摇杆-键盘」+「常规」模式才有值；其余一律 `0`（= 弹簧）:
+ *
+ * | 组件 | 值 |
+ * |---|---|
+ * | 摇杆-键盘 · 常规 | `keyboardFeel.durationMs` |
+ * | 摇杆-键盘 · 平滑 | `0` |
+ * | 手柄摇杆 | `0`（**原样保留**，用户要求过） |
+ * | 摇杆-鼠标 | `0` |
+ *
+ * ⚠️ 用 `when` 不留 `else`:以后给 [JoystickSource] 加第四种输入源时
+ * 编译器会在这里报错，而不是静默走弹簧或者静默走线性。
+ */
+private fun linearDurationMsOf(component: JoystickComponent): Float = when (component.source) {
+    JoystickSource.GAMEPAD -> 0f
+    JoystickSource.MOUSE -> 0f
+    JoystickSource.KEYBOARD -> when (component.keyboardFeel.mode) {
+        JoystickFollowMode.REGULAR -> component.keyboardFeel.durationMs
+        JoystickFollowMode.SMOOTH -> 0f
+    }
+}
+
+/**
+ * 这个组件**实际生效**的外观 —— 在 [JoystickStyle] 上叠一层"手感修正"。
+ *
+ * ============================================================
+ * ⚠️⚠️ 为什么必须有它（用户报的"平滑时间滑块没用"）
+ * ============================================================
+ * 用户的原话:"键盘摇杆**只有方向阈值能用**，鼠标摇杆**只有灵敏度能用**"。
+ *
+ * ⚠️ 成因:弹簧（[Joystick]）读的是 `style.smoothingMs`，而键盘/鼠标的
+ * 平滑时间存在**另外两个字段**里（[KeyboardJoystickFeel.smoothingMs] /
+ * [MouseJoystickFeel.smoothingMs]）—— 那两个值**从来没被传给渲染**。
+ *
+ * 于是那个滑块改了 `keyboardFeel` / `mouseFeel` 里的数、界面上的数字也变了，
+ * 但**画出来的东西一动不动** —— 标准的"骗人设置"。
+ *
+ * ⚠️ 修法是"在传给渲染之前把生效值叠上去"，而不是"让渲染去认识三种手感":
+ * 后者要把 `Joystick` 改成按来源分支，而它**现在完全不知道输入源的存在**
+ * （那正是"三层分离"的价值，不能破坏）。
+ */
+private fun effectiveJoystickStyle(component: JoystickComponent): JoystickStyle {
+    val base = component.joystick
+    /*
+     * ⚠️ 手柄**原样返回** —— 它的平滑时间本来就在 `style` 里，
+     * 不需要也不应该被别人覆盖（用户要求"手柄摇杆保留原样"）。
+     */
+    return when (component.source) {
+        JoystickSource.GAMEPAD -> base
+        JoystickSource.KEYBOARD -> base.copy(
+            smoothingMs = when (component.keyboardFeel.mode) {
+                /*
+                 * ⚠️⚠️ 常规模式**把弹簧关掉**（`0` = 精准，直接用目标值）。
+                 *
+                 * 位置已经由 [followJoystickTarget] 按时间插值算好了，
+                 * 再叠一层弹簧就成了"两级平滑" —— 表现为**又软又慢**，
+                 * 而且用户调「响应时间」时会觉得"改了没什么用"
+                 * （弹簧把插值的结果又抹平了一次）。
+                 *
+                 * ⚠️ `smoothingMs = 0f` 在 [Joystick] 里是**官方支持的档位**
+                 * （"精准"模式:一个 State 都不碰），不是绕过它。
+                 */
+                JoystickFollowMode.REGULAR -> 0f
+                JoystickFollowMode.SMOOTH -> component.keyboardFeel.smoothingMs
+            },
+        )
+        JoystickSource.MOUSE -> base.copy(smoothingMs = component.mouseFeel.smoothingMs)
+    }
+}
+
+    /*
+     * ⚠️⚠️ 这里原本有一个"在组合阶段算位置并写 State"的跟随实现
+     * （`followJoystickTarget` + `JoystickFollowState` + `lerpToward`），
+     * **已经全部删除**。
+     *
+     * 用户的原话:
+     *
+     * > 这回有反应了但是**一卡一卡的**，说明你还是踩了之前的坑，
+     * > 你应该**参照手柄摇杆的渲染方式**，**只有动画自己写**
+     *
+     * ⚠️ 那个做法的错在于:**在组合阶段写 State** —— Compose 于是每帧都要
+     * "再组合一次才安定"，表现就是**一卡一卡**。
+     *
+     * ⚠️ 正确做法（现在用的）:位置在 **[Joystick] 的帧循环**里算，
+     * 结果落在 `smoothX/smoothY` 上，绘制阶段直接读 —— 与手柄摇杆
+     * **同一条渲染路径**。`CustomKeyGrid` 这边只负责"算出目标"（纯计算、零 State）
+     * 与"告诉它用线性还是弹簧"（`linearDurationMs`）。
+     *
+     * ⚠️ 那个纯函数的数学结论仍然有效、也被单测钉着（`JoystickFollowLerpTest`）:
+     * **全程线性、速度恒定**（用户朋友的原话:"速度都一样的"）。
+     * 帧循环里那段就是照这个式子写的。
+     */
+
+/**
+ * 「摇杆-鼠标」的偏移 —— **纯累加，没有回中**。
+ *
+ * ============================================================
+ * ⚠️⚠️ 这里曾经有一套"自动回中"，试了四版全部失败，已删除
+ * ============================================================
+ * 用户的原话:
+ *
+ * > 算了，我们还是不做回中了，清理一下吧，回中等有精力再做
+ *
+ * ⚠️ 四版的症状（**都是"帽子不动"这一种表现，但原因完全不同**）:
+ *
+ * | 版本 | 结构 | 症状 |
+ * |---|---|---|
+ * | 一 | 停止判据 `centered && motion === latestMotion` | 那个 `===` 恒为 true → 循环刚起步就死 |
+ * | 二 | `LaunchedEffect(motion)` 递增代数 + `LaunchedEffect(代数)` 跑循环 | **按一下任意按键才回中**（启停被重组摆布） |
+ * | 三 | 唯一的帧循环 + `Channel` | **整个组件死了** |
+ * | 四 | —— | 放弃 |
+ *
+ * ⚠️ 共同根源:**回中是纯时间驱动的**（鼠标停下后没有任何外部事件），
+ * 所以必须有一个**跨重组存活**的帧循环，而 Compose 的 effect 生命周期
+ * 天生不保证这件事。
+ *
+ * ============================================================
+ * 现在的实现:没有循环、没有 effect、没有时间
+ * ============================================================
+ * ```
+ * 鼠标在动 → 累加位移 × 灵敏度，夹到 ±1
+ * 鼠标停下 → 目标停在原地（帽子由外层弹簧平滑追上）
+ * ```
+ *
+ * ⚠️ 状态只有两个，都用 `remember` 由**调用方**持有:
+ * - [seen]  :已经处理到的累计量（用来差分）
+ * - [target]:现在偏到哪
+ *
+ * ⚠️ 帽子的**平滑仍然有** —— 那是外层 [JoystickSlot] 的弹簧在做，
+ * 与这里无关。所以"鼠标动起来帽子很顺"这一点没有丢。
+ *
+ * ⚠️ 这个函数**不启动任何协程** —— 它是纯的、只在重组时算一次。
+ * 那正是它稳的原因。
+ */
+@Composable
+private fun rememberMouseJoystickOffset(
+    componentId: String,
+    feel: MouseJoystickFeel,
+    motion: MouseMotion?,
+): Pair<Float, Float> {
+    /*
+     * ⚠️ 两个状态都 key 到**组件 id** —— 同一个组件换配置时不重置
+     * （换个灵敏度不该让帽子跳回中心）；不同组件各有一份，
+     * 否则两个鼠标摇杆会互相串。
+     */
+    var seen by remember(componentId) { mutableStateOf(MouseMotion()) }
+    var target by remember(componentId) { mutableStateOf(0f to 0f) }
+
+    /*
+     * ⚠️ 在**组合里**直接算，不进 effect。
+     *
+     * ⚠️ 不要"为了整洁"把它挪进 `LaunchedEffect` —— 那正是前四版的死法:
+     * 一旦进了 effect，就要面对"它什么时候被取消、什么时候重建"，
+     * 而这里的逻辑**根本不需要那种生命周期**（它没有时间维度）。
+     */
+    if (motion != null) {
+        val (nextSeen, nextTarget) = mouseJoystickStep(motion, seen, target, feel)
+        if (nextSeen != seen) seen = nextSeen
+        if (nextTarget != target) target = nextTarget
+    }
+
+    return target
 }
 
 /**
@@ -1251,6 +1529,7 @@ private fun logCpsDiagnostic(
 }
 
 private const val TAG = "CustomKey"
+
 
 /** CPS 诊断日志的最小间隔 */
 private const val CPS_LOG_INTERVAL_MS = 1_000L

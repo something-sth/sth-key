@@ -319,12 +319,12 @@ object JsonConfigCodec {
             strokeOpacity = json.optDouble("strokeOpacity", d.strokeOpacity.toDouble())
                 .toFloat().coerceIn(0f, 1f),
             strokeWidthRatio = json.optDouble("strokeWidthRatio", d.strokeWidthRatio.toDouble())
-                .toFloat().coerceIn(0f, 0.2f),
+                .toFloat().coerceIn(0f, JoystickStyle.MAX_WIDTH_RATIO),
             ringColor = readJoystickColor(json, "ringColor", d.ringColor),
             ringOpacity = json.optDouble("ringOpacity", d.ringOpacity.toDouble())
                 .toFloat().coerceIn(0f, 1f),
             ringWidthRatio = json.optDouble("ringWidthRatio", d.ringWidthRatio.toDouble())
-                .toFloat().coerceIn(0f, 0.2f),
+                .toFloat().coerceIn(0f, JoystickStyle.MAX_WIDTH_RATIO),
             knobScale = json.optDouble("knobScale", d.knobScale.toDouble())
                 .toFloat().coerceIn(0.2f, 2f),
             knobColor = readJoystickColor(json, "knobColor", d.knobColor),
@@ -338,7 +338,7 @@ object JsonConfigCodec {
             knobStrokeWidthRatio = json.optDouble(
                 "knobStrokeWidthRatio",
                 d.knobStrokeWidthRatio.toDouble(),
-            ).toFloat().coerceIn(0f, 0.3f),
+            ).toFloat().coerceIn(0f, JoystickStyle.MAX_WIDTH_RATIO),
             deadZone = json.optDouble("deadZone", d.deadZone.toDouble())
                 .toFloat().coerceIn(0f, 0.5f),
             sensitivity = json.optDouble("sensitivity", d.sensitivity.toDouble())

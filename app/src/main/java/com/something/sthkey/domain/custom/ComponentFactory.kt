@@ -123,12 +123,40 @@ fun createComponent(
              */
             width = CustomLayout.NEW_KEY_SIZE,
             height = CustomLayout.NEW_KEY_SIZE,
+            source = JoystickSource.GAMEPAD,
             side = StickSide.LEFT,
             /*
              * 外观用「标准」样式那份配置里的摇杆设置 ——
              * 用户的原话是"配置项要与'标准'样式相同"，那么**默认值也该一致**，
              * 否则同一个摇杆在两个样式下开箱长得不一样。
              */
+            joystick = config.joystick,
+        )
+
+        /*
+         * ⚠️ 下面两个**刻意复用同一个构造**，只有 [JoystickSource] 与默认手感不同 ——
+         * 它们是"同一套渲染、不同输入源"（见 [ComponentType] 那段说明）。
+         *
+         * ⚠️ 外观**照样**取「标准」样式那份摇杆设置:三种摇杆开箱长得一样，
+         * 用户要区分只能靠"给它们配不同的颜色"，而不是靠默认长得不同。
+         */
+        ComponentType.JOYSTICK_KEYBOARD -> JoystickComponent(
+            id = id,
+            x = baseX,
+            y = baseY,
+            width = CustomLayout.NEW_KEY_SIZE,
+            height = CustomLayout.NEW_KEY_SIZE,
+            source = JoystickSource.KEYBOARD,
+            joystick = config.joystick,
+        )
+
+        ComponentType.JOYSTICK_MOUSE -> JoystickComponent(
+            id = id,
+            x = baseX,
+            y = baseY,
+            width = CustomLayout.NEW_KEY_SIZE,
+            height = CustomLayout.NEW_KEY_SIZE,
+            source = JoystickSource.MOUSE,
             joystick = config.joystick,
         )
     }
@@ -191,11 +219,32 @@ fun duplicateComponent(
     return offset
 }
 
-/** 组件的类型（用于生成同前缀的新 id） */
+/**
+ * 组件的类型（用于生成同前缀的新 id）。
+ *
+ * ============================================================
+ * ⚠️⚠️ 三种摇杆必须按 [JoystickComponent.source] 分，不能都当成 `JOYSTICK`
+ * ============================================================
+ * 我第一版这里写的是 `is JoystickComponent -> ComponentType.JOYSTICK` ——
+ * 而那是**三种摇杆共用一个数据类**带来的陷阱:
+ *
+ * | 谁调用它 | 写错的后果 |
+ * |---|---|
+ * | [newComponentId] | 复制「摇杆-键盘」得到的 id 是 `joystick_xxx`， 前缀与实际类型对不上（排查时很误导） |
+ *
+ * ⚠️ 更麻烦的是这个错误**不会报错、也不影响渲染** —— 只是 id 前缀难看。
+ * 所以它只能靠"读代码时想起来三种摇杆共用一个类"来发现。
+ *
+ * ⚠️ 映射本身**只有一份真源**:[ComponentType.of]，这里直接用它，
+ * 不再写第二个 `when` —— 两份映射必然漂开，而"漂开"的表现是
+ * "存档写的是键盘摇杆、id 前缀却是手柄摇杆"。
+ *
+ * ⚠️ `when` 不留 `else`:给 [CustomComponent] 加第四种实现时编译器会报错。
+ */
 fun typeOf(component: CustomComponent): ComponentType = when (component) {
     is KeyComponent -> ComponentType.KEY
     is TextComponent -> ComponentType.TEXT
-    is JoystickComponent -> ComponentType.JOYSTICK
+    is JoystickComponent -> ComponentType.of(component.source)
 }
 
 /**

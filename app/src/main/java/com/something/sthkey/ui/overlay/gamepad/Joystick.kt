@@ -69,6 +69,40 @@ fun Joystick(
     thumbSize: Float,
     style: JoystickStyle,
     modifier: Modifier = Modifier,
+    /**
+     * **线性跟随**的时长（毫秒）。`> 0` = 用它替代弹簧。
+     *
+     * ============================================================
+     * ⚠️ 这是什么（"键盘摇杆的常规模式"）
+     * ============================================================
+     * 用户朋友的实现是:
+     *
+     * > 我速度都是**写一样的** / wasd 按下 / 摇杆头不就往指定方向动吗 /
+     * > **速度都一样的**
+     *
+     * 也就是"在固定时长内**匀速**从当前位置走到目标"，
+     * 而不是弹簧那种有惯性、会过冲的运动。
+     *
+     * ============================================================
+     * ⚠️⚠️ 为什么做进**这个**帧循环，而不是在外面另写一个动画
+     * ============================================================
+     * 用户的原话:
+     *
+     * > 说明你还是踩了之前的坑，你应该**参照手柄摇杆的渲染方式**，
+     * > **只有动画自己写**
+     *
+     * ⚠️ 我上一版在外面（`CustomKeyGrid` 的组合阶段）算位置并写 State
+     * —— 那会让 Compose **每帧都要"再组合一次才安定"**，表现就是**一卡一卡**。
+     *
+     * ⚠️ 而手柄摇杆的渲染路径**本来就能读这个值**:
+     * 绘制阶段 `if (smoothingMs <= 0f) 读 smoothX/smoothY`。
+     * 所以这里**复用同一对 State**，绘制层**一个字都不用改** ——
+     * 那正是"渲染走手柄那套、只有动画自己写"的字面做法。
+     *
+     * ⚠️ 也**不要**另起一个帧循环:`smoothX/smoothY` 是同一对 State，
+     * 两个循环一起写会互相覆盖。
+     */
+    linearDurationMs: Float = 0f,
 ) {
     val maxOffset = travelRadius
 
@@ -99,6 +133,65 @@ fun Joystick(
      * ⚠️ 它只做**上限夹取**；真正的平滑快慢由弹簧参数决定
      */
     val smoothingMs = style.smoothingMs.coerceIn(0f, SMOOTHING_MAX_MS)
+
+    /**
+     * **绘制阶段该不该读 `smoothX/smoothY`**（而不是直接读目标）。
+     *
+     * ============================================================
+     * ⚠️⚠️ 为什么不能只看 `smoothingMs > 0f`
+     * ============================================================
+     * 三态:
+     *
+     * | 模式 | `smoothingMs` | `linearDurationMs` | 该读 | 为什么 |
+     * |---|---|---|---|---|
+     * | 手柄·精准 | `0` | `0` | `targetX` | **零延迟就是"精准"的意义** |
+     * | 手柄·平滑 | `>0` | `0` | `smoothX` | 弹簧值 |
+     * | 键盘·常规 | `0` | `>0` | **`smoothX`** | ⚠️ 线性跟随值 |
+     *
+     * ⚠️ 只看 `smoothingMs` 的话，"键盘·常规"会落进"精准"那一支、
+     * 去读 `targetX` —— **动画在算（日志能看到），但画出来的是目标值**
+     * → 摇杆帽**瞬间到位**。
+     *
+     * ⚠️ 用户报的就是这个:"悬浮窗上，我按下 W，摇杆头瞬间往前，
+     * 但是，日志里，是根据我调的响应时间输出的日志"。
+     * **两边数据都是对的，错的是"谁读谁"。**
+     */
+    val needsSmoothState = smoothingMs > 0f || linearDurationMs > 0f
+
+    /**
+     * **线性跟随**的时长（毫秒）。`> 0` = 用它替代弹簧。
+     *
+     * ============================================================
+     * ⚠️ 这是什么（"键盘摇杆的常规模式"）
+     * ============================================================
+     * 用户朋友的实现是:
+     *
+     * > 我速度都是**写一样的** / wasd 按下 / 摇杆头不就往指定方向动吗 /
+     * > **速度都一样的**
+     *
+     * 也就是"在固定时长内**匀速**从当前位置走到目标"，而不是弹簧那种
+     * 有惯性、会过冲的运动。
+     *
+     * ============================================================
+     * ⚠️⚠️ 为什么做进**这个**帧循环，而不是在外面另写一个动画
+     * ============================================================
+     * 用户的原话:
+     *
+     * > 说明你还是踩了之前的坑，你应该**参照手柄摇杆的渲染方式**，
+     * > **只有动画自己写**
+     *
+     * ⚠️ 我上一版在外面（`CustomKeyGrid` 的组合阶段）算位置并写 State
+     * —— 那会让 Compose **每帧都要"再组合一次才安定"**，
+     * 表现就是**一卡一卡**。
+     *
+     * ⚠️ 而手柄摇杆的渲染路径**本来就能读这个值**:
+     * 绘制阶段 `if (smoothingMs <= 0f) 读 smoothX/smoothY`。
+     * 所以这里**复用同一对 State**，绘制层**一个字都不用改** ——
+     * 那正是"渲染走手柄那套、只有动画自己写"的字面做法。
+     *
+     * ⚠️ 也**不要**另起一个帧循环:`smoothX/smoothY` 是同一对 State，
+     * 两个循环一起写会互相覆盖。
+     */
 
     /*
      * ============================================================
@@ -154,11 +247,36 @@ fun Joystick(
     var velocityY by remember { mutableStateOf(0f) }
 
     /*
+     * ============================================================
+     * 线性跟随（"常规模式"）的锚点与终点
+     * ============================================================
+     * ⚠️ 只在 [linearDurationMs] > 0 时用到。
+     *
+     * | 字段 | 含义 |
+     * |---|---|
+     * | [linearFromX/Y] | **这一段**的起点（插值从这里出发） |
+     * | [linearEndX/Y] | **这一段**的终点（= 那一次的目标） |
+     * | [linearStartMs] | 这一段是什么时候开始的 |
+     *
+     * ⚠️ 判"要不要开新的一段"必须比**终点**（`linearEnd`），
+     * 不能比起点 —— 比起点的话动画走完之后判据**永远成立**，
+     * 于是每帧重开一段、帽子永远到不了目标（"看起来死了"）。
+     * 这个坑有单测钉着（`JoystickFollowStateTest`）。
+     */
+    var linearFromX by remember { mutableStateOf(0f) }
+    var linearFromY by remember { mutableStateOf(0f) }
+    var linearEndX by remember { mutableStateOf(0f) }
+    var linearEndY by remember { mutableStateOf(0f) }
+    var linearStartMs by remember { mutableStateOf(0L) }
+    var linearStarted by remember { mutableStateOf(false) }
+
+    /*
      * ⚠️ **必须**用它读目标与平滑时间:普通 `val` 会被长生命周期 effect
      * 的闭包冻结（见上面"闭包冻结"那段）。
      */
     val latestTarget by rememberUpdatedState(targetX to targetY)
     val latestSmoothingMs by rememberUpdatedState(smoothingMs)
+    val latestLinearMs by rememberUpdatedState(linearDurationMs)
 
     LaunchedEffect(Unit) {
         /*
@@ -214,7 +332,54 @@ fun Joystick(
                 val stiffness = AXON_SPRING_STIFFNESS * k
                 val damping = AXON_SPRING_DAMPING * k
 
-                if (!seeded) {
+                /*
+                 * ============================================================
+                 * 线性跟随（"常规模式"）—— 与弹簧**二选一**
+                 * ============================================================
+                 * ⚠️ 用户的原话:"你应该**参照手柄摇杆的渲染方式**，
+                 * **只有动画自己写**"。
+                 *
+                 * ⚠️ 所以这里只写"怎么算位置"，结果照样落在
+                 * `smoothX/smoothY` 上 —— 绘制层读的就是这两个 State，
+                 * **一个字都不用改**。
+                 *
+                 * ⚠️ 为什么放在这个帧循环里、而不是在外面另写一个动画:
+                 * `smoothX/smoothY` 是同一对 State，两个循环一起写会互相覆盖。
+                 * 而"在组合阶段算并写 State"更糟 —— 那会让 Compose 每帧都要
+                 * "再组合一次才安定"，表现就是**一卡一卡**（我上一版就是这样）。
+                 */
+                val linearMs = latestLinearMs
+                if (linearMs > 0f) {
+                    val nowMs = frameTimeNanos / 1_000_000L
+                    /*
+                     * ⚠️ 判"要不要开新的一段"比的是**终点**（`linearEnd`），
+                     * 不是起点 —— 比起点的话动画走完之后判据永远成立，
+                     * 每帧重开一段、帽子永远到不了目标。
+                     */
+                    if (!linearStarted || tx != linearEndX || ty != linearEndY) {
+                        /* ⚠️ 起点取**当前位置** —— 中途换方向才不跳变 */
+                        linearFromX = smoothX
+                        linearFromY = smoothY
+                        linearEndX = tx
+                        linearEndY = ty
+                        linearStartMs = nowMs
+                        linearStarted = true
+                    }
+
+                    val next = linearFollowAt(
+                        from = linearFromX to linearFromY,
+                        target = linearEndX to linearEndY,
+                        elapsedMs = (nowMs - linearStartMs).toFloat(),
+                        durationMs = linearMs,
+                    )
+                    smoothX = next.first
+                    smoothY = next.second
+
+                    /* ⚠️ 线性模式不碰速度 —— 切回平滑时不要让旧速度"冲一下" */
+                    velocityX = 0f
+                    velocityY = 0f
+                    seeded = true
+                } else if (!seeded) {
                     /*
                      * 首帧:对准目标。
                      *
@@ -447,8 +612,34 @@ fun Joystick(
              * 捕获进闭包，要等重组才更新。
              */
             val travelRatio = travel / maxOffset.coerceAtLeast(1e-3f)
-            val drawX = if (smoothingMs <= 0f) targetX else smoothX
-            val drawY = if (smoothingMs <= 0f) targetY else smoothY
+            /*
+             * ============================================================
+             * ⚠️⚠️ 什么时候读 `smoothX/smoothY`（动画值）
+             * ============================================================
+             * 判定**不能只看 `smoothingMs`** —— 这个 `if` 原本是
+             * "精准模式 vs 弹簧"的分支，而我加了**线性跟随**之后它变成三态:
+             *
+             * | 模式 | `smoothingMs` | `linearMs` | 该读什么 |
+             * |---|---|---|---|
+             * | 手柄·精准 | `0` | `0` | `targetX`（零延迟，**这是精准模式的意义**） |
+             * | 手柄·平滑 | `>0` | `0` | `smoothX`（弹簧） |
+             * | 键盘·常规 | `0` | `>0` | ⚠️ **`smoothX`（线性跟随）** |
+             *
+             * ⚠️⚠️ 只判断 `smoothingMs <= 0f` 的话，"键盘·常规"会落进
+             * "精准"那一支、去读 `targetX` —— 于是:
+             *
+             * - 动画**在算**（帧循环里好好跑着，日志能看到）
+             * - 但**画出来的是目标值** → **摇杆帽瞬间到位**
+             *
+             * ⚠️ 用户报的就是这个:"日志就是在跑，我视觉上看悬浮窗，
+             * 就是一瞬间就到了"。而**两边的数据都是对的**，
+             * 错的是"谁读谁"。
+             *
+             * ⚠️ 用组合阶段的 [needsSmoothState]，**不是**帧循环里的
+             * `linearMs` —— 后者是那个 effect 的局部变量，这里看不到。
+             */
+            val drawX = if (needsSmoothState) smoothX else targetX
+            val drawY = if (needsSmoothState) smoothY else targetY
             val center = Offset(
                 x = size.width / 2f + drawX * pxPerBase * travelRatio,
                 y = size.height / 2f + drawY * pxPerBase * travelRatio,
@@ -601,6 +792,57 @@ private fun argbWithOpacity(argb: Int, opacity: Float): Color {
  * ⚠️ 不要在两处各写一份比例。改了一处忘了另一处，
  * 表现是"两个手柄样式的摇杆手感不一样"，而那很难说清哪个才对。
  */
+/**
+ * **线性跟随**的单帧位置（纯函数，独立出来是为了能被单测钉住）。
+ *
+ * ============================================================
+ * ⚠️ 语义来自用户朋友（做 iOS 按键显示那位）
+ * ============================================================
+ *
+ * > 我速度都是**写一样的** / wasd 按下 / 摇杆头不就往指定方向动吗 /
+ * > **速度都一样的**
+ *
+ * 也就是**全程匀速**:`位置 = 起点 + (目标 - 起点) × (已过时间 / 总时长)`。
+ *
+ * ⚠️ **不套任何缓动** —— 我上一版做了"两端各 1/4 缓动"，与这句话正好相反
+ * （那会让起步与收尾变慢），已经删掉。
+ *
+ * ============================================================
+ * ⚠️⚠️ 为什么它必须是纯函数
+ * ============================================================
+ * 这段逻辑原来是写在 `CustomKeyGrid` 的**组合阶段**的 —— 于是:
+ *
+ * | 问题 | 表现 |
+ * |---|---|
+ * | 在组合阶段写 State | Compose 每帧都要"再组合一次才安定" → **一卡一卡** |
+ * | 埋在 composable 里 | **没法测** → 只能真机看、只能猜 |
+ *
+ * ⚠️ 现在它在 [Joystick] 的**帧循环**里被调用（与手柄弹簧同一条路），
+ * 而算式本身是纯的、`JoystickFollowLerpTest` 直接钉着它的性质:
+ * 端点正确、**等时间走等距离**、时间回退不反向、时长为 0 不留 NaN。
+ *
+ * @param from 这一段的起点
+ * @param target 这一段的终点
+ * @param elapsedMs 这一段已经开始多久
+ * @param durationMs 走完这一段要多久（**必须 > 0**，除零会得到 NaN）
+ */
+internal fun linearFollowAt(
+    from: Pair<Float, Float>,
+    target: Pair<Float, Float>,
+    elapsedMs: Float,
+    durationMs: Float,
+): Pair<Float, Float> {
+    /*
+     * ⚠️ 除零保护:`durationMs` 为 0 时 `elapsed / 0` 得到 `Infinity` 或 `NaN`，
+     * 而 `NaN` 会**一路画到界面上**（帽子消失、滑块失灵）。
+     */
+    val safeDuration = durationMs.coerceAtLeast(1e-3f)
+    /* ⚠️ `elapsedMs` 也要夹到 >= 0:时钟抖动时负的 t 会让帽子朝反方向走 */
+    val t = (elapsedMs.coerceAtLeast(0f) / safeDuration).coerceIn(0f, 1f)
+    return (from.first + (target.first - from.first) * t) to
+        (from.second + (target.second - from.second) * t)
+}
+
 internal object JoystickSpec {
 
     /** 用户拇指能推到的**最大距离**（占边长的比例） */
@@ -638,6 +880,13 @@ internal fun JoystickSlot(
     scale: Float,
     style: JoystickStyle,
     modifier: Modifier = Modifier,
+    /**
+     * 线性跟随的时长（毫秒）；`0` = 用弹簧。
+     *
+     * ⚠️ 只有「摇杆-键盘」的**常规模式**会传它 —— 见 [Joystick] 的同名参数
+     * （那里解释了为什么它必须做进帧循环、而不是在外面另写动画）。
+     */
+    linearDurationMs: Float = 0f,
 ) {
     /*
      * ⚠️ 边长取 `box.width` —— **不再在这里乘 `style.sizeScale`**。
@@ -671,6 +920,8 @@ internal fun JoystickSlot(
         thumbSize = thumb,
         style = style,
         modifier = modifier,
+        /* ⚠️ `0` = 用弹簧（手柄 / 键盘的平滑模式 / 鼠标都走它） */
+        linearDurationMs = linearDurationMs,
     )
 }
 /**

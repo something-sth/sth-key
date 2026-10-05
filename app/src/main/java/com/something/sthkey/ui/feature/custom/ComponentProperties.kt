@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import com.something.sthkey.domain.config.ANIMATION_DURATION_MAX
 import com.something.sthkey.domain.config.ANIMATION_DURATION_MIN
 import com.something.sthkey.domain.config.AnimationMode
+import com.something.sthkey.domain.config.JoystickStyle
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.config.ShadowMode
 import com.something.sthkey.domain.custom.ComponentCategory
@@ -320,6 +321,13 @@ fun PropertyPanel(
     onPickBitmapFont: () -> Unit,
     onPickKeys: (KeyComponent) -> Unit,
     onPickCpsKeys: (TextComponent, Int) -> Unit,
+    /**
+     * 「摇杆-键盘」的**四个键位**里，用户点了第 [Int] 个（0=上 / 1=左 / 2=下 / 3=右）。
+     *
+     * ⚠️ 带回**下标**是必需的 —— 只传组件的话，点「下」也会改到「上」，
+     * 前面配好的就全丢了（与 `onPickCpsKeys` 必须带"第几个占位符"同一个理由）。
+     */
+    onPickJoystickKey: (JoystickComponent, Int) -> Unit,
 ) {
     if (component == null) {
         Column(
@@ -383,6 +391,11 @@ fun PropertyPanel(
                 is JoystickComponent -> JoystickContentSection(
                     component = component,
                     onComponentChange = onComponentChange,
+                    /*
+                     * ⚠️ 键位映射在「内容」栏（用户纠正过:我原来放在了
+                     * 「摇杆手感」栏），所以这个回调也从这里往下传。
+                     */
+                    onPickJoystickKey = onPickJoystickKey,
                 )
 
                 is KeyComponent, is TextComponent -> ContentSection(
@@ -515,7 +528,11 @@ fun PropertyPanel(
                 expanded = PanelSection.JOYSTICK_FEEL in expanded,
                 onToggle = { expanded = expanded.toggle(PanelSection.JOYSTICK_FEEL) },
             ) {
-                JoystickFeelSection(component = component, onComponentChange = onComponentChange)
+                JoystickFeelSection(
+                    component = component,
+                    onComponentChange = onComponentChange,
+                    onPickJoystickKey = onPickJoystickKey,
+                )
             }
         }
 
@@ -1630,6 +1647,20 @@ fun SliderRow(
     onChange: (Float) -> Unit,
     onEnd: () -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * 滑块的**档位间隔数**（`Slider` 的 `steps`）；`0` = 连续可拖。
+     *
+     * ⚠️ 默认 `0`（连续）—— 与改动前完全一致，老调用方不受影响。
+     *
+     * ⚠️ 什么时候要传:当"范围宽度 / 100"算出来的档位对用户**太粗**时。
+     * 例如「响应时间」的范围是 `20..600`（宽 580），默认粒度是 5.8 ——
+     * 拖出来 `470.88318` 这种值，**存进配置、界面上还显示不出来**
+     * （用户的原话:"滑块没有设置最小单位是1所以会有一堆小数"）。
+     *
+     * ⚠️ 传 `跨度 - 1` 就是"每 1 个单位一档"（`steps` 是间隔数，
+     * 可停靠位置有 `steps + 1` 个）。
+     */
+    steps: Int = 0,
 ) {
     EditableSliderRow(
         label = label,
@@ -1639,25 +1670,257 @@ fun SliderRow(
         onValueChange = onChange,
         modifier = modifier.padding(horizontal = 4.dp),
         step = stepOf(range),
+        steps = steps,
         onBeginDrag = onBegin,
         onEndDrag = onEnd,
     )
 }
 
 /**
- * 输入框的粒度：按**范围宽度**猜一个合理的精度。
+ * 输入框 / 滑块的粒度：按**范围宽度**猜一个合理的精度。
  *
- * 范围很窄的（比如 0..1 的透明度）需要小数，宽范围（0..200）用整数就够 ——
- * 一律用整数的话窄范围只能填 0 或 1，一律用小数的话宽范围
+ * 范围很窄的（比如 `0..1` 的透明度）需要小数，宽范围（`0..200`）用整数就够
+ * —— 一律用整数的话窄范围只能填 0 或 1，一律用小数的话宽范围
  * 会看到"125.0"这种多余的小数点。
+ *
+ * ============================================================
+ * ⚠️⚠️ 最后那个"宽度不足 100 档就按 100 档切"是必需的
+ * ============================================================
+ * 我原来只写了"span ≤ 2 → 0.01"这一档。而那对**特别窄**的范围是坏的:
+ * 鼠标灵敏度是 `0.0005..0.02`（span `0.0195`），按 0.01 切的话
+ * **整个滑块只剩两三个可停的位置**，精调完全不可能 ——
+ * 而那个范围恰恰是用户明确要求"下限再低一点"才变成这么窄的。
+ *
+ * ⚠️ 所以现在:`step = span / 100`，但**不比原来猜出来的粒度更细**。
+ * 「平滑时间」那种 span 290 的滑块仍然是 1（与改动前一致，行为没变）。
  */
 internal fun stepOf(range: ClosedFloatingPointRange<Float>): Float {
     val span = range.endInclusive - range.start
-    return when {
+    val guessed = when {
         span <= 2f -> 0.01f
         span <= 20f -> 0.1f
         else -> 1f
     }
+    /*
+     * ⚠️ 至少给 100 个可停位置 —— 否则窄范围会变成"只有两三档"。
+     * 比原粒度更粗的方向**不动**（guessed 更大时保留 guessed）。
+     */
+    return minOf(guessed, span / 100f).coerceAtLeast(1e-6f)
+}
+
+/**
+ * 把"存在比例"的字段做成滑块：**滑块上的数字 = 输入框里的数字**。
+ *
+ * ============================================================
+ * ⚠️⚠️ 它解决的是"显示单位与输入单位不一致"
+ * ============================================================
+ * 摇杆的这几个字段在数据里存的是 **`0..1` 的比例**
+ * （`JoystickStyle.cornerRatio` / `opacity` …），而界面上习惯用**百分比**显示:
+ *
+ * ```
+ * 数据 0.225  →  滑块旁边显示 "45%"
+ * ```
+ *
+ * 问题出在"点数字弹输入框"那一步:[EditableSliderRow] 的输入框填的是
+ * **滑块自己的值**（也就是 `0.225`）—— 于是用户看到:
+ *
+ * | 位置 | 显示 |
+ * |---|---|
+ * | 滑块旁边 | `45%` |
+ * | 点开输入框 | `0.225` |
+ *
+ * 用户的原话:"**手柄摇杆的圆角滑块是百分比调整，但是点击数字弹出输入框，
+ * 数值居然不一样**……不明不白的，需要改进一下，与正常组件配置调整时的单位统一"。
+ *
+ * ⚠️ 这里**不靠 `suffix` 补救** —— 加个单位后缀只是让输入框多显示一个 `%`，
+ * 里面的数字仍然是 `0.225`，用户还是得自己换算。而"统一单位"的意思是
+ * **两个地方的数字一样**。
+ *
+ * ============================================================
+ * 做法:滑块工作在**显示单位**上，进出各换算一次
+ * ============================================================
+ * - [range] 与 [displayValue] 都用**显示单位**（百分比就是 `0..50`、`0..100`）；
+ * - [toRatio] 把显示值换算回数据用的比例（百分比就是 `÷ 100`）；
+ * - 从而输入框的取值范围 = 用户看到的范围，两边天然一致。
+ *
+ * ⚠️ 只对**确实是"显示单位与存储单位不同"**的字段用它。
+ * 像 `sizeScale`（`1.5` 显示成 `1.50×`）、`smoothingMs`（`60` 显示成 `60 ms`）
+ * 这类"数字本身没变、只是加了符号"的字段用普通 [SliderRow] 就行 ——
+ * 硬套这一层只会多一次没必要的乘除，还容易把范围写错。
+ */
+@Composable
+internal fun JoystickSlider(
+    label: String,
+    style: JoystickStyle,
+    value: Float,
+    /**
+     * 以**显示单位**给出的合法范围。
+     *
+     * ⚠️ 名字里带 `Display` 是刻意的:它**不是**数据里那个 `0..1` 的比例范围。
+     * 滑块、输入框、粒度三者都按这个范围工作，才不会出现"滑块能拖到 50、
+     * 输入框却只允许 0.5"这种对不上的情况。
+     */
+    displayRange: ClosedFloatingPointRange<Float>,
+    /** 显示值 → 比例（数据里存的那个数） */
+    toRatio: (Float) -> Float,
+    /** 比例 → 显示值 */
+    fromRatio: (Float) -> Float,
+    /**
+     * 把**比例**写回样式。
+     *
+     * ⚠️ 由调用方给出（`{ s, r -> s.copy(cornerRatio = r) }`），
+     * 而不是让这个组件去猜字段名 —— 它只知道"新值"，不知道往哪放。
+     */
+    applyRatio: (JoystickStyle, Float) -> JoystickStyle,
+    /** 输入框的单位后缀；空表示不带单位 */
+    suffix: String,
+    /**
+     * 显示文本。
+     *
+     * ⚠️ 参数是**显示值**（`45f`），不是比例 —— 调用方不用再自己乘。
+     * 由这个函数统一换算，就不会出现"某个滑块忘了乘"这种不一致。
+     */
+    displayText: (Float) -> String,
+    onStyleChange: (JoystickStyle) -> Unit,
+    /** 内边距等；默认取本文件里滑块的共同值（`horizontal = 4.dp`） */
+    modifier: Modifier = Modifier.padding(horizontal = 4.dp),
+) {
+    /*
+     * ⚠️ **滑块与输入框都在显示单位上工作** —— 与按键/文本组件那边的做法一致
+     * （它们的 `cornerRadiusPercent` 存的就是 `16`，所以滑块与输入框天然一致）。
+     *
+     * 于是"滑块显示 45、输入框填 45"是**同一个数**，不存在
+     * "滑块显示 45%、输入框里却是 0.225"那种对不上的情况。
+     */
+    val shown = fromRatio(value)
+
+    EditableSliderRow(
+        label = label,
+        value = shown,
+        range = displayRange,
+        display = displayText(shown),
+        /* 粒度也按显示单位的范围算，与输入框里的数字量级一致 */
+        step = stepOf(displayRange),
+        suffix = suffix,
+        onValueChange = { typed -> onStyleChange(applyRatio(style, toRatio(typed))) },
+        modifier = modifier,
+    )
+}
+
+/**
+ * 把 [JoystickSlider] 用在**描边宽度**这类字段上。
+ *
+ * ============================================================
+ * ⚠️⚠️ 描边宽度的单位必须与按键/文本组件一致（dp）
+ * ============================================================
+ * 用户的原话:"别的组件描边宽度单位都是 dp，**只有摇杆组件描边粗细的单位是
+ * 千分号**，不知道还有没有别的地方是这个问题，你检查一下，**不要让摇杆组件
+ * 单独用一套单位**，不然很迷"。
+ *
+ * 而 `JoystickStyle` 里那几个字段存的是**相对边长的比例**
+ * （`strokeWidthRatio = 0.02` = 边长的 2%），渲染时:
+ *
+ * ```kotlin
+ * val strokeWidth = sideBase * style.strokeWidthRatio * pxPerBase
+ * ```
+ *
+ * ⚠️ 这个**存储方式**是有道理的（描边要跟着组件尺寸一起缩放，
+ * 组件能从 20 变到 1000），所以**存储保持比例不变**。
+ *
+ * ⚠️ 但**显示与输入都用 dp** —— 那才是"不让摇杆单独用一套单位"的意思。
+ * [baseDp] 是这条线宽的基准（底盘 / 内圆 = 组件边长，
+ * 帽描边 = 帽直径），单位与组件边长一致（基础坐标里 1:1 对应 dp）。
+ *
+ * 于是换算很直接:
+ *
+ * ```
+ * 显示 dp  = 比例 × baseDp
+ * 存回比例 = 输入的 dp / baseDp
+ * ```
+ */
+@Composable
+internal fun JoystickWidthSlider(
+    label: String,
+    style: JoystickStyle,
+    value: Float,
+    /** 这条线宽的基准长度（基础坐标，1:1 对应 dp） */
+    baseDp: Float,
+    /** 存回比例；`{ s, r -> s.copy(strokeWidthRatio = r) }` */
+    applyRatio: (JoystickStyle, Float) -> JoystickStyle,
+    /**
+     * **dp 上限**（不是比例上限）。
+     *
+     * ⚠️ 用 `JoystickStyle.STROKE_WIDTH_MAX_DP` 那几个常量 ——
+     * 它们与标准样式的「描边宽度」（`0.5f..5f`）一致。
+     *
+     * ⚠️ 以前这里传的是**比例**上限（`0.2f`），于是滑块的 dp 上限
+     * 变成 `0.2 × 基准` —— 在 120 的组件上就是 **24dp**，
+     * 而别的组件最多只能到 5dp。用户直接问了:
+     * "怎么你摇杆这里写描边最大值是 24？"
+     */
+    maxDp: Float,
+    onStyleChange: (JoystickStyle) -> Unit,
+    /**
+     * 内边距等。
+     *
+     * ============================================================
+     * ⚠️⚠️ 必须与**同一个页面里其它滑块**一致，否则长短不齐
+     * ============================================================
+     * 两个页面的标准内边距**不同**（它们各自的 `SliderRow` 就是这么写的）:
+     *
+     * | 页面 | 内边距 |
+     * |---|---|
+     * | 自定义编辑页 | `horizontal = 4.dp` |
+     * | 配置编辑页（标准样式） | `horizontal = 16.dp, vertical = 10.dp` |
+     *
+     * ⚠️ 我第一版把它写死成 `4.dp`，于是标准页那三个滑块比旁边的
+     * 滑块**左右各多出 12dp** —— 用户的原话:"**标准页有些滑块长一截**"。
+     *
+     * ⚠️ 所以这个值**由调用方给**，默认值取自定义页那个
+     * （本文件里所有滑块的共同默认）。
+     */
+    modifier: Modifier = Modifier.padding(horizontal = 4.dp),
+) {
+    /*
+     * ⚠️ `baseDp` 兜底到非 0:它来自组件尺寸，而尺寸理论上不会为 0，
+     * 但真出现 0 的话这里会除零得到 `NaN`，那会一路画到界面上
+     * （`NaN` 的滑块会整个失灵）。兜一下比事后排查便宜得多。
+     */
+    val safeBase = baseDp.coerceAtLeast(1f)
+
+    /*
+     * ⚠️ 存储是**比例**，而比例不能超过"dp 上限 / 基准" ——
+     * 超过的话渲染出来的线会超出 5dp，与滑块显示的上限对不上。
+     *
+     * 例:基准 24dp、dp 上限 5 → 比例上限 0.208。
+     */
+    val maxRatioByDp = maxDp / safeBase
+
+    /*
+     * ⚠️ 再按**真实的夹取上限**收一次:存档那边（`JsonConfigCodec` 的
+     * `ratioMax`）也会夹，两边不一致的话会出现"拖到底、数字不动"。
+     */
+    val ratioMax = minOf(maxRatioByDp, JoystickStyle.MAX_WIDTH_RATIO)
+
+    JoystickSlider(
+        label = label,
+        style = style,
+        value = value,
+        /* 滑块的 dp 范围:比例上限 × 基准长度 */
+        displayRange = 0f..(ratioMax * safeBase),
+        toRatio = { dp -> dp / safeBase },
+        fromRatio = { ratio -> ratio * safeBase },
+        applyRatio = applyRatio,
+        /*
+         * ⚠️ **不带单位后缀** —— 与按键/文本组件的「描边宽度」一致
+         * （它显示的就是一个纯数字 `2.5`）。dp 是这个项目的**隐含单位**，
+         * 到处都标出来反而啰嗦；而 `‰` 那种额外单位才是"很迷"的来源。
+         */
+        suffix = "",
+        displayText = { dp -> formatTrimmed(dp) },
+        onStyleChange = onStyleChange,
+        modifier = modifier,
+    )
 }
 
 @Composable

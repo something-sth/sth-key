@@ -8,6 +8,81 @@ import com.something.sthkey.ui.EditMode
 import com.something.sthkey.ui.EditorPanelSide
 
 /**
+ * 编辑器画布的**预设底色**。
+ *
+ * ============================================================
+ * ⚠️ 为什么不做"自定义任意色值"
+ * ============================================================
+ * 用户的原话:
+ *
+ * > 我觉得可以**换个组件**来写，**不搞自定义色值画布**了，只搞那几个预设，
+ * > 但是不是用 button 写，而是**分段按钮**，这样也**更方便存储**吧
+ *
+ * ⚠️ 他说的两个理由都成立:
+ *
+ * | 理由 | 说明 |
+ * |---|---|
+ * | 分段按钮 | 一眼看出有哪几档、当前选中哪一档；输入框那套（校验、错误提示、失焦提交）都不需要了 |
+ * | 更方便存储 | 存 **id** 而不是色值 —— 以后微调某个预设的颜色，老用户选的还是那一项 |
+ *
+ * ⚠️ 而"任意色值"本来也没什么必要:这个设置的目的只有一个 ——
+ * **让白色描边这类浅色内容看得清**。四档足够覆盖"浅 / 中 / 深"。
+ *
+ * ⚠️ 四档的**亮度是拉开**的（白 → 浅灰 → 深灰 → 黑），
+ * 因为它的用途就是"换个对比度看内容"，中间档太接近就没意义。
+ *
+ * ⚠️ **必须是不透明色**:半透明底色会让网格线混上来，
+ * 而"看描边粗细"需要一块干净的底。
+ */
+enum class CanvasColorPreset(
+    /** 存进偏好的值。⚠️ **不要改**，改了等于把老用户的设置弄丢 */
+    val id: String,
+    /** 分段按钮上的字 */
+    val label: String,
+    val argb: Int,
+) {
+    WHITE("white", "白", 0xFFFFFFFF.toInt()),
+    LIGHT_GRAY("light_gray", "浅灰", 0xFFE8E8E8.toInt()),
+    DARK_GRAY("dark_gray", "深灰", 0xFF303030.toInt()),
+    BLACK("black", "黑", 0xFF000000.toInt()),
+    ;
+
+    companion object {
+        /** 默认 = 白（与"画布原本就是白的"一致，老用户看不出变化）。 */
+        val DEFAULT = WHITE
+
+        /**
+         * 从偏好的**原始值**里认出是哪一个预设。
+         *
+         * ============================================================
+         * ⚠️⚠️ 为什么要吃 `Any?` 而不是 `String?`
+         * ============================================================
+         * 上一版这个键上存的是 **ARGB 整数**，这一版存 **id 字符串** ——
+         * 同一个键。升级上来的用户读到的就是那个 Int。
+         *
+         * ⚠️ 直接 `getString` 会抛 `ClassCastException`；只认字符串的话
+         * 老用户会**突然被重置成白色**（正是用户抱怨过的那个现象）。
+         *
+         * 所以按**运行时类型**分流:
+         *
+         * | 存的是什么 | 处理 |
+         * |---|---|
+         * | `String`（当前格式） | 按 [id] 找；认不出来 → [DEFAULT] |
+         * | `Int`（上一版的 ARGB） | 找**色值相同**的预设；找不到 → [DEFAULT] |
+         * | 什么都没有 / 别的类型 | [DEFAULT] |
+         *
+         * ⚠️ 旧色值找不到同样色值的预设时**回退默认**、而不是"保留那个色值":
+         * 那样界面上会出现"四档都没选中"的状态，比回退更让人困惑。
+         */
+        fun fromStored(raw: Any?): CanvasColorPreset = when (raw) {
+            is String -> entries.firstOrNull { it.id == raw } ?: DEFAULT
+            is Int -> entries.firstOrNull { it.argb == raw } ?: DEFAULT
+            else -> DEFAULT
+        }
+    }
+}
+
+/**
  * 轻量设置存储（键值型，非配置数据）。
  *
  * 这里只放"应用级开关"，不放按键配置本身：
@@ -379,6 +454,66 @@ class AppPrefs private constructor(context: Context) {
             prefs.edit().putBoolean(KEY_EDITOR_SHOW_SELECTED_FRAME, value).apply()
         }
 
+    /**
+     * 编辑器**画布底色** —— 存的是**预设 id**，不是色值。
+     *
+     * ============================================================
+     * ⚠️ 为什么需要它（用户的原话）
+     * ============================================================
+     *
+     * > 我想加一个画布色值调节（**不随配置导出，只是本地选项**，
+     * > 存储逻辑与刚刚提到的两个 switch 相同），因为现在画布是白色的，
+     * > 如果我要**测试白色描边**，就看不出粗细，不过现在画布渲染逻辑
+     * > 也得搞清楚因为我调我系统**深色模式画布也会变暗色**
+     *
+     * ⚠️ 两个诉求，一个字段同时解决:
+     *
+     * | 诉求 | 为什么这样能满足 |
+     * |---|---|
+     * | 测试白色描边时看得出粗细 | 底色可换成深色 |
+     * | ⚠️ **不要跟随系统深色模式** | 取的是 [CanvasColorPreset.argb]，与 `MaterialTheme` 无关 |
+     *
+     * ⚠️ 在这之前画布是"没有自己的底色的"（[CustomKeyCanvas] 不画背景），
+     * 白色是**预览区的 `surfaceContainerLowest` 透上来的** ——
+     * 而那个颜色是主题色，所以深色模式下会一起变暗。
+     *
+     * ⚠️ 它**只影响编辑器画布**，不影响悬浮窗、也不影响配置预览 ——
+     * 那两处看到的是真实效果，不该被编辑时的辅助色骗了。
+     *
+     * ⚠️ 与那两个边框开关一样**存在应用级偏好里**（不是这份配置的字段）:
+     * "用什么颜色看画布"与正在编辑哪份配置无关，所以**导出时也不会带上它**。
+     *
+     * ============================================================
+     * ⚠️⚠️ 为什么存 **id** 而不是存 ARGB（用户提的）
+     * ============================================================
+     * 用户的原话:
+     *
+     * > 我觉得可以换个组件来写，不搞自定义色值画布了，只搞那几个预设，
+     * > 但是不是用 button 写，而是**分段按钮**，这样也**更方便存储**吧
+     *
+     * ⚠️ 他说得对。存 id 的好处很实在:
+     *
+     * | 存色值 | 存 id |
+     * |---|---|
+     * | 改预设的色值时，老用户的选择会**悄悄变成别的颜色**（或停在旧色值上，界面上没有哪个预设是选中的） | 改色值只是换个显示，**选中的还是那一项** |
+     * | 想加一个预设，要保证新旧色值不撞 | 加一项就行 |
+     *
+     * ⚠️ **兼容旧数据**:上一版存的是 ARGB 整数，同一个键。所以读取时
+     * 先按字符串找预设，找不到就试整数（见 [CanvasColorPreset.fromStored]）——
+     * 不兼容的话老用户会突然看到"重置成白的"。
+     */
+    var editorCanvasColor: CanvasColorPreset
+        /*
+         * ⚠️ 读 `prefs.all` 而不是 `getString(..., 默认值)`:
+         * 旧版本在**同一个键**上存的是 `Int`，而 `getString` 遇到 Int
+         * 会抛 `ClassCastException`。取原始值交给 [CanvasColorPreset.fromStored]
+         * 自己分辨类型，才不会崩。
+         */
+        get() = CanvasColorPreset.fromStored(prefs.all[KEY_EDITOR_CANVAS_COLOR])
+        set(value) {
+            prefs.edit().putString(KEY_EDITOR_CANVAS_COLOR, value.id).apply()
+        }
+
     /*
      * ============================================================
      * 配置列表的排版
@@ -519,6 +654,8 @@ class AppPrefs private constructor(context: Context) {
         private const val KEY_EDITOR_PANEL_SIDE_CHOSEN = "editor_panel_side_chosen"
         private const val KEY_EDITOR_SHOW_WINDOW_FRAME = "editor_show_window_frame"
         private const val KEY_EDITOR_SHOW_SELECTED_FRAME = "editor_show_selected_frame"
+        /** 编辑器画布底色（ARGB）—— 见 `editorCanvasColor` 的说明 */
+        private const val KEY_EDITOR_CANVAS_COLOR = "editor_canvas_color"
         private const val KEY_CONFIG_LIST_SHOW_DESCRIPTION = "config_list_show_description"
         private const val KEY_CONFIG_LIST_COMPACT_ACTIONS = "config_list_compact_actions"
         private const val KEY_CONFIG_LIST_COLUMNS = "config_list_columns"
