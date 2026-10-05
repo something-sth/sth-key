@@ -184,9 +184,37 @@ object KeyLayout {
      */
     private const val COLUMN_SPAN = 260f
 
-    /** 按键间距百分比的滑块范围（与设置页那两个常量必须一致） */
-    private const val KEY_GAP_PERCENT_MIN = 0
-    private const val KEY_GAP_PERCENT_MAX = 400
+    /**
+     * 按键间距百分比的滑块范围。
+     *
+     * ============================================================
+     * ⚠️ 这三个地方**必须用同一份**（所以它是 public 的）
+     * ============================================================
+     * | 用它的地方 | 干什么 |
+     * |---|---|
+     * | `KeyLayout.keys()` | 按百分比算实际间距（**并夹到这个范围**） |
+     * | 设置页的滑块 | 决定用户能拖到哪 |
+     * | `JsonConfigCodec` 读取 | 把存下来的值夹回来 |
+     *
+     * 历史上它们是**各写一份**的，于是出过这个 bug:
+     * 滑块下限改成了 0，而读取那边还是旧的 `50` ——
+     * 用户设成 0~49、存进去了，**重进又被夹回 50**，
+     * 表现是"按键间距配置没有持久化"。
+     *
+     * ⚠️ 下限是 **0**（键挨在一起），不是"把键缩小" ——
+     * 用户专门纠正过:"不能调整组件大小，只是起到调整间距的效果，
+     * 本质是改位置，尺寸不能改"。
+     */
+    const val KEY_GAP_PERCENT_MIN = 0
+    const val KEY_GAP_PERCENT_MAX = 400
+
+    /**
+     * 按键高度百分比的滑块范围。同上，三个地方共用一份。
+     *
+     * ⚠️ 只乘**高度**，不乘宽度、不乘间距 —— 见 `keys()` 里 `heightScale` 的说明。
+     */
+    const val KEY_HEIGHT_PERCENT_MIN = 50
+    const val KEY_HEIGHT_PERCENT_MAX = 200
 
     /**
      * 鼠标键（LT / RT / 肩键那一列）的**固定宽度**。
@@ -295,38 +323,85 @@ object KeyLayout {
      * 现在那边已经改成引用这两个常量，不会再漂。
      *
      * ============================================================
-     * 为什么从 50 降到 20
+     * ⚠️⚠️ 语义已改:百分比**就是**倍率
      * ============================================================
-     * 有用户反馈：**设备屏幕尺寸极端**时（很小的屏、或开了超大显示缩放），
-     * 悬浮窗相对屏幕显得过大，而原来的下限还不够小。
+     * 用户的原话:"就改成'百分比等于倍率'"。
      *
-     * ⚠️ 这个百分比**不是缩放倍率**：它线性映射到
-     * [SCALE_AT_MIN] .. [SCALE_AT_MAX]（0.9 .. 2.0 倍）。
-     * 所以 50 → 0.9 倍、20 → 约 0.73 倍 —— 不会小到没法看。
+     * 旧做法是**线性映射**到 `0.9 .. 2.0` 倍，于是:
+     *
+     * | 滑块 | 旧的实际倍率 |
+     * |---|---|
+     * | 20% | 0.73× |
+     * | 100% | 1.19× |
+     * | 200% | 2.0× |
+     *
+     * 那个映射有个**很难解释**的后果:有用户说"最小值 20% 还是太大，
+     * 想调特别 mini 的"，而把下限改成 5% 只对应 0.63× ——
+     * **几乎看不出变化**，用户会以为滑块坏了。
+     *
+     * 现在直接 `倍率 = 百分比 / 100`:
+     *
+     * | 滑块 | 倍率 | 观感 |
+     * |---|---|---|
+     * | **20%**（下限） | 0.2× | 很小 —— 用户确认"20% 已经很小了" |
+     * | 50% | 0.5× | |
+     * | **100%** | **1.0×** | 默认 |
+     * | 200% | 2.0× | |
+     * | 300% | 3.0× | 上限（见 [SCALE_PERCENT_MAX]） |
+     *
+     * ⚠️ 下限一度试过 **1%**（0.01×），用户实测后要求改回 20%:
+     * "最小还是 20% 吧，现在 20% 已经很小了"。
+     *
+     * ⚠️ 注意它的**语义与旧版不同**:旧版 20% 因为线性映射只等于 0.73×，
+     * 现在 20% **就是 0.2×** —— 比旧版小了 3.6 倍。"最小值太大"那个反馈
+     * 已经由**改映射**解决了，不需要靠极小的百分比。
+     *
+     * ⚠️ **老配置的外观会变**:旧版默认 `100%` 实际是 1.19×，
+     * 现在 `100%` 是 1.0× —— 升级后悬浮窗会小一圈。
+     * 用户明确说过这一点不用做迁移（"回头写更新公告里就行"）。
      */
     const val SCALE_PERCENT_MIN = 20
 
-    /** 滑块最大值 */
-    const val SCALE_PERCENT_MAX = 200
-
-    /** 滑块最小时对应的实际倍率 */
-    private const val SCALE_AT_MIN = 0.9f
-
-    /** 滑块最大时对应的实际倍率（上限保持不变） */
-    private const val SCALE_AT_MAX = 2.0f
+    /**
+     * 滑块最大值。
+     *
+     * ============================================================
+     * ⚠️ 从 200 提到 300，是为了**让范围围绕 100% 对称**
+     * ============================================================
+     * 语义改成"百分比 = 倍率"之后，100% 是默认值。
+     * 上限留在 200 的话，用户能缩到 0.2× 却只能放到 2×——
+     * 而"我要更大的悬浮窗"是同样常见的需求。
+     *
+     * ⚠️ 300% = 3.0× 已经很大（基础窗口 300 宽 → 900 像素），
+     * 再往上在手机上就没意义了。
+     */
+    const val SCALE_PERCENT_MAX = 300
 
     /**
-     * 整体缩放倍率（把滑块百分比映射成实际倍率）。
+     * 整体缩放倍率。
      *
      * 它**不改变任何布局常量**，只决定画多大、窗口多大。
      * 悬浮窗与预览都走这里，因此两边的缩放始终一致。
+     *
+     * ⚠️ **百分比就是倍率**（`100%` = `1.0×`）—— 不再是线性映射。
+     * 理由见 [SCALE_PERCENT_MIN] 的注释。
      */
     fun uiScale(config: KeyStrokesConfig): Float {
         val percent = config.scalePercent
             .coerceIn(SCALE_PERCENT_MIN, SCALE_PERCENT_MAX)
-        val t = (percent - SCALE_PERCENT_MIN).toFloat() /
-            (SCALE_PERCENT_MAX - SCALE_PERCENT_MIN).toFloat()
-        return SCALE_AT_MIN + t * (SCALE_AT_MAX - SCALE_AT_MIN)
+
+        /*
+         * ⚠️ 结果再夹一个**下限兜底**。
+         *
+         * `percent` 最小是 1（`SCALE_PERCENT_MIN`），所以这里正常不会触发 ——
+         * 但**手工改过的配置包**可以把 `scalePercent` 写成 0 或负数，
+         * 而 `coerceIn` 只夹到常量范围内、夹不到"数据本身是坏的"。
+         *
+         * 倍率为 0 时窗口尺寸会变成 0，`WindowManager` 对 0 尺寸的窗口
+         * 行为未定义（某些设备直接抛异常）。所以兜到 0.01（3 像素宽）——
+         * 小到几乎看不见，但**是个合法的窗口**。
+         */
+        return (percent / 100f).coerceAtLeast(0.01f)
     }
 
     /** 文字缩放倍率 */
@@ -485,6 +560,15 @@ object KeyLayout {
     ): List<KeyBox> {
         val boxes = mutableListOf<KeyBox>()
 
+        /*
+         * ⚠️ 弹出末尾**只能用 [popLast]** —— 与 `keys()` 里那份是同一个理由:
+         * `boxes.removeLast()` 会编译成对 `java.util.List.removeLast()` 的调用，
+         * 而那是 Java 21 才有的默认方法，**Android 的 ArrayList 没有它** ——
+         * 编译过、单测过，只有在真机上跑到这一行才崩。
+         * 完整说明见 `keys()` 里那段注释。
+         */
+        fun popLast(): KeyBox = boxes.removeAt(boxes.lastIndex)
+
         val buttonHeight = LONG_KEY_HEIGHT * heightScale
 
         /*
@@ -582,8 +666,8 @@ object KeyLayout {
             /* 借用 pushColumnButton 的构造:先落 y 再取出来 */
             pushColumnButton(Id.LMB, leftCenter)
             pushColumnButton(Id.RMB, rightCenter)
-            triggerRow += boxes.removeLast()
-            triggerRow += boxes.removeLast()
+            triggerRow += popLast()
+            triggerRow += popLast()
             /* 弹出来的顺序是反的，转回来（RMB 在右，LMB 在左） */
             rows += triggerRow.reversed()
 
@@ -597,8 +681,8 @@ object KeyLayout {
                 pushColumnButton(Id.SHOULDER_L, leftCenter)
                 pushColumnButton(Id.SHOULDER_R, rightCenter)
                 val shoulderRow = mutableListOf<KeyBox>()
-                shoulderRow += boxes.removeLast()
-                shoulderRow += boxes.removeLast()
+                shoulderRow += popLast()
+                shoulderRow += popLast()
                 rows += shoulderRow.reversed()
             }
         } else if (config.showShoulderButtons) {
@@ -609,28 +693,28 @@ object KeyLayout {
             pushColumnButton(Id.SHOULDER_L, leftCenter)
             pushColumnButton(Id.SHOULDER_R, rightCenter)
             val shoulderRow = mutableListOf<KeyBox>()
-            shoulderRow += boxes.removeLast()
-            shoulderRow += boxes.removeLast()
+            shoulderRow += popLast()
+            shoulderRow += popLast()
             rows += shoulderRow.reversed()
         }
 
         /* 行:A（独占一行，横跨两列） */
         if (config.showAButton) {
             pushWideButton(Id.A_BUTTON)
-            rows += listOf(boxes.removeLast())
+            rows += listOf(popLast())
         }
 
 
         /* 行:SPACE */
         if (config.showSpaceKey) {
             pushWideButton(Id.SPACE)
-            rows += listOf(boxes.removeLast())
+            rows += listOf(popLast())
         }
 
         /* 行:SHIFT */
         if (config.showShiftKey) {
             pushWideButton(Id.SHIFT)
-            rows += listOf(boxes.removeLast())
+            rows += listOf(popLast())
         }
 
         /*
@@ -759,6 +843,32 @@ object KeyLayout {
             if (config.mouseCpsEnabled) cpsBySlot[id] ?: 0 else 0
 
         val boxes = mutableListOf<KeyBox>()
+
+        /*
+         * ============================================================
+         * ⚠️ 弹出列表末尾**只能用下面那个 popLast()**，不要写 `boxes.removeLast()`
+         * ============================================================
+         * 这不是风格问题，是**线上闪退**:
+         *
+         * ```
+         * java.lang.NoSuchMethodError: No virtual method removeLast()Ljava/lang/Object;
+         *   in class Ljava/util/ArrayList;
+         * ```
+         *
+         * `List.removeLast()` 是 **Java 21** 才加进 `java.util.List` 的默认方法，
+         * 而 Android 的 `ArrayList` **从来没有**它（libcore 不是 OpenJDK）。
+         *
+         * ⚠️ 编译器不拦:Kotlin 编译用的是 JDK 25，那里 `List` 上有这个方法，
+         * 于是编译成一次**成员调用** —— 编译过、单测过（JVM 上有它）、打包正常，
+         * 只有**在 Android 上真跑到那一行**才崩。
+         *
+         * ⚠️ 而且它**不是每次启动都崩**:下面那些调用全在
+         * "显示鼠标键 / 肩键 / A / 空格 / Shift"的分支里，
+         * 配置不同就走不到 —— 这正是"你那边复现不出来"的原因。
+         *
+         * 见文件末尾的 [popLast]（`removeAt(lastIndex)`，到处都有）。
+         */
+        fun popLast(): KeyBox = boxes.removeAt(boxes.lastIndex)
 
         /* ============================================================
          * 间距只改**位置**，不改**尺寸**
@@ -959,7 +1069,11 @@ object KeyLayout {
 
         /* ============================================================
          * 键盘样式：W / A S D
-         * ============================================================ */
+         * ============================================================
+         * ⚠️ WASD 永远是第一行 —— "SPACE 置顶"**不会**把空格挪到它上面
+         * （我第一版就是那么理解的，被用户纠正了）。
+         * 那个开关的效果在下面"空格与鼠标键共用一行"那段。
+         */
         val wasdTop = TOP_MARGIN
 
         /* W */
@@ -989,11 +1103,52 @@ object KeyLayout {
 
         mouseY = asdY + keySize * heightScale + gap
 
-        /* 鼠标左右键 */
-        var spaceY = mouseY
+        /*
+         * ============================================================
+         * 下面三行（鼠标键 / 空格 / Shift）**先建好，再排行序，最后统一落 y**
+         * ============================================================
+         * ⚠️ 这是照 `joystickLayoutBoxes` 里 [KeyStrokesConfig.aButtonOnTop]
+         * 的做法 —— 而我是踩了三次坑之后才改过来的。
+         *
+         * 用户的原话:"建议你参考一下 **A 键置顶**那一块，**别凭感觉改**"。
+         *
+         * ============================================================
+         * ⚠️ 前三次为什么都错（都是在"调坐标"而不是"排行序"）
+         * ============================================================
+         * | 写法 | 症状 |
+         * |---|---|
+         * | 写死 `spaceY + 空格高 + gap` | 空格**关掉**时 Shift 上面留一块空缺 |
+         * | Shift 跟着 `mouseRowY` 走 | 空格**置顶**时 Shift **上移一行、贴到鼠标键上边缘** |
+         * | 用 `spaceBelowMouseRow` 重算 | Shift 贴到鼠标键**下边缘**（还是重叠） |
+         *
+         * ⚠️ 三次的病根是同一个:**用"谁在哪一行"去推另一行的位置**。
+         * 只要某个开关让某一行位移，那个位移就会被传导给本来无关的行。
+         *
+         * 而 A 键置顶那一块早就有正解 —— **行是顺序堆叠的，
+         * 位置只由"它在行序里排第几"决定**:
+         *
+         * ```
+         * val rows = mutableListOf<List<KeyBox>>()   // 1. 先建行
+         * ...                                        // 2. 排行序（置顶 = 交换两行）
+         * orderedRows.forEach { row ->               // 3. 统一落 y
+         *     row.forEach { boxes += it.copy(topY = y) }
+         *     advance(row.maxOf { it.height })
+         * }
+         * ```
+         *
+         * 于是"置顶"只是**把两行在列表里换个位置**，
+         * 第三行（Shift）自然跟着走，**不需要任何额外判断**。
+         */
+        val tailRows = mutableListOf<List<KeyBox>>()
 
+        /* ---------- 行:鼠标左右键 ---------- */
         if (config.showMouseButtons) {
-            // 模式 3：把 CPS 显示在键**内部**，因此键要加高以容纳两行文字
+            /*
+             * 模式 3：把 CPS 显示在键**内部**，因此键要加高以容纳两行文字。
+             *
+             * ⚠️ 高度必须在**建行之前**定好 —— 行的推进量取的是
+             * `row.maxOf { it.height }`。
+             */
             if (config.mouseCpsEnabled && config.mouseCpsMode == 3) {
                 mouseHeight = MOUSE_KEY_HEIGHT_CPS3 * heightScale
             }
@@ -1007,66 +1162,107 @@ object KeyLayout {
              * 完全没有 CPS。
              *
              * 这里只负责"键要画多高"（模式 3 要装两行文字）。
+             *
+             * ⚠️ 模式 2（独立 CPS 组件）**已经删掉** —— 用户原话:
+             * "干脆在 gamepad2 这里把 cps 模式 2 删掉吧……就留模式 1 和 3"。
+             * 两个布局都删了:只删一边会让模式 2 在两种样式下表现不同。
+             * 内部编号保持不变（`mouseCpsMode` 是持久化字段）。
              */
-
-            boxes += KeyBox(
-                slotId = Id.LMB,
-                label = labelOf(Id.LMB),
-                codes = codesOf(Id.LMB),
-                centerX = leftCenter,
-                topY = mouseY,
-                width = mouseWidth,
-                height = mouseHeight,
+            tailRows += listOf(
+                KeyBox(
+                    slotId = Id.LMB,
+                    label = labelOf(Id.LMB),
+                    codes = codesOf(Id.LMB),
+                    centerX = leftCenter,
+                    topY = TOP_MARGIN, // 占位，下面统一改
+                    width = mouseWidth,
+                    height = mouseHeight,
+                ),
+                KeyBox(
+                    slotId = Id.RMB,
+                    label = labelOf(Id.RMB),
+                    codes = codesOf(Id.RMB),
+                    centerX = rightCenter,
+                    topY = TOP_MARGIN, // 占位
+                    width = mouseWidth,
+                    height = mouseHeight,
+                ),
             )
-            boxes += KeyBox(
-                slotId = Id.RMB,
-                label = labelOf(Id.RMB),
-                codes = codesOf(Id.RMB),
-                centerX = rightCenter,
-                topY = mouseY,
-                width = mouseWidth,
-                height = mouseHeight,
-            )
-
-            /*
-             * ⚠️ 模式 2（独立 CPS 组件）**已经删掉**。
-             *
-             * 用户的原话:"模式 2 的组件出来了但是没有变化，cps 一直显示 0，
-             * 干脆在 gamepad2 这里把 cps 模式 2 删掉吧，太多组件也不好安排，
-             * 就留模式 1 和 3 就好了"。
-             *
-             * ⚠️ 两个布局都删了（键盘样式也删）—— 只删一边会让"模式 2"
-             * 在两种样式下表现不同，那是更难解释的问题。
-             *
-             * 内部编号**保持不变**（1 = 接在主文字后，3 = 键内两行），
-             * 因为 `mouseCpsMode` 是持久化字段，改编号会让老配置
-             * 的模式静默变掉。界面上只显示两个按钮，见设置页。
-             */
-            spaceY = mouseY + mouseHeight + gap
         }
 
-        /* 空格 */
-        boxes += KeyBox(
-            slotId = Id.SPACE,
-            label = labelOf(Id.SPACE),
-            codes = codesOf(Id.SPACE),
-            centerX = center,
-            topY = spaceY,
-            width = spaceWidth,
-            height = LONG_KEY_HEIGHT * heightScale,
-        )
-
-        /* Shift */
-        if (config.showShiftKey) {
-            boxes += KeyBox(
-                slotId = Id.SHIFT,
-                label = labelOf(Id.SHIFT),
-                codes = codesOf(Id.SHIFT),
-                centerX = center,
-                topY = spaceY + LONG_KEY_HEIGHT * heightScale + gap,
-                width = spaceWidth,
-                height = LONG_KEY_HEIGHT * heightScale,
+        /* ---------- 行:空格（独占一行、横跨两列） ---------- */
+        if (config.showSpaceKey) {
+            tailRows += listOf(
+                KeyBox(
+                    slotId = Id.SPACE,
+                    label = labelOf(Id.SPACE),
+                    codes = codesOf(Id.SPACE),
+                    centerX = center,
+                    topY = TOP_MARGIN, // 占位
+                    width = spaceWidth,
+                    height = LONG_KEY_HEIGHT * heightScale,
+                ),
             )
+        }
+
+        /* ---------- 行:Shift ---------- */
+        if (config.showShiftKey) {
+            tailRows += listOf(
+                KeyBox(
+                    slotId = Id.SHIFT,
+                    label = labelOf(Id.SHIFT),
+                    codes = codesOf(Id.SHIFT),
+                    centerX = center,
+                    topY = TOP_MARGIN, // 占位
+                    width = spaceWidth,
+                    height = LONG_KEY_HEIGHT * heightScale,
+                ),
+            )
+        }
+
+        /*
+         * ============================================================
+         * 排行序:SPACE 置顶 = 把空格那一行**提到鼠标键前面**
+         * ============================================================
+         * 用户对"置顶"的定义:
+         *
+         * > SPACE 置顶的意思是，置顶到 WASD 下面，**顶替掉 LMB、RMB 的位置**。
+         *
+         * ⚠️ 也就是**两行交换**，行数不变:
+         *
+         * ```
+         * 关闭（默认）:        开启:
+         *   LMB    RMB           SPACE      ← 提到前面
+         *   SPACE                LMB   RMB  ← 顺延
+         *   SHIFT                SHIFT      ← **完全不动**
+         * ```
+         *
+         * ⚠️ Shift 之所以"不动"，不是因为有判断，而是因为**它排在最后** ——
+         * 这正是"排行序"比"算坐标"稳的地方:
+         * 无论前面两行怎么换，第三行的 y 都由前两行的实际高度堆出来。
+         *
+         * ⚠️ 与 A 键置顶同一个模式（见 `joystickLayoutBoxes` 里
+         * `orderedRows` 那段）—— 那边也是"取出一行、提到最前、
+         * 其余保持相对顺序"。
+         */
+        val orderedTailRows = if (config.showSpaceKey && config.spaceKeyOnTop) {
+            val spaceRow = tailRows.first { row -> row.any { it.slotId == Id.SPACE } }
+            listOf(spaceRow) + tailRows.filter { it !== spaceRow }
+        } else {
+            tailRows
+        }
+
+        /* ---------- 统一落 y:从 WASD 下面开始逐行推进 ---------- */
+        var tailY = mouseY
+        orderedTailRows.forEach { row ->
+            /*
+             * 行高取该行**最高**的那个元素 —— 鼠标键在 CPS 模式 3 下会变高，
+             * 而空格 / Shift 是固定高度。用 `maxOf` 而不是"第一个元素的高度"，
+             * 否则同一行里两个键高度不同时会算错推进量。
+             */
+            val rowHeight = row.maxOf { it.height }
+            row.forEach { box -> boxes += box.copy(topY = tailY) }
+            tailY += rowHeight + gap
         }
 
         /*
@@ -1211,3 +1407,4 @@ object KeyLayout {
         }
     }
 }
+

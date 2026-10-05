@@ -230,7 +230,7 @@ fun Joystick(
                     velocityY = if (dt > 0f) dy / dt else 0f
                     seeded = true
                 } else if (dt > 0f) {
-                    /* 弹簧积分（Axon 的 120 / 22，按平滑时间缩放） */
+                    /* 弹簧积分（120 / 22，按平滑时间缩放） */
                     velocityX += (stiffness * (tx - smoothX) - damping * velocityX) * dt
                     velocityY += (stiffness * (ty - smoothY) - damping * velocityY) * dt
                     smoothX += velocityX * dt
@@ -265,9 +265,7 @@ fun Joystick(
                 velocityY = velocityY.coerceIn(-velocityLimit, velocityLimit)
 
                 /*
-                 * ⚠️ **自我续期**，直到组件离开组合。
-                 *
-                 * Axon 是"只在有东西动的时候续期"（`if (stickActive) postFrame()`），
+                 * **自我续期**，直到组件离开组合。
                  * 那在**自定义 View** 里成立（静止时不画省电）。
                  * 我们这里必须**一直跑** —— 因为 `smoothX` 是 Compose State，
                  * 停掉就再也不会有下一帧来读新目标了。
@@ -423,8 +421,7 @@ fun Joystick(
              * 这里第一版写了 `- animY.value`，于是**两个摇杆的 Y 都反了**。
              *
              * 原因:native monitor 输出的 `ly` / `ry` 已经把 evdev 的
-             * "上为正"翻成了**屏幕的"下为正"**。佐证是旧项目
-             * （同样用 Axon native）的画法:
+             * "上为正"翻成了**屏幕的"下为正"**。
              *
              * ```
              * val ty = cy + y * travel     // ← 加号，不是减号
@@ -501,7 +498,7 @@ private const val SMOOTHING_MAX_MS = 300f
 
 /*
  * ============================================================
- * Axon 的弹簧参数 —— **照抄，不要改**
+ * 弹簧参数
  * ============================================================
  * 出处:`GamepadOverlayView.stepFrame()`
  *
@@ -515,19 +512,16 @@ private const val SMOOTHING_MAX_MS = 300f
  * |---|---|
  * | 阻尼调小 | 来回晃（欠阻尼） |
  * | 阻尼调大 | 变回生硬（过阻尼） |
- *
- * 120 / 22 是 Axon 实测的观感，别凭感觉改。
  */
 private const val AXON_SPRING_STIFFNESS = 120f
 private const val AXON_SPRING_DAMPING = 22f
 
 /**
- * 弹簧参数在哪个"平滑时间"下等于 Axon 的原值（毫秒）。
  *
  * 用户拖平滑滑块时，刚度与阻尼**一起**乘 `本值 / smoothingMs` ——
  * 于是"快慢"变了而"有没有过冲"不变（两者比值固定）。
  *
- * ⚠️ `smoothingMs` 的默认值就是 60，所以**默认手感 = Axon 原值**。
+ * ⚠️ `smoothingMs` 的默认值就是 60**。
  */
 private const val AXON_SPRING_REFERENCE_MS = 60f
 

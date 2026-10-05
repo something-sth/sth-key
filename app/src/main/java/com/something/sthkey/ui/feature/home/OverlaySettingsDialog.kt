@@ -60,6 +60,7 @@ fun OverlaySettingsDialog(
     screenWidth: Int,
     screenHeight: Int,
     onTouchableChange: (Boolean) -> Unit,
+    onMovableOffScreenChange: (Boolean) -> Unit,
     onOffsetChange: (Int, Int) -> Unit,
     onReset: () -> Unit,
     onDismiss: () -> Unit,
@@ -113,6 +114,36 @@ fun OverlaySettingsDialog(
                     Switch(
                         checked = layout.touchable,
                         onCheckedChange = onTouchableChange,
+                    )
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                /*
+                 * 「可移出屏幕外」—— 用户要求放在「可触摸」**下面**。
+                 *
+                 * ⚠️ 排版与「可触摸」那一行**完全一致**（整行 + Switch），
+                 * 而不是用 `SwitchItem` —— 理由同上（那是设置卡片的排版）。
+                 */
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(text = "可移出屏幕外", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            text = if (layout.movableOffScreen) {
+                                "可以拖到屏幕外面（至少会留一条边，以便还能拖回来）"
+                            } else {
+                                "窗口被限制在屏幕内；打开后可以拖出去"
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = layout.movableOffScreen,
+                        onCheckedChange = onMovableOffScreenChange,
                     )
                 }
 

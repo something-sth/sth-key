@@ -171,14 +171,38 @@ object KeyToCustomConverter {
          */
         val boxes = KeyLayout.keys(config)
 
-        val components = buildList {
+        /*
+         * ⚠️ 显式写 `buildList<CustomComponent>`:三个分支返回的是三种不同的
+         * 具体类型（KeyComponent / TextComponent / JoystickComponent），
+         * 不标注的话 Kotlin 推不出共同的元素类型。
+         */
+        val components = buildList<CustomComponent> {
             boxes.forEachIndexed { index, box ->
+                /*
+                 * ⚠️ **必须 `add(...)`**。改成 `when` 时漏掉它的话，
+                 * `when` 的结果会被直接丢掉 —— 转出来的是**空布局**，
+                 * 而编译器不会报错（`when` 作为语句是合法的）。
+                 * 这个错被测试当场抓住（"expected 8 but was 0"）。
+                 */
                 add(
-                    if (box.static) {
+                    when {
+                        /*
+                         * ⚠️ 摇杆槽位**必须先判**，否则它会掉进下面的 `else`，
+                         * 被转成一个"空标签的按键组件"（它的 `label` 是空、
+                         * `codes` 也是空）—— 表现就是"转自定义之后摇杆变成了
+                         * 一个不亮的空方块"。
+                         *
+                         * 摇杆在自定义样式里有自己的组件类型（[JoystickComponent]），
+                         * 所以这里转成它，外观整段照搬配置里的摇杆设置。
+                         */
+                        box.slotId == KeyLayout.Id.JOYSTICK_LEFT ||
+                            box.slotId == KeyLayout.Id.JOYSTICK_RIGHT ->
+                            joystickComponentOf(box = box, config = config, index = index)
+
                         // 静态 CPS 行 → 文本组件（它本来就不参与按键点亮）
-                        textComponentOf(box = box, config = config, index = index)
-                    } else {
-                        keyComponentOf(box = box, config = config, index = index)
+                        box.static -> textComponentOf(box = box, config = config, index = index)
+
+                        else -> keyComponentOf(box = box, config = config, index = index)
                     },
                 )
             }
@@ -315,6 +339,47 @@ object KeyToCustomConverter {
             animationDurationSec = config.animationDurationSec,
         )
     }
+
+    /**
+     * 一个摇杆槽位 → [JoystickComponent]。
+     *
+     * ============================================================
+     * ⚠️ 不处理的话它会变成一个"空标签的按键组件"
+     * ============================================================
+     * 摇杆槽位的 `label` 与 `codes` **都是空的**（见 `KeyLayout` 里构造它的地方），
+     * 所以掉进普通按键那条路之后会得到一个**不亮的空方块** ——
+     * 看起来就像"转自定义把摇杆弄丢了"。
+     *
+     * ============================================================
+     * 几何:与按键组件同一套换算
+     * ============================================================
+     * `KeyBox` 给的是**水平中心**（`centerX`）与**顶部**（`topY`），
+     * 而 [CustomComponent] 要的是左上角 —— 所以 x 要减半个宽度。
+     * 这与 [keyComponentOf] 用的是同一个 `box.left`，不要另算一遍。
+     *
+     * ⚠️ `sizeScale` 与 `knobScale` **原样搬过去**，不预先乘进宽高:
+     * 自定义画布里它们由渲染层乘（与「标准」样式同一条路），
+     * 在这里乘一次的话渲染时会再乘一次 —— 那就是**平方**。
+     *
+     * ⚠️ 摇杆的监听对象由 `side` 决定，而两个槽位正好一一对应。
+     */
+    private fun joystickComponentOf(
+        box: KeyBox,
+        config: KeyStrokesConfig,
+        index: Int,
+    ): JoystickComponent = JoystickComponent(
+        id = componentId(box.slotId, index),
+        x = box.left,
+        y = box.topY,
+        width = box.width,
+        height = box.height,
+        side = if (box.slotId == KeyLayout.Id.JOYSTICK_RIGHT) StickSide.RIGHT else StickSide.LEFT,
+        /*
+         * 整段外观照搬 —— 用户的原话是"配置项要与'标准'样式相同",
+         * 那么转换时**一个字段都不该丢**，否则转过去外观会变。
+         */
+        joystick = config.joystick,
+    )
 
     /**
      * 键面上的**纯键名**（不含任何 CPS）。

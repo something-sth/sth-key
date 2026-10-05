@@ -13,6 +13,8 @@ import com.something.sthkey.domain.custom.CustomLayout
 import com.something.sthkey.domain.custom.CustomLayoutSettings
 import com.something.sthkey.domain.custom.DEFAULT_CPS_KEY_CODES
 import com.something.sthkey.domain.custom.KeyComponent
+import com.something.sthkey.domain.custom.JoystickComponent
+import com.something.sthkey.domain.custom.StickSide
 import com.something.sthkey.domain.custom.TextComponent
 import org.json.JSONArray
 import org.json.JSONObject
@@ -77,16 +79,24 @@ object CustomLayoutCodec {
     }
 
     private fun encodeComponent(component: CustomComponent): JSONObject = JSONObject().apply {
-        put("type", if (component is KeyComponent) ComponentType.KEY.id else ComponentType.TEXT.id)
+        put("type", typeIdOf(component))
         put("id", component.id)
         put("x", component.x.toDouble())
         put("y", component.y.toDouble())
         put("width", component.width.toDouble())
         put("height", component.height.toDouble())
-        put("style", encodeStyle(component.style))
 
+        /*
+         * ⚠️ `style`（[ComponentStyle]）**只有**有文字的组件才有；
+         * 摇杆用的是 `joystick`（[JoystickStyle]），两者字段几乎不重叠。
+         *
+         * 所以这里分两条路写，而不是"所有组件都写 style" ——
+         * 后者会给摇杆写进去一份**永远不会被读**的垃圾数据，
+         * 手工看 JSON 的人会以为它生效。
+         */
         when (component) {
             is KeyComponent -> {
+                put("style", encodeStyle(component.style))
                 put("label", component.label)
                 put(
                     "inputKeyCodes",
@@ -102,6 +112,7 @@ object CustomLayoutCodec {
             }
 
             is TextComponent -> {
+                put("style", encodeStyle(component.style))
                 put("text", component.text)
                 /*
                  * ⚠️ 这个字段**只在文字里含占位符时才有意义**，但仍然照实写。
@@ -131,7 +142,26 @@ object CustomLayoutCodec {
                 put("textOffsetX", component.textOffsetX.toDouble())
                 put("textOffsetY", component.textOffsetY.toDouble())
             }
+
+            is JoystickComponent -> {
+                /* 监听哪一边；用 `StickSide.id` 而不是枚举名 —— 改枚举名不该弄坏配置 */
+                put("stickSide", component.side.id)
+                put("joystick", JsonConfigCodec.encodeJoystick(component.joystick))
+            }
         }
+    }
+
+    /**
+     * 组件的类型 id。
+     *
+     * ⚠️ 早期这里是 `if (component is KeyComponent) KEY else TEXT` —— 只有两种
+     * 类型时能跑，加第三种就会把所有摇杆**当成文本**写出去。所以改成穷尽 `when`，
+     * 以后再加类型时编译器会直接报错。
+     */
+    private fun typeIdOf(component: CustomComponent): String = when (component) {
+        is KeyComponent -> ComponentType.KEY.id
+        is TextComponent -> ComponentType.TEXT.id
+        is JoystickComponent -> ComponentType.JOYSTICK.id
     }
 
     private fun encodeStyle(style: ComponentStyle): JSONObject = JSONObject().apply {
@@ -263,6 +293,32 @@ object CustomLayoutCodec {
                             ),
                         )
                     }
+
+                    ComponentType.JOYSTICK -> add(
+                        JoystickComponent(
+                            id = id,
+                            x = geometry.x,
+                            y = geometry.y,
+                            width = geometry.width,
+                            height = geometry.height,
+                            /*
+                             * ⚠️ 用 `StickSide.fromId` 而不是 `valueOf`:
+                             * 手改过的 JSON 里可能是空串或别的写法，
+                             * `valueOf` 会**抛异常**，整份配置都读不出来。
+                             * 认不出来时回退到左摇杆。
+                             */
+                            side = StickSide.fromId(item.optString("stickSide")),
+                            /*
+                             * 整段摇杆外观复用 JsonConfigCodec 的那一对函数 ——
+                             * 摇杆的字段有二十来个（含描边、内圆、手感），
+                             * 在这里再写一份迟早会与原样式漂移
+                             * （改了一边忘了另一边，两处摇杆长得不一样）。
+                             */
+                            joystick = JsonConfigCodec.decodeJoystick(
+                                item.optJSONObject("joystick"),
+                            ),
+                        ),
+                    )
                 }
             }
         }

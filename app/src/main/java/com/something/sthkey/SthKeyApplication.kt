@@ -1,4 +1,4 @@
-﻿package com.something.sthkey
+package com.something.sthkey
 
 import android.app.Application
 import android.os.Process
@@ -93,11 +93,38 @@ class SthKeyApplication : Application() {
     /**
      * 取当前进程名。
      *
-     * `Process.myProcessName()` 从 API 28 起可用，minSdk 是 30，因此可以直接用；
-     * 万一返回空串，再退化为读 /proc/self/cmdline。
+     * ============================================================
+     * ⚠️ `Process.myProcessName()` 需要 **API 33**，不是 28
+     * ============================================================
+     * 这段注释以前写的是"从 API 28 起可用，minSdk 是 30，因此可以直接用" ——
+     * **那是错的**。编译用的 `api-versions.xml` 里写得很明白:
      *
-     * 现在只用它打一行启动日志（排查时能看出是哪个进程），
-     * 不再用于"区分主进程与 UserService 进程"—— 那个判断已经不需要了。
+     * ```
+     * <method name="myProcessName()Ljava/lang/String;" since="33"/>
+     * ```
+     *
+     * Android Lint 的 `NewApi` 报的也是 API 33，只是这个任务**没接进构建**，
+     * 所以一直没人看见。
+     *
+     * ============================================================
+     * ⚠️ 为什么现在这样写是**对的**（不是侥幸）
+     * ============================================================
+     * 本项目的 minSdk 是 30，也就是**支持 Android 11 / 12**。
+     * 在 API 30~32 上调用这个方法会抛 `NoSuchMethodError`（不是
+     * `NoSuchMethodException` —— 那是反射才抛的），而它在 [runCatching] 里，
+     * 于是**被捕获、返回 null**，直接走下面的 `/proc/self/cmdline`。
+     *
+     * ⚠️ 这个"先试新 API、失败就退"的写法**必须保留**:
+     * - 不能把 `runCatching` 去掉 —— 去掉之后 Android 11/12 上**直接崩**；
+     * - 也不能直接改用 `/proc/self/cmdline` —— 它在个别机型/受限环境下读不到，
+     *   新 API 才是更可靠的那条路。**两条互补，缺一条就会在另一半设备上出问题**。
+     *
+     * ============================================================
+     * ⚠️ 它只用来打一行启动日志
+     * ============================================================
+     * 没有参与任何逻辑判断（"区分主进程与 UserService 进程"那个需求已经不需要了）。
+     * 所以即使两条路都失败、返回空串，**功能上也毫无影响** ——
+     * 只是启动日志里进程名那一项空着。
      */
     private fun currentProcessName(): String {
         val direct = runCatching { Process.myProcessName() }.getOrNull()

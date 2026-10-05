@@ -21,6 +21,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Size
+import com.something.sthkey.domain.style.RippleGeometry
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.BlendMode
@@ -43,6 +46,13 @@ import com.something.sthkey.core.log.AppLog
 import com.something.sthkey.domain.config.AnimationMode
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.config.ShadowMode
+import com.something.sthkey.domain.custom.JoystickComponent
+import com.something.sthkey.domain.custom.StickSide
+import com.something.sthkey.domain.custom.TextualComponent
+import com.something.sthkey.ui.overlay.gamepad.baseOffset
+import com.something.sthkey.capture.StickState
+import com.something.sthkey.domain.style.KeyBox
+import com.something.sthkey.ui.overlay.gamepad.JoystickSlot
 import com.something.sthkey.domain.custom.CustomComponent
 import com.something.sthkey.domain.custom.CustomLayout
 import com.something.sthkey.domain.custom.CustomLayoutSettings
@@ -300,6 +310,16 @@ fun CustomKeyCanvas(
      * 不必为它们多开一层离屏合成。
      */
     overallAlpha: Float = 1f,
+    /**
+     * 摇杆数据（左右两个轴的当前值）。
+     *
+     * ⚠️ 默认全 0 = **摇杆居中**。编辑器画布与配置预览都走这个默认值 ——
+     * 它们没有真实手柄数据源，而且用户的原话是
+     * "纯静态就行了"（与 Key 组件的按下动画一样，编辑器不演示动效）。
+     *
+     * 悬浮窗则传真实数据（见 `OverlayContent`）。
+     */
+    sticks: StickState = StickState(),
 ) {
     val alphaLayer = if (overallAlpha < 1f) {
         Modifier.graphicsLayer { alpha = overallAlpha.coerceIn(0f, 1f) }
@@ -314,7 +334,7 @@ fun CustomKeyCanvas(
         )
         Box(modifier = modifier.size((baseWidth * scale).dp, (baseHeight * scale).dp)) {
             Box(modifier = alphaLayer) {
-                CustomKeyCanvasContent(settings, pressedCodes, scale, cpsBySlot, slotIdOf)
+                CustomKeyCanvasContent(settings, pressedCodes, scale, cpsBySlot, slotIdOf, sticks)
             }
         }
         return
@@ -342,7 +362,7 @@ fun CustomKeyCanvas(
                 .align(Alignment.Center),
         ) {
             Box(modifier = alphaLayer) {
-                CustomKeyCanvasContent(settings, pressedCodes, fittedScale, cpsBySlot, slotIdOf)
+                CustomKeyCanvasContent(settings, pressedCodes, fittedScale, cpsBySlot, slotIdOf, sticks)
             }
         }
     }
@@ -356,10 +376,40 @@ private fun CustomKeyCanvasContent(
     scale: Float,
     cpsBySlot: Map<String, Int>,
     slotIdOf: (Int) -> String?,
+    sticks: StickState,
 ) {
     settings.components.forEach { component ->
+        /*
+         * ⚠️ 摇杆**走另一条渲染路径**（[JoystickSlot]）。
+         *
+         * 它与按键/文本不是同一类东西:按键是"一个带圆角的方块 + 文字"，
+         * 摇杆是"方框底盘 + 盘内的圆 + 摇杆帽"三层，而且它要的是
+         * [JoystickStyle] 而不是 [ComponentStyle]。
+         *
+         * 硬塞进下面那个函数的话，里面每一步都要 `if (是摇杆)` 分一次叉 ——
+         * 那种写法改一处漏一处，而"摇杆画成了方块"是很容易漏掉的一种。
+         */
+        if (component is JoystickComponent) {
+            JoystickComponentView(
+                component = component,
+                scale = scale,
+                sticks = sticks,
+            )
+            return@forEach
+        }
+
         CustomComponentView(
-            component = component,
+            /*
+             * ⚠️ **必须显式收窄**。上面 `if (component is JoystickComponent) { …; return@forEach }`
+             * 只是逻辑上"剩下的都是文字组件" —— Kotlin 的智能转换**跨不过**
+             * `forEach` 的 lambda 边界（那是另一次调用），所以这里要自己写。
+             *
+             * 收窄到 [TextualComponent] 而不是留成 `CustomComponent`:
+             * 万一以后加了第四种**没有文字**的组件、又忘了在上面分派，
+             * 这里会**抛类型转换异常**（一眼能看出来），
+             * 而不是把那个组件当成文本画成一个方块。
+             */
+            component = component as TextualComponent,
             pressed = component.isPressed(pressedCodes),
             scale = scale,
             cpsBySlot = cpsBySlot,
@@ -368,10 +418,94 @@ private fun CustomKeyCanvasContent(
     }
 }
 
-/** 组件这一刻是否"按下"：只对按键组件有意义，文本组件永远返回 false */
+/** 组件这一刻是否"按下"：只对按键组件有意义，其余永远返回 false */
 private fun CustomComponent.isPressed(pressedCodes: Set<Int>): Boolean = when (this) {
     is KeyComponent -> inputKeyCodes.any { it in pressedCodes }
     is TextComponent -> false
+    /* 摇杆上报的是**轴**，"按下"对它没有意义 */
+    is JoystickComponent -> false
+}
+
+/**
+ * 画一个摇杆组件。
+ *
+ * ============================================================
+ * ⚠️ 渲染完全复用 [JoystickSlot]（「标准」样式 gamepad2 那个）
+ * ============================================================
+ * 用户的原话是"配置项要与'标准'样式（gamepad2）相同" —— 既然配置项相同，
+ * **渲染也必须同一份实现**。各写一遍的话，改了一边忘了另一边，
+ * 同一个摇杆在两个样式下就会长得不一样（而那种差异很难说清谁才是对的）。
+ *
+ * ⚠️ 坐标换算:组件的 [CustomComponent.x] 是**边框左上角**，
+ * 而 [JoystickSlot] 要的是一个 `KeyBox`（它内部从 `box.width` 取边长、
+ * 从 `box.centerX` / `box.topY` 定位）。这里把左上角换算成中心。
+ *
+ * ⚠️ `sizeScale` 不在这里乘 —— 由调用方算进边长（见 [JoystickSlot] 的说明），
+ * 否则会平方。
+ */
+@Composable
+private fun JoystickComponentView(
+    component: JoystickComponent,
+    scale: Float,
+    sticks: StickState,
+) {
+    /*
+     * 边长取组件宽高里**较小**的那个:摇杆的三层几何（圆角、内圆半径、
+     * 帽能走多远）都按"边长"推，宽高不等会让内圆变成椭圆。
+     * 属性面板里宽高是两个独立滑块，所以用户是可能把它们调成不等的。
+     */
+    val side = minOf(component.width, component.height) * component.joystick.sizeScale
+
+    val box = KeyBox(
+        slotId = component.id,
+        label = "",
+        codes = emptyList(),
+        centerX = component.x + component.width / 2f,
+        topY = component.y + (component.height - side) / 2f,
+        width = side,
+        height = side,
+    )
+
+    /*
+     * ⚠️ 哪一边由组件自己的 `side` 决定 —— **不看**「标准」样式那个
+     * "摇杆互换"开关:自定义画布上可以同时放好几个摇杆，
+     * 一个全局开关会让它们一起翻，而且和组件上写的"左/右"矛盾。
+     */
+    val (rawX, rawY) = when (component.side) {
+        StickSide.LEFT -> sticks.lx to sticks.ly
+        StickSide.RIGHT -> sticks.rx to sticks.ry
+    }
+
+    /* 死区与灵敏度与「标准」样式一样，在渲染前做一次（见 JoystickStyle.displayValue） */
+    val style = component.joystick
+
+    JoystickSlot(
+        x = style.displayValue(rawX),
+        y = style.displayValue(rawY),
+        box = box,
+        scale = scale,
+        style = style,
+        /*
+         * ⚠️⚠️ **必须传 modifier 定位** —— [JoystickSlot] 不用 `box.centerX` /
+         * `box.topY` 摆自己，它靠这个 `modifier`。不传就永远画在画布原点 (0,0)。
+         *
+         * 这个坑的实际表现是:"移动摇杆组件时只有参考线方框在动，
+         * 画布上的摇杆还在原处，悬浮窗也一样"。因为**参考线框是编辑器
+         * 单独画的**（按组件的 x/y），而摇杆是这里画的 —— 一个动了、一个没动。
+         *
+         * ⚠️ 与 [com.something.sthkey.ui.overlay.gamepad.Gamepad2Content] 里
+         * 那个调用**逐字相同**（`left = centerX - width / 2`），
+         * 因为两边渲染的是同一个组件、必须落在同一个位置。
+         *
+         * ⚠️ 摇杆比组件边框小（`sizeScale < 1`）时，用 `(height - side) / 2`
+         * 让它**在框内居中** —— 与 `box.topY` 的算法一致，不要各写一份。
+         */
+        modifier = Modifier.baseOffset(
+            left = component.x + (component.width - side) / 2f,
+            top = component.y + (component.height - side) / 2f,
+            scale = scale,
+        ),
+    )
 }
 
 /**
@@ -386,7 +520,14 @@ private fun CustomComponent.isPressed(pressedCodes: Set<Int>): Boolean = when (t
  */
 @Composable
 private fun CustomComponentView(
-    component: CustomComponent,
+    /*
+     * ⚠️ 形参是 [TextualComponent]（按键 / 文本），**不是** `CustomComponent` ——
+     * 摇杆在上面就被分派走了（见 [CustomKeyCanvasContent]）。
+     *
+     * 收窄类型的好处:下面直接读 `component.style` / `textScalePercent`，
+     * 不需要 `as?` 或 `when`；以后再加组件类型时编译器也会提醒这里。
+     */
+    component: TextualComponent,
     pressed: Boolean,
     scale: Float,
     cpsBySlot: Map<String, Int>,
@@ -481,10 +622,18 @@ private fun CustomComponentView(
 
     val rippleColor = if (isRipple) Color(downFill) else Color.Transparent
 
-    // 要盖满整个圆角矩形，半径得达到最远角：hypot(w/2-r, h/2-r) + r
-    val maxCorner = minOf(widthDp, heightDp) / 2f
-    val cornerPx = radiusDp.coerceIn(0f, maxCorner)
-    val coverRadiusDp = kotlin.math.hypot(widthDp / 2f - cornerPx, heightDp / 2f - cornerPx) + cornerPx
+    /*
+     * ============================================================
+     * ⚠️ 扩散色块是"一个按比例放大的组件"，不是"一个圆"
+     * ============================================================
+     * 与 [KeyGrid] 那边是**同一个改动、同一个理由** —— 旧实现用
+     * "圆心在中心、半径取到最远角距离"的圆去裁剪，非正方形组件下
+     * 圆的弧边必然超出圆角矩形。
+     *
+     * ⚠️ 两份渲染（按键样式 / 自定义样式）各有一份扩散代码，是历史原因;
+     * 但几何计算已经收到 [RippleGeometry] 一处（纯函数、有测试），
+     * 所以**不会再出现"两边形状不一样"**。
+     */
 
     Box(
         modifier = Modifier
@@ -523,25 +672,32 @@ private fun CustomComponentView(
                     },
                 )
                 .drawWithContent {
+                    /* 圆角换算成**像素**：绘制作用域里一切都是像素 */
+                    val radiusPx = radiusDp * density
+
                     drawContent()
 
                     if (!isRipple) return@drawWithContent
-                    val animated = progressState.value
-                    if (animated <= 0f) return@drawWithContent
 
-                    val maxRadiusPx = coverRadiusDp * density
-                    clipPath(
-                        path = Path().apply {
-                            addOval(
-                                Rect(
-                                    center = Offset(size.width / 2f, size.height / 2f),
-                                    radius = maxRadiusPx * animated,
-                                ),
-                            )
-                        },
-                    ) {
-                        drawRect(color = rippleColor)
-                    }
+                    val (scaleX, scaleY) = RippleGeometry.rippleScale(progressState.value)
+                    if (scaleX <= 0f) return@drawWithContent
+
+                    val w = size.width * scaleX
+                    val h = size.height * scaleY
+                    val corner = RippleGeometry.rippleCornerRadius(
+                        componentRadius = radiusPx,
+                        scale = scaleX,
+                    )
+
+                    drawRoundRect(
+                        color = rippleColor,
+                        topLeft = Offset(
+                            x = (size.width - w) / 2f,
+                            y = (size.height - h) / 2f,
+                        ),
+                        size = Size(w, h),
+                        cornerRadius = CornerRadius(corner, corner),
+                    )
                 }
                 .clip(shape),
         )

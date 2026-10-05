@@ -17,6 +17,7 @@ import org.json.JSONObject
  * 配置包只打包配置对象，压根读不到这些字段，不需要在导出逻辑里写排除。
  *
  * @param touchable 是否可触摸。`false` = 纯贴图：不可拖动、也不拦截点击
+ * @param movableOffScreen 是否允许把窗口**拖到屏幕外**（默认关闭）
  * @param baseX 基础坐标 X（像素）；[POSITION_UNSET] 表示用户还没拖过
  * @param baseY 基础坐标 Y（像素）
  * @param offsetX 额外偏移 X（像素），可以在不可触摸时用滑块调
@@ -24,6 +25,25 @@ import org.json.JSONObject
  */
 data class OverlayLayout(
     val touchable: Boolean = true,
+    /**
+     * 允许窗口跑到**屏幕之外**（用户要求，默认关）。
+     *
+     * ============================================================
+     * 它同时改两件事，必须成对
+     * ============================================================
+     * 1. 窗口标志加 `FLAG_LAYOUT_NO_LIMITS` —— 让**系统**不再约束位置；
+     * 2. 我们自己的拖拽夹取**也要关掉** —— 见 [OverlayBounds.clampOrFree]。
+     *
+     * ⚠️ 只做第 1 件的话，窗口还是被我们夹在屏幕内，"能拖出去"根本没生效
+     * （表现就是"开关打开了但没变化"）；只做第 2 件的话，系统会把它拽回来。
+     *
+     * ⚠️ `FLAG_LAYOUT_NO_LIMITS` 这个标志**以前被故意去掉过**，
+     * 原因是当时它有两个副作用（详见 `OverlayService` 里那段注释）:
+     * 底部能多拖一点、切换「可触摸」时窗口会跳一下。
+     * 现在它是**开关控制的**，所以关掉时行为与以前**完全一致** ——
+     * 那两条副作用只在用户主动打开时才可能出现，而那时他本来就要"不受限"。
+     */
+    val movableOffScreen: Boolean = false,
     val baseX: Int = POSITION_UNSET,
     val baseY: Int = POSITION_UNSET,
     val offsetX: Int = 0,
@@ -227,6 +247,7 @@ object OverlayLayouts {
                         id,
                         OverlayLayout(
                             touchable = item.optBoolean("touchable", true),
+                            movableOffScreen = item.optBoolean("movableOffScreen", false),
                             baseX = item.optInt("baseX", OverlayLayout.POSITION_UNSET),
                             baseY = item.optInt("baseY", OverlayLayout.POSITION_UNSET),
                             offsetX = item.optInt("offsetX", 0),
@@ -248,6 +269,7 @@ object OverlayLayouts {
                 id,
                 JSONObject().apply {
                     put("touchable", layout.touchable)
+                    put("movableOffScreen", layout.movableOffScreen)
                     put("baseX", layout.baseX)
                     put("baseY", layout.baseY)
                     put("offsetX", layout.offsetX)

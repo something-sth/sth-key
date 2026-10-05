@@ -11,8 +11,10 @@ import com.something.sthkey.domain.config.KeyMapping
 import com.something.sthkey.domain.config.KeyOutline
 import com.something.sthkey.domain.config.JoystickStyle
 import com.something.sthkey.domain.config.KeyStrokesConfig
+import com.something.sthkey.domain.config.defaultShowSpaceKey
 import com.something.sthkey.domain.config.TextOffset
 import com.something.sthkey.domain.style.KeyLayout
+import com.something.sthkey.domain.style.StyleId
 import com.something.sthkey.domain.config.TextSpacing
 import com.something.sthkey.domain.config.LIVE2D_MODEL_STANDARD
 import com.something.sthkey.domain.config.Live2DSettings
@@ -152,7 +154,8 @@ object JsonConfigCodec {
         return result
     }
 
-    private fun probeConfigForKnownKeys(): KeyStrokesConfig {        val base = defaultConfig()
+    private fun probeConfigForKnownKeys(): KeyStrokesConfig {
+        val base = defaultConfig()
         return base.copy(
             outline = base.outline.copy(enabled = true),
             shadow = base.shadow.copy(enabled = true),
@@ -161,6 +164,34 @@ object JsonConfigCodec {
             showMouseButtons = true,
             mouseCpsEnabled = true,
             slotTextOffsets = emptyMap(),
+            /*
+             * ============================================================
+             * ⚠️⚠️ `showSpaceKey` **必须显式打开**（踩过一次，很难查）
+             * ============================================================
+             * 这个键在编码时是**条件写**的 —— 只有"与样式默认值不同"才写
+             * （理由见 `encodeForStorage` 里那段）。
+             *
+             * 而 `defaultConfig()` 是键盘样式、`showSpaceKey` 本来就是 `true`
+             * （= 默认），于是编码**跳过它** → [KNOWN_KEYS] 里缺了这个键。
+             *
+             * 后果不是"少一个名字"那么轻，而是**两次都出错**:
+             *
+             * | 用到 [KNOWN_KEYS] 的地方 | 出错表现 |
+             * |---|---|
+             * | 导入报告的 `missing` | 把"本版本认识的字段"报成**未知字段** |
+             * | **导出时保留未知字段** | 老配置里带过来的值被当成未知键**原样透传**， 而它与本版本的默认值不一致时就固化下来 |
+             *
+             * 用户报过:"我把旧配置导入进去再导出来发现有 showSpaceKey
+             * 这个配置项，但是是 false 状态，说明你有地方没处理好导致
+             * 默认值没有对应到老配置上"。
+             *
+             * ⚠️ 教训:**凡是"从编码结果反推字段清单"的机制，都必须
+             * 考虑到编码本身可能是条件性的** —— 探针要把每个开关都
+             * 打开不只是"更保险"，而是**必需**。
+             */
+            showSpaceKey = true,
+            /* 同理，为将来加"条件写"的新字段留个位置 */
+            spaceKeyOnTop = true,
         )
     }
 
@@ -219,7 +250,7 @@ object JsonConfigCodec {
      * ⚠️ 缺字段时的默认值由 [decodeJoystick] 兜 ——
      * 老配置里没有这个对象，解码时整块用默认值。
      */
-    private fun encodeJoystick(style: JoystickStyle): JSONObject = JSONObject().apply {
+    internal fun encodeJoystick(style: JoystickStyle): JSONObject = JSONObject().apply {
         put("sizeScale", style.sizeScale.toDouble())
         put("cornerRatio", style.cornerRatio.toDouble())
         put("opacity", style.opacity.toDouble())
@@ -273,7 +304,7 @@ object JsonConfigCodec {
      */
     private fun readJoystickColor(json: JSONObject, key: String, fallback: Int): Int =
         (json.optInt(key, fallback) and 0xFFFFFF) or 0xFF000000.toInt()
-    private fun decodeJoystick(json: JSONObject?): JoystickStyle {
+    internal fun decodeJoystick(json: JSONObject?): JoystickStyle {
         val d = JoystickStyle()
         if (json == null) return d
         return JoystickStyle(
@@ -381,7 +412,24 @@ object JsonConfigCodec {
         put("showShoulderButtons", config.showShoulderButtons)
         put("showAButton", config.showAButton)
         put("aButtonOnTop", config.aButtonOnTop)
+        /*
+         * ============================================================
+         * ⚠️ `showSpaceKey` **无条件写**（试过条件写，翻车了）
+         * ============================================================
+         * 曾经改成"只在与样式默认值不同时才写"，想省掉冗余的键。
+         * 结果用户立刻报:**"space 关闭状态的配置持久化没了，关闭之后把软件
+         * 杀掉重进，space 键又被打开了"** —— 因为不写 = 下次读回来只能靠
+         * 默认值 = 用户的"关掉"被当成"没设过"。
+         *
+         * ⚠️ 所以它必须**无条件写**，与项目里其它所有开关一致。
+         * 读取那侧的分支说明见 `decode` 里 `showSpaceKey` 那段。
+         *
+         * ⚠️ 顺带:这里写的是 `config.showSpaceKey` 本身，不做任何判断 ——
+         * 判断一多就会有人（包括我自己）在解码那边试图"反推意图"，
+         * 而那种反推必然吃掉用户的真实选择。
+         */
         put("showSpaceKey", config.showSpaceKey)
+        put("spaceKeyOnTop", config.spaceKeyOnTop)
         put("swapSticks", config.swapSticks)
         put("keyHeightPercent", config.keyHeightPercent)
         put("keyGapPercent", config.keyGapPercent)
@@ -653,10 +701,76 @@ object JsonConfigCodec {
             showShoulderButtons = json.optBoolean("showShoulderButtons", false),
             showAButton = json.optBoolean("showAButton", true),
             aButtonOnTop = json.optBoolean("aButtonOnTop", false),
-            showSpaceKey = json.optBoolean("showSpaceKey", false),
+            /*
+             * ============================================================
+             * ⚠️ `showSpaceKey`:最朴素的两行 —— 存了就用存的，没存就给样式默认
+             * ============================================================
+             * 这个字段在两种样式里语义不同（键盘 = 显不显示空格那一行；
+             * gamepad2 = 显不显示 SPACE 槽位，与 `showAButton` 同位置），
+             * 所以**缺省值按样式给** —— 这是它唯一特殊的地方。
+             *
+             * ⚠️ **不要再加任何"判断这个值是不是坏数据"的分支。**
+             * 试过两个方向，都翻车了:
+             *
+             * | 写法 | 后果 |
+             * |---|---|
+             * | 缺省固定 `false` | 键盘老配置的空格**消失** |
+             * | 缺省按样式 + "等于另一样式默认值就当成误写" | 用户关掉空格后**重启又自己开了** |
+             *
+             * ⚠️ 根因是**这两件事在数据上完全一样**:
+             *
+             * ```
+             * 键盘配置里存着 false
+             *   ├─ 用户真的关掉了         → 必须保留
+             *   └─ 某版本误写的默认值     → 想修
+             * ```
+             *
+             * 数据里没有任何信息能区分它们，所以**任何"猜"的规则都必然
+             * 吃掉其中一种**。而"吃掉用户的选择"是更严重的那种错误
+             * （重启后设置自己变了，用户只会以为软件有毛病）。
+             *
+             * ⚠️ 结论:**存储的值就是用户的意图**。要修历史数据只能用
+             * 一次性的迁移（带持久化标记），绝不能放在读取路径上。
+             * 本次决定不做迁移 —— 老配置里那个 `false` 用户自己开一次即可。
+             */
+            showSpaceKey = if (json.has("showSpaceKey")) {
+                json.optBoolean("showSpaceKey", false)
+            } else {
+                /*
+                 * ⚠️ 老配置（v2.6.0 之前没有这个开关）:键盘样式那时候
+                 * 空格是**恒定显示**的，所以补 `true` 才是"保持原样"；
+                 * gamepad2 那时候根本没有 SPACE 槽位，补 `false`。
+                 */
+                defaultShowSpaceKey(
+                    OverlayStyleRegistry.resolveOrDefault(
+                        json.optString("styleId", OverlayStyleRegistry.defaultStyleId),
+                    ).id,
+                )
+            },
+            spaceKeyOnTop = json.optBoolean("spaceKeyOnTop", false),
             swapSticks = json.optBoolean("swapSticks", false),
-            keyHeightPercent = json.optInt("keyHeightPercent", 100).coerceIn(50, 200),
-            keyGapPercent = json.optInt("keyGapPercent", 100).coerceIn(50, 400),
+            /*
+             * ⚠️⚠️ 这两个 `coerceIn` 的范围**必须与滑块给得出一致**。
+             *
+             * 用户报过:"按键间距配置没有持久化，我把软件杀一下重进就恢复默认值了"。
+             *
+             * 成因:滑块下限早就改成了 **0**（`KEY_GAP_PERCENT_MIN`），
+             * 而这里还是旧的字面量 `50` —— 于是用户设成 0~49 的值
+             * **存进去了、读回时被夹回 50**，看起来就是"恢复默认值"。
+             *
+             * ⚠️ 现在**引用同一批常量**，两边不可能再漂
+             * （它们是 `internal`，设置页与布局层共用一份）。
+             */
+            keyHeightPercent = json.optInt("keyHeightPercent", 100)
+                .coerceIn(
+                    KeyLayout.KEY_HEIGHT_PERCENT_MIN,
+                    KeyLayout.KEY_HEIGHT_PERCENT_MAX,
+                ),
+            keyGapPercent = json.optInt("keyGapPercent", 100)
+                .coerceIn(
+                    KeyLayout.KEY_GAP_PERCENT_MIN,
+                    KeyLayout.KEY_GAP_PERCENT_MAX,
+                ),
             joystick = decodeJoystick(json.optJSONObject("joystick")),
             mouseCpsEnabled = json.optBoolean("mouseCpsEnabled", false),
             /*

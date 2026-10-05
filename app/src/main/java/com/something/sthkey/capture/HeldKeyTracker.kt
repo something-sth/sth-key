@@ -39,16 +39,44 @@ internal class HeldKeyTracker {
     /**
      * 记录一个按键边沿。
      *
+     * ============================================================
+     * ⚠️ 这个计数器是**会出人命的**（踩过）
+     * ============================================================
+     * 它按引用计数，所以:
+     *
+     * - **重复 DOWN** 会把计数顶高，而一个 UP 只还原 1 → 计数回不到 0
+     *   → 那个键**永久卡在按下态**，只能重启应用（[releaseAll] 才清得掉）；
+     * - **多余的 UP** 会把计数减成负数 → 之后真正的 DOWN 被抵消掉
+     *   → 那个键**再也点不亮**。
+     *
+     * 前一种正是用户遇到的那个 bug:手柄开机瞬间轴值抖动，扳机反复跨过
+     * 阈值，于是发了**多条 DOWN**。
+     *
+     * 根治在**调用方**（`CaptureController.setGamepadButton` 现在幂等，
+     * 状态没变就不发事件），这里只做最后一道保护 ——
+     * down 时**夹到 1 而不是累加**。
+     *
      * @param device 设备路径；空串表示"路径未知"（某些 ROM 的公告里没有路径）
      */
     @Synchronized
     fun onKey(code: Int, pressed: Boolean, device: String?) {
+        val key = device.orEmpty()
         if (pressed) {
             val byDevice = holders.getOrPut(code) { mutableMapOf() }
-            byDevice[device.orEmpty()] = (byDevice[device.orEmpty()] ?: 0) + 1
+            /*
+             * ⚠️ 夹到 1，不是 `+ 1`。
+             *
+             * 老写法是全项目**唯一**能把计数顶到 2 的地方，而那个 2
+             * 就是一个永久卡键 —— 一个设备不可能同时把同一个键按两次，
+             * 所以 1 就是上限。
+             *
+             * ⚠️ 这样改也保住了一个正确的场景:同一个键码由**两个不同设备**
+             * 报上来（比如键盘与手柄都报了同一个键码）时，两个 key 各记 1，
+             * 松开其中一个仍然按着 —— 那正是引用计数存在的意义。
+             */
+            byDevice[key] = 1
         } else {
             val byDevice = holders[code] ?: return
-            val key = device.orEmpty()
             val next = (byDevice[key] ?: 0) - 1
             if (next <= 0) byDevice.remove(key) else byDevice[key] = next
             if (byDevice.isEmpty()) holders.remove(code)

@@ -173,15 +173,34 @@ class ComponentFactoryTest {
      */
     @Test
     fun `贴住边界的原件复制时会往反方向偏`() {
-        val source = text(x = CustomLayout.BASE_CANVAS, y = CustomLayout.BASE_CANVAS)
+        /*
+         * ⚠️ 原件要摆在**坐标上界**上，而不是定位区边缘（600）。
+         *
+         * 坐标上界这一版从 600 提到了 1000（用户可以把组件摆到定位区之外），
+         * 所以摆在 600 的原件已经**不再贴住边界** —— 副本会照常往右下方偏。
+         * 换成真正的上界，这条才测的是"贴边时往反方向偏"。
+         */
+        val source = text(
+            x = CustomLayout.maxCoordinate(),
+            y = CustomLayout.maxCoordinate(),
+        )
         val copy = duplicateComponent(source, settings(source))
 
         assertTrue(
             "副本必须真的挪动了（否则就是压在原件上、看不见）",
             copy.x != source.x || copy.y != source.y,
         )
-        assertEquals(CustomLayout.BASE_CANVAS - DUPLICATE_OFFSET, copy.x, 0.001f)
-        assertEquals(CustomLayout.BASE_CANVAS - DUPLICATE_OFFSET, copy.y, 0.001f)
+        assertEquals(
+            "贴住右边界时副本应当往左偏，而不是留在边界外",
+            CustomLayout.maxCoordinate() - DUPLICATE_OFFSET,
+            copy.x,
+            0.001f,
+        )
+        assertEquals(
+            CustomLayout.maxCoordinate() - DUPLICATE_OFFSET,
+            copy.y,
+            0.001f,
+        )
     }
 
     /**
@@ -195,17 +214,17 @@ class ComponentFactoryTest {
         listOf(
             text(x = 0f, y = 0f),
             text(x = CustomLayout.BASE_CANVAS, y = CustomLayout.BASE_CANVAS),
-            text(x = CustomLayout.minCoordinate(120f), y = CustomLayout.minCoordinate(30f)),
+            text(x = CustomLayout.minCoordinate(), y = CustomLayout.minCoordinate()),
         ).forEach { source ->
             val copy = duplicateComponent(source, settings(source))
             assertTrue(
                 "副本 x=${copy.x} 越界（原件 x=${source.x}）",
-                copy.x >= CustomLayout.minCoordinate(copy.width) &&
+                copy.x >= CustomLayout.minCoordinate() &&
                     copy.x <= CustomLayout.maxCoordinate(),
             )
             assertTrue(
                 "副本 y=${copy.y} 越界（原件 y=${source.y}）",
-                copy.y >= CustomLayout.minCoordinate(copy.height) &&
+                copy.y >= CustomLayout.minCoordinate() &&
                     copy.y <= CustomLayout.maxCoordinate(),
             )
         }
@@ -281,9 +300,9 @@ class ComponentFactoryTest {
         val cfg = config().let { it.copy(fontId = "system:serif") }
         val created = createComponent(ComponentType.KEY, settings(), cfg)
 
-        assertEquals("system:serif", created.style.fontId)
-        assertEquals(cfg.colors.keyUp, created.style.fillUp)
-        assertEquals(cfg.colors.textUp, created.style.textUp)
+        assertEquals("system:serif", created.textStyle()!!.fontId)
+        assertEquals(cfg.colors.keyUp, created.textStyle()!!.fillUp)
+        assertEquals(cfg.colors.textUp, created.textStyle()!!.textUp)
     }
 
     @Test

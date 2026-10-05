@@ -6,6 +6,7 @@ import com.something.sthkey.core.prefs.AppPrefs
 import com.something.sthkey.domain.config.DEFAULT_CONFIG_ID
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.config.defaultConfig
+import com.something.sthkey.domain.config.defaultShowSpaceKey
 import com.something.sthkey.domain.config.duplicate
 import com.something.sthkey.domain.config.resetParamsToDefault
 import com.something.sthkey.domain.config.gamepad2KeyMappings
@@ -184,6 +185,20 @@ class ConfigStore private constructor(context: Context) {
             builtIn = false,
             styleId = resolvedStyle,
             keyMappings = mappings,
+            /*
+             * ⚠️ **必须按样式重算** `showSpaceKey`。
+             *
+             * `defaultConfig()` 是**键盘样式**的默认值（那里 `showSpaceKey = true`），
+             * 直接 `copy(styleId = GAMEPAD2)` 会把这个 `true` 带过去 ——
+             * 而 gamepad2 里的 SPACE 槽位与 `A_BUTTON` **是同一个屏幕位置**，
+             * 于是新建的手柄配置会**凭空多出一行空格、和 A 键重叠**。
+             *
+             * 用户报过:"新建的 gamepad2 配置现在会在下面多一个 space 组件"。
+             *
+             * ⚠️ 这与上面 `keyMappings` 是**同一类问题**（键盘的默认值不能
+             * 直接给手柄用）—— 所以两者放在一起改，别再漏第三个。
+             */
+            showSpaceKey = defaultShowSpaceKey(resolvedStyle),
         )
         configs.add(created)
         persist()

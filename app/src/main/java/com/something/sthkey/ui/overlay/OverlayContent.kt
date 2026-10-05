@@ -220,6 +220,14 @@ fun OverlayContent(
                 baseHeight = windowed.bounds.height,
                 overallAlpha = current.customOpacityPercent.coerceIn(0, 100) / 100f,
                 /*
+                 * ⚠️ 自定义画布上的摇杆也要跟着手柄动 —— 传真实数据进去。
+                 *
+                 * 编辑器画布与配置预览**不传**（用默认的全 0 = 摇杆居中）:
+                 * 它们没有手柄数据源，而且用户明确说过自定义编辑页的画布
+                 * "纯静态就行了"（与 Key 组件的按下动画一样，编辑器不演示动效）。
+                 */
+                sticks = sticks,
+                /*
                  * ⚠️ 必须自适应。
                  *
                  * 窗口尺寸是按公式"推算"的，而容器实际给的空间可能与它

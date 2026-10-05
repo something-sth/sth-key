@@ -56,11 +56,18 @@ import com.something.sthkey.domain.config.ANIMATION_DURATION_MIN
 import com.something.sthkey.domain.config.AnimationMode
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.config.ShadowMode
+import com.something.sthkey.domain.custom.ComponentCategory
 import com.something.sthkey.domain.custom.ComponentStyle
 import com.something.sthkey.domain.custom.ComponentType
+import com.something.sthkey.domain.custom.JoystickComponent
+import com.something.sthkey.domain.custom.StickSide
+import com.something.sthkey.domain.custom.TextualComponent
+import com.something.sthkey.domain.custom.summary
+import com.something.sthkey.domain.custom.typeLabel
 import com.something.sthkey.domain.custom.CustomComponent
 import com.something.sthkey.domain.custom.CustomLayout
 import com.something.sthkey.domain.custom.CustomLayoutSettings
+import com.something.sthkey.domain.custom.resizedToSide
 import com.something.sthkey.domain.custom.KeyComponent
 import com.something.sthkey.domain.custom.SUGGESTED_KEY_CODES
 import com.something.sthkey.domain.custom.TextComponent
@@ -94,11 +101,72 @@ fun AddComponentDialog(
         onDismissRequest = onDismiss,
         title = { Text("添加组件") },
         text = {
+            /*
+             * ============================================================
+             * 按**栏**分组，不是把四种类型平铺一行
+             * ============================================================
+             * 用户的原话:"原本的 key 组件与文本组件分到'通用'栏，然后再分出
+             * 键盘专栏与手柄专栏组件，键盘专栏还没想好放什么，先写个无，
+             * 留个占位，手柄专栏就放个摇杆组件"。
+             *
+             * ⚠️ 平铺的问题不只是"以后更挤":用户看不出"这个组件属于哪一类"。
+             * 分栏之后，"想找手柄相关的东西 → 看手柄那一栏"是直觉的。
+             *
+             * ⚠️ 空栏**照样显示**（键盘那一栏现在是空的）—— 那是刻意的占位，
+             * 告诉用户"这里以后会放东西"，而不是让人以为键盘只有按键和文本。
+             */
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                ComponentCategory.entries.forEach { category ->
+                    CategoryRow(
+                        category = category,
+                        types = ComponentType.inCategory(category),
+                        onPick = onPick,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
+    )
+}
+
+/** 弹窗里的一栏:标题 + 该栏的组件卡片（空栏给一行置灰占位） */
+@Composable
+private fun CategoryRow(
+    category: ComponentCategory,
+    types: List<ComponentType>,
+    onPick: (ComponentType) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = category.label,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+        )
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        if (types.isEmpty()) {
+            /*
+             * ⚠️ 置灰的占位行。文案说明"暂无"而不是留一块空白 ——
+             * 空白会让人以为是界面出错了。
+             */
+            Text(
+                text = "暂无可选组件",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 6.dp),
+            )
+        } else {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                ComponentType.entries.forEach { type ->
+                types.forEach { type ->
                     Card(
                         modifier = Modifier
                             .weight(1f)
@@ -125,11 +193,8 @@ fun AddComponentDialog(
                     }
                 }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
-        },
-    )
+        }
+    }
 }
 
 /*
@@ -184,6 +249,26 @@ private enum class PanelSection(val title: String, val defaultExpanded: Boolean)
 
     /** 动画：只有按键组件有 */
     MOTION("按下动画", false),
+
+    /*
+     * ============================================================
+     * 摇杆专属：**也按"属性种类"分组**，不按"零件"分组
+     * ============================================================
+     * 用户的原话:"标准样式里那么做是为了区分，自定义是单独配置的，
+     * 应该把圆角，透明度，描边这些分出来，而不是把摇杆，摇杆帽分出来，
+     * 标题应该是圆角，透明度，颜色这些"。
+     *
+     * ⚠️ 两边的分组逻辑**不同是有理由的**:
+     *
+     * | 场景 | 分组依据 | 为什么 |
+     * |---|---|---|
+     * | 「标准」样式的设置页 | 按**零件**（摇杆 / 摇杆帽 / 手感） | 那里的摇杆是一个整体，用户想的是"我要调那个帽子" |
+     * | **自定义编辑页** | 按**属性种类** | 这里每个属性都是**逐个配**的，与按键/文本组件同一套分组 —— 换个组件不用重新找 |
+     *
+     * 所以摇杆在这边**复用**已有的「外观 / 颜色 / 透明度」三组,
+     * 只多一个「摇杆手感」（那是它独有、无处可放的项）。
+     */
+    JOYSTICK_FEEL("摇杆手感", false),
     ;
 
     companion object {
@@ -287,16 +372,46 @@ fun PropertyPanel(
             expanded = PanelSection.CONTENT in expanded,
             onToggle = { expanded = expanded.toggle(PanelSection.CONTENT) },
         ) {
-            ContentSection(
-                component = component,
-                onComponentChange = onComponentChange,
-                onBeginContinuous = onBeginContinuous,
-                onEndContinuous = onEndContinuous,
-                onPickKeys = onPickKeys,
-                onPickCpsKeys = onPickCpsKeys,
-            )
+            /*
+             * ⚠️ 按组件类型分派 —— 摇杆的"内容"只有一个选项
+             * （监听左摇杆还是右摇杆），与按键/文本完全不是一回事。
+             *
+             * 用户的原话:"'内容'栏的配置只保留一个分段按钮用来选择监听的是
+             * 左摇杆还是右摇杆"。
+             */
+            when (component) {
+                is JoystickComponent -> JoystickContentSection(
+                    component = component,
+                    onComponentChange = onComponentChange,
+                )
+
+                is KeyComponent, is TextComponent -> ContentSection(
+                    /*
+                     * `is KeyComponent, is TextComponent` 这个分支会让 Kotlin 把
+                     * `component` 收窄成 `KeyComponent | TextComponent` 的**交集类型**,
+                     * 它不自动算作 [TextualComponent]。所以要显式转一次。
+                     */
+                    component = component as TextualComponent,
+                    onComponentChange = onComponentChange,
+                    onBeginContinuous = onBeginContinuous,
+                    onEndContinuous = onEndContinuous,
+                    onPickKeys = onPickKeys,
+                    onPickCpsKeys = onPickCpsKeys,
+                )
+            }
         }
 
+        /*
+         * ============================================================
+         * 位置与尺寸（三种组件共用）
+         * ============================================================
+         * ⚠️ X / Y / 宽 / 高 对三种组件含义完全一样，所以是**同一个组**，
+         * 不按类型分叉。摇杆额外多两项（摇杆缩放 / 摇杆帽缩放）——
+         * 用户的原话:"摇杆缩放与摇杆帽缩放都整合在'位置与尺寸'里"。
+         *
+         * ⚠️ 位置是**逐组件配**的（自定义样式的本意），所以摇杆也必须能调 X/Y ——
+         * 早先只给了"居中"按钮加宽高，位置只能靠居中，那是漏做的。
+         */
         PanelGroup(
             section = PanelSection.GEOMETRY,
             expanded = PanelSection.GEOMETRY in expanded,
@@ -309,22 +424,47 @@ fun PropertyPanel(
                 onBeginContinuous = onBeginContinuous,
                 onEndContinuous = onEndContinuous,
             )
+
+            /* 摇杆的两个"缩放"属于尺寸，所以也在这里 */
+            if (component is JoystickComponent) {
+                JoystickScaleSliders(
+                    component = component,
+                    onComponentChange = onComponentChange,
+                )
+            }
         }
 
+        /*
+         * ============================================================
+         * 外观 / 颜色 / 透明度 —— **按属性种类分组**，三种组件各自填内容
+         * ============================================================
+         * 用户的原话:"自定义是单独配置的，应该把圆角，透明度，描边这些分出来，
+         * 而不是把摇杆，摇杆帽分出来，标题应该是圆角，透明度，颜色这些"。
+         *
+         * ⚠️ 所以组的**标题与顺序**对三种组件完全相同，变的只是每组里的控件 ——
+         * 用户换一个组件时不需要重新找"圆角在哪一组"。
+         */
         PanelGroup(
             section = PanelSection.LOOK,
             expanded = PanelSection.LOOK in expanded,
             onToggle = { expanded = expanded.toggle(PanelSection.LOOK) },
         ) {
-            LookSection(
-                component = component,
-                onComponentChange = onComponentChange,
-                onBeginContinuous = onBeginContinuous,
-                onEndContinuous = onEndContinuous,
-                onStyleChange = onStyleChange,
-                onPickFont = onPickFont,
-        onPickBitmapFont = onPickBitmapFont,
-            )
+            when (component) {
+                is JoystickComponent -> JoystickLookSection(
+                    component = component,
+                    onComponentChange = onComponentChange,
+                )
+
+                is KeyComponent, is TextComponent -> LookSection(
+                    component = component as TextualComponent,
+                    onComponentChange = onComponentChange,
+                    onBeginContinuous = onBeginContinuous,
+                    onEndContinuous = onEndContinuous,
+                    onStyleChange = onStyleChange,
+                    onPickFont = onPickFont,
+                    onPickBitmapFont = onPickBitmapFont,
+                )
+            }
         }
 
         PanelGroup(
@@ -332,10 +472,17 @@ fun PropertyPanel(
             expanded = PanelSection.COLORS in expanded,
             onToggle = { expanded = expanded.toggle(PanelSection.COLORS) },
         ) {
-            ColorSection(
-                component = component,
-                onStyleChange = onStyleChange,
-            )
+            when (component) {
+                is JoystickComponent -> JoystickColorSection(
+                    component = component,
+                    onComponentChange = onComponentChange,
+                )
+
+                is KeyComponent, is TextComponent -> ColorSection(
+                    component = component as TextualComponent,
+                    onStyleChange = onStyleChange,
+                )
+            }
         }
 
         PanelGroup(
@@ -343,15 +490,36 @@ fun PropertyPanel(
             expanded = PanelSection.OPACITY in expanded,
             onToggle = { expanded = expanded.toggle(PanelSection.OPACITY) },
         ) {
-            OpacitySection(
-                component = component,
-                onStyleChange = onStyleChange,
-                onBeginContinuous = onBeginContinuous,
-                onEndContinuous = onEndContinuous,
-            )
+            when (component) {
+                is JoystickComponent -> JoystickOpacitySection(
+                    component = component,
+                    onComponentChange = onComponentChange,
+                )
+
+                is KeyComponent, is TextComponent -> OpacitySection(
+                    component = component as TextualComponent,
+                    onStyleChange = onStyleChange,
+                    onBeginContinuous = onBeginContinuous,
+                    onEndContinuous = onEndContinuous,
+                )
+            }
         }
 
-        /* 动画只有按键组件才有 —— 文本组件连标题都不显示 */
+        /*
+         * 「摇杆手感」是摇杆**独有**的一组 —— 死区/灵敏度/平滑没有别处可放。
+         * 它排在最后（那是"调完样子之后再调手感"的顺序）。
+         */
+        if (component is JoystickComponent) {
+            PanelGroup(
+                section = PanelSection.JOYSTICK_FEEL,
+                expanded = PanelSection.JOYSTICK_FEEL in expanded,
+                onToggle = { expanded = expanded.toggle(PanelSection.JOYSTICK_FEEL) },
+            ) {
+                JoystickFeelSection(component = component, onComponentChange = onComponentChange)
+            }
+        }
+
+        /* 动画只有按键组件才有 —— 文本/摇杆连标题都不显示 */
         if (component is KeyComponent) {
             PanelGroup(
                 section = PanelSection.MOTION,
@@ -390,7 +558,15 @@ private fun ComponentHeader(component: CustomComponent) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = if (component is KeyComponent) "按键" else "文本",
+            /*
+             * ⚠️ 类型名走 [typeLabel]，**不要**写成
+             * `if (component is KeyComponent) "按键" else "文本"`。
+             *
+             * 那种二元写法加上第三种组件时会把摇杆叫成"文本"，
+             * 而这里正是"我在改的是哪一个组件"的答案 ——
+             * 叫错名字会让人以为选错了组件。
+             */
+            text = component.typeLabel(),
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onPrimaryContainer,
             modifier = Modifier
@@ -402,7 +578,11 @@ private fun ComponentHeader(component: CustomComponent) {
                 .padding(horizontal = 6.dp, vertical = 2.dp),
         )
         Text(
-            text = component.primaryText().ifBlank { "（空）" },
+            /*
+             * 摘要:按键是键面文字、文本是内容、**摇杆是"左摇杆/右摇杆"** ——
+             * 走 [summary] 一处决定，别在这里再 `when` 一遍。
+             */
+            text = component.summary().ifBlank { "（空）" },
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.Bold,
             maxLines = 1,
@@ -470,7 +650,7 @@ private fun Set<PanelSection>.toggle(section: PanelSection): Set<PanelSection> =
  */
 @Composable
 private fun ContentSection(
-    component: CustomComponent,
+    component: TextualComponent,
     onComponentChange: (CustomComponent, Boolean) -> Unit,
     onBeginContinuous: () -> Unit,
     onEndContinuous: () -> Unit,
@@ -713,6 +893,11 @@ private fun KeyCodesField(
  */
 @Composable
 private fun GeometrySection(
+    /*
+     * ⚠️ 形参是 **`CustomComponent`**，不是 `TextualComponent` ——
+     * X / Y / 宽 / 高 对三种组件含义完全一样（摇杆也必须能调位置，
+     * 这是用户点名要的），所以这一组三种组件**共用同一份实现**。
+     */
     component: CustomComponent,
     windowSize: String,
     onComponentChange: (CustomComponent, Boolean) -> Unit,
@@ -736,7 +921,7 @@ private fun GeometrySection(
     SliderRow(
         label = "X 轴",
         value = component.x,
-        range = CustomLayout.minCoordinate(component.width)..CustomLayout.maxCoordinate(),
+        range = CustomLayout.minCoordinate()..CustomLayout.maxCoordinate(),
         display = positionText(component.x, canvas),
         onBegin = onBeginContinuous,
         onEnd = onEndContinuous,
@@ -747,7 +932,7 @@ private fun GeometrySection(
     SliderRow(
         label = "Y 轴",
         value = component.y,
-        range = CustomLayout.minCoordinate(component.height)..CustomLayout.maxCoordinate(),
+        range = CustomLayout.minCoordinate()..CustomLayout.maxCoordinate(),
         display = positionText(component.y, canvas),
         onBegin = onBeginContinuous,
         onEnd = onEndContinuous,
@@ -755,6 +940,34 @@ private fun GeometrySection(
             onComponentChange(component.movedTo(x = component.x, y = value), false)
         },
     )
+    /*
+     * ============================================================
+     * ⚠️ 摇杆是**边长**，不是宽 / 高
+     * ============================================================
+     * 用户的原话:"摇杆组件在自定义编辑中，应该是调'边长'，而不是像别的组件
+     * 一样设计长、宽，摇杆本身就是圆角正方形，单调一个长或宽，显示都有 bug"。
+     *
+     * ⚠️ "调一个什么都不变"是必然的:摇杆的三层几何全部由**一个边长**推出，
+     * 而渲染层取的是 `min(宽, 高)` —— 只把宽调大、高不动时，
+     * `min` 还是原来那个值，于是滑块动了、画面纹丝不动。
+     *
+     * 所以对摇杆**不显示宽/高两个滑块**，只给一个「边长」。
+     */
+    if (component is JoystickComponent) {
+        SliderRow(
+            label = "边长",
+            value = component.width,
+            range = CustomLayout.COMPONENT_SIZE_MIN..CustomLayout.COMPONENT_SIZE_MAX,
+            display = component.width.toInt().toString(),
+            onBegin = onBeginContinuous,
+            onEnd = onEndContinuous,
+            onChange = { value ->
+                onComponentChange(component.resizedToSide(value), false)
+            },
+        )
+        return
+    }
+
     SliderRow(
         label = "宽度",
         value = component.width,
@@ -803,7 +1016,7 @@ private fun GeometrySection(
  */
 @Composable
 private fun LookSection(
-    component: CustomComponent,
+    component: TextualComponent,
     onComponentChange: (CustomComponent, Boolean) -> Unit,
     onBeginContinuous: () -> Unit,
     onEndContinuous: () -> Unit,
@@ -1075,7 +1288,7 @@ private fun LookSection(
  */
 @Composable
 private fun ColorSection(
-    component: CustomComponent,
+    component: TextualComponent,
     onStyleChange: (ComponentStyle, Boolean) -> Unit,
 ) {
     /* 只有按键组件有"按下"这个状态；文本组件只显示未按下那一档 */
@@ -1152,7 +1365,7 @@ private fun ColorSection(
  */
 @Composable
 private fun OpacitySection(
-    component: CustomComponent,
+    component: TextualComponent,
     onStyleChange: (ComponentStyle, Boolean) -> Unit,
     onBeginContinuous: () -> Unit,
     onEndContinuous: () -> Unit,
@@ -1301,7 +1514,7 @@ private fun SubLabel(text: String) {
  */
 @Composable
 private fun PrimaryTextField(
-    component: CustomComponent,
+    component: TextualComponent,
     onComponentChange: (CustomComponent, Boolean) -> Unit,
     /**
      * 编辑开始（获得焦点）。

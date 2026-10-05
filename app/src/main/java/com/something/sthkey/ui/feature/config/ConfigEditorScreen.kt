@@ -74,6 +74,8 @@ import com.something.sthkey.ui.component.HexColorRow
 import com.something.sthkey.ui.component.KeyMappingEditor
 import com.something.sthkey.ui.component.ScrollableScreen
 import com.something.sthkey.ui.component.EditableSliderRow
+import com.something.sthkey.ui.component.collapsibleSection
+import com.something.sthkey.ui.component.setExpanded
 import com.something.sthkey.ui.component.SectionHeader
 import com.something.sthkey.ui.feature.custom.stepOf
 import com.something.sthkey.ui.component.SectionHint
@@ -148,6 +150,28 @@ fun ConfigEditorScreen(
 
     /** 是不是自定义 Key 样式；它的编辑页只放通用项，中间交给独立的编辑器页面 */
     val isCustomKey = editable.styleId == StyleId.CUSTOM_KEY
+
+    /*
+     * ============================================================
+     * 分区折叠状态
+     * ============================================================
+     * 用户的原话:"优化一下键盘样式与手柄样式的配置编辑页，让现在的'外观'、
+     * '颜色'等标题，变成可折叠的 box，现在配置多，不方便找"。
+     *
+     * ⚠️ **默认只展开"基本信息"**，其余全部收起 —— 用户的原话:
+     * "基本信息不做折叠，这是配置非常重要的一块，折叠起来看预览都要点一下，
+     * 而且反直觉。其他的默认都折叠起来，有用户反馈我再调整"。
+     *
+     * ⚠️ "其它"（重置/删除）也**不折叠** —— 危险操作藏在折叠里不合适。
+     *
+     * ⚠️ 存的是**分区键**而不是标题:两种样式都有叫"外观"的分区
+     * （键分别是 `外观` 与 `live2d:外观`），用标题当键会让它们联动
+     * （点一个，另一个也展开）。
+     *
+     * ⚠️ 状态放在**页面**这一层、不按配置 id 重置:用户连着改几份配置时，
+     * "我刚刚展开了颜色"这个意图应该延续下去。
+     */
+    var expandedSections by remember { mutableStateOf(emptySet<String>()) }
 
     /*
      * Live2D 模型选择器的状态。
@@ -518,7 +542,12 @@ fun ConfigEditorScreen(
          * ============================================================
          */
 
-        item { SectionHeader("外观") }
+        collapsibleSection(
+            expanded = "外观" in expandedSections,
+            onExpandChange = { on -> expandedSections = setExpanded(expandedSections, "外观", on) },
+            key = "外观",
+            title = "外观",
+        ) {
 
         item {
             SettingsCard {
@@ -581,7 +610,7 @@ fun ConfigEditorScreen(
                 SliderRow(
                     label = "按键高度",
                     value = editable.keyHeightPercent.toFloat(),
-                    valueRange = KEY_HEIGHT_PERCENT_MIN..KEY_HEIGHT_PERCENT_MAX,
+                    valueRange = KeyLayout.KEY_HEIGHT_PERCENT_MIN.toFloat()..KeyLayout.KEY_HEIGHT_PERCENT_MAX.toFloat(),
                     display = "${editable.keyHeightPercent}%",
                     onValueChange = { value ->
                         applyChange { it.copy(keyHeightPercent = value.roundToInt()) }
@@ -593,7 +622,7 @@ fun ConfigEditorScreen(
                 SliderRow(
                     label = "按键间距",
                     value = editable.keyGapPercent.toFloat(),
-                    valueRange = KEY_GAP_PERCENT_MIN..KEY_GAP_PERCENT_MAX,
+                    valueRange = KeyLayout.KEY_GAP_PERCENT_MIN.toFloat()..KeyLayout.KEY_GAP_PERCENT_MAX.toFloat(),
                     display = "${editable.keyGapPercent}%",
                     onValueChange = { value ->
                         applyChange { it.copy(keyGapPercent = value.roundToInt()) }
@@ -761,6 +790,8 @@ fun ConfigEditorScreen(
             }
         }
 
+        } // ← 折叠结束：外观
+
         /*
          * ============================================================
          * 颜色（只有 6 位 RGB，透明度在下一分区单独调）
@@ -771,7 +802,12 @@ fun ConfigEditorScreen(
          * ============================================================
          */
 
-        item { SectionHeader("颜色") }
+        collapsibleSection(
+            expanded = "颜色" in expandedSections,
+            onExpandChange = { on -> expandedSections = setExpanded(expandedSections, "颜色", on) },
+            key = "颜色",
+            title = "颜色",
+        ) {
 
         item {
             SettingsCard {
@@ -844,6 +880,8 @@ fun ConfigEditorScreen(
             SectionHint(text = "颜色只填 6 位十六进制（例如 FF8800），透明度用下面的滑块单独调整。")
         }
 
+        } // ← 折叠结束：颜色
+
         /*
          * ============================================================
          * 透明度
@@ -857,7 +895,12 @@ fun ConfigEditorScreen(
          * ============================================================
          */
 
-        item { SectionHeader("透明度") }
+        collapsibleSection(
+            expanded = "透明度" in expandedSections,
+            onExpandChange = { on -> expandedSections = setExpanded(expandedSections, "透明度", on) },
+            key = "透明度",
+            title = "透明度",
+        ) {
 
         item {
             SettingsCard {
@@ -969,13 +1012,20 @@ fun ConfigEditorScreen(
             }
         }
 
+        } // ← 折叠结束：透明度
+
         /*
          * ============================================================
          * 行为
          * ============================================================
          */
 
-        item { SectionHeader("行为") }
+        collapsibleSection(
+            expanded = "行为" in expandedSections,
+            onExpandChange = { on -> expandedSections = setExpanded(expandedSections, "行为", on) },
+            key = "行为",
+            title = "行为",
+        ) {
 
         item {
             SettingsCard {
@@ -1088,6 +1138,49 @@ fun ConfigEditorScreen(
                  * "A 本身就指代 space"是误记，实际见 `GamepadBindings`）——
                  * 所以标签要跟着样式变，见下面那个 `title`。
                  */
+                /*
+                 * ============================================================
+                 * 键盘样式专属:空格的两个开关
+                 * ============================================================
+                 * 用户的原话:"key 样式，需要添加'显示 SPACE 键开关'（默认开启），
+                 * 以及'SPACE 键置顶'开关，默认关闭，原理跟手柄的标准样式的
+                 * 'A 键置顶'是一样的，你自己翻一下代码避免踩坑"。
+                 *
+                 * ⚠️ **只在键盘样式显示** —— 手柄样式（`usesJoystickLayout`）
+                 * 那边没有 WASD，"置顶"无从谈起；而且它的 `showSpaceKey`
+                 * 是"显示 SPACE 槽位"（与 [showAButton] 同一个屏幕位置），
+                 * 已经在上面的手柄专属块里有对应开关，**不能重复显示**。
+                 *
+                 * ⚠️ 判断用 `!usesJoystickLayout(editable)` —— 与那边
+                 * `if (usesJoystickLayout(...))` **互补且互斥**，
+                 * 加第三种样式时不会两边都命中或都不命中。
+                 */
+                if (!KeyLayout.usesJoystickLayout(editable)) {
+                    SwitchItem(
+                        title = "显示 SPACE 键",
+                        subtitle = "独占一行，横跨两列",
+                        checked = editable.showSpaceKey,
+                        onCheckedChange = { enabled ->
+                            applyChange { it.copy(showSpaceKey = enabled) }
+                        },
+                    )
+
+                    CardDivider()
+
+                    SwitchItem(
+                        title = "SPACE 键置顶",
+                        subtitle = "把空格挪到 WASD 上方，其余键整体下移一行",
+                        checked = editable.spaceKeyOnTop,
+                        /* 不显示空格时"置顶"没有意义（与 A 键置顶同一个道理） */
+                        enabled = editable.showSpaceKey,
+                        onCheckedChange = { enabled ->
+                            applyChange { it.copy(spaceKeyOnTop = enabled) }
+                        },
+                    )
+
+                    CardDivider()
+                }
+
                 if (KeyLayout.usesJoystickLayout(editable)) {
                     SwitchItem(
                         title = "显示肩键",
@@ -1251,6 +1344,8 @@ fun ConfigEditorScreen(
             }
         }
 
+        } // ← 折叠结束：行为
+
         /*
          * ============================================================
          * 摇杆的专属分区（**只有手柄样式有**）
@@ -1266,7 +1361,11 @@ fun ConfigEditorScreen(
          * 不再往里塞新东西）。
          */
         if (KeyLayout.usesJoystickLayout(editable)) {
-            joystickStyleSections(editable) { transform -> applyChange(transform) }
+            joystickStyleSections(
+                editable = editable,
+                expandedSections = expandedSections,
+                onExpandedChange = { expandedSections = it },
+            ) { transform -> applyChange(transform) }
         }
 
         /*
@@ -1285,7 +1384,12 @@ fun ConfigEditorScreen(
          * 范围也照抄（−60..60），免得两个页面的滑块手感不一样。
          */
 
-        item { SectionHeader("文字偏移") }
+        collapsibleSection(
+            expanded = "文字偏移" in expandedSections,
+            onExpandChange = { on -> expandedSections = setExpanded(expandedSections, "文字偏移", on) },
+            key = "文字偏移",
+            title = "文字偏移",
+        ) {
 
         item {
             SettingsCard {
@@ -1334,6 +1438,8 @@ fun ConfigEditorScreen(
             )
         }
 
+        } // ← 折叠结束：文字偏移
+
         /*
          * ============================================================
          * 字间距 / 行间距
@@ -1349,7 +1455,14 @@ fun ConfigEditorScreen(
          * 把入口藏起来等于这个功能对多数用户不存在。
          */
 
-        item { SectionHeader("字间距与行间距") }
+        collapsibleSection(
+            expanded = "字间距与行间距" in expandedSections,
+            onExpandChange = { on ->
+                expandedSections = setExpanded(expandedSections, "字间距与行间距", on)
+            },
+            key = "字间距与行间距",
+            title = "字间距与行间距",
+        ) {
 
         item {
             SettingsCard {
@@ -1398,13 +1511,20 @@ fun ConfigEditorScreen(
             )
         }
 
+        } // ← 折叠结束：字间距与行间距
+
         /*
          * ============================================================
          * 键位映射
          * ============================================================
          */
 
-        item { SectionHeader("键位映射") }
+        collapsibleSection(
+            expanded = "键位映射" in expandedSections,
+            onExpandChange = { on -> expandedSections = setExpanded(expandedSections, "键位映射", on) },
+            key = "键位映射",
+            title = "键位映射",
+        ) {
 
         item {
             SettingsCard {
@@ -1423,6 +1543,8 @@ fun ConfigEditorScreen(
                     "按键使用 Linux 输入事件码：W=17、A=30、空格=57。",
             )
         }
+
+        } // ← 折叠结束：键位映射
 
         } // ← 结束"按键样式"分区；见上面按样式分流的注释
 
@@ -2061,13 +2183,23 @@ private const val TEXT_OFFSET_MAX = 60f
 /**
  * 「整体缩放」滑块的**分档数**（`Slider` 的 `steps` 参数）。
  *
- * `steps` 是"档位之间的间隔数"，即实际可停靠的位置有 `steps + 1` 个。
- * 想让用户按 **10%** 一档地调，就是 `(跨度 / 10) - 1`。
+ * ============================================================
+ * ⚠️ 现在是 **1% 一档**（这个值改过两次）
+ * ============================================================
+ * `steps` 是"档位之间的间隔数"，实际可停靠的位置有 `steps + 1` 个。
+ * 想让跨度里每 X% 一档，就是 `(跨度 / X) - 1`。
  *
- * ⚠️ 必须与 [KeyLayout.SCALE_PERCENT_MIN]/[KeyLayout.SCALE_PERCENT_MAX]
- * **联动推导**，不要写死 —— 早先写死 `14`（对应旧的 50..200），
- * 下限改成 20 之后档位就不对齐了：滑到最左边不是整数，
- * 显示出来是 `20%` 但实际停靠值是 21、19 这种。
+ * | 版本 | 范围 | 档位 | 问题 |
+ * |---|---|---|---|
+ * | 最早 | 50..200 | 写死 `14` | 下限改成 20 之后档位不对齐（显示 20%、实际停 21） |
+ * | 上一次 | 20..200 | 10% | 跨度 180 → 17 档，整齐 |
+ * | **现在** | **1..300** | **1%** | 跨度 299，**除不尽 10** |
+ *
+ * ⚠️ 语义改成"百分比 = 倍率"之后（见 [KeyLayout.SCALE_PERCENT_MIN]），
+ * 跨度是 299，`/10` 会得到 28.9 这种非整数 —— `Slider` 的档位落点会带上小数，
+ * 显示与实际停靠值对不上，正是最早那版的老毛病。
+ *
+ * 取 1% 一档既整齐，又能在小倍率区间给出**可用**的精度
+ * （1% 与 2% 是相邻两档，差别正好是 2 倍）。要精确值可以点数字直接输入。
  */
-private val SCALE_SLIDER_STEPS =
-    (KeyLayout.SCALE_PERCENT_MAX - KeyLayout.SCALE_PERCENT_MIN) / 10 - 1
+private val SCALE_SLIDER_STEPS = KeyLayout.SCALE_PERCENT_MAX - KeyLayout.SCALE_PERCENT_MIN - 1

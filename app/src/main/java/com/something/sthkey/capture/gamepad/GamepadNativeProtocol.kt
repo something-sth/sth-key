@@ -83,10 +83,31 @@ object GamepadNativeProtocol {
     /** 手柄就绪（后面跟设备描述） */
     fun isReady(line: String?): Boolean = line?.startsWith("$PREFIX_STATUS gamepad-ready ") == true
 
-    /** 手柄断开 / 还在等 */
+    /**
+     * 「**还在等手柄接入**」。
+     *
+     * ============================================================
+     * ⚠️ 与 [isDisconnected] 分开（以前是一个函数）
+     * ============================================================
+     * 这两种状态**都会影响输入**（都要把轴归零、都要标记未就绪），
+     * 所以以前合成一个 `isDisconnected` 是对的。
+     *
+     * ⚠️ 但它们的**日志价值完全不同**:
+     *
+     * | 状态 | 什么时候出现 | 该不该记日志 |
+     * |---|---|---|
+     * | waiting | 启动时还没插手柄 —— **常态**，helper 会反复上报 | **不该**（会刷屏） |
+     * | disconnected | 接上了又拔掉 | 该记 |
+     *
+     * 合成一个的后果是"没连手柄时调试页一直在刷'手柄断开（等待重新连接）'" ——
+     * 而那时候手柄**根本没连过**，说"断开"是错的，还每 800ms 刷一条。
+     */
+    fun isWaiting(line: String?): Boolean =
+        line?.startsWith("$PREFIX_STATUS waiting-gamepad") == true
+
+    /** 手柄真的断开了（接上过又拔掉） */
     fun isDisconnected(line: String?): Boolean =
-        line?.startsWith("$PREFIX_STATUS gamepad-disconnected") == true ||
-            line?.startsWith("$PREFIX_STATUS waiting-gamepad") == true
+        line?.startsWith("$PREFIX_STATUS gamepad-disconnected") == true
 
     /** 就绪行里的设备描述（日志用） */
     fun readyDetail(line: String): String =

@@ -12,6 +12,18 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!--
+        ⚠️ 这里**不要**写 android:extractNativeLibs。
+
+        手柄的 native helper（libgamepadmonitor.so）需要被 **shell 身份**
+        的进程 `exec`，所以系统必须在安装时把它**解包成真实文件**放进
+        ApplicationInfo.nativeLibraryDir（内存映射的库在文件系统里不存在）。
+
+        ⚠️ 但那件事**只能在 build script 里配** —— manifest 里写这个属性
+        AGP 9 会直接**构建失败**并指名要改用:
+        `packagingOptions.jniLibs.useLegacyPackaging = true`
+        （见 app/build.gradle.kts，那里有完整说明）。
+    -->
     <application
         android:name=".SthKeyApplication"
         android:allowBackup="true"

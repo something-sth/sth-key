@@ -156,7 +156,7 @@ class CustomLayoutWindowTest {
         assertEquals(source.width, moved.width, 0.001f)
         assertEquals(source.height, moved.height, 0.001f)
         assertEquals(source.id, moved.id)
-        assertEquals(source.style, moved.style)
+        assertEquals(source.textStyle(), moved.textStyle())
     }
 
     @Test

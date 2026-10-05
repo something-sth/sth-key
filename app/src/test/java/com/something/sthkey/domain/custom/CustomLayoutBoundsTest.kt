@@ -166,8 +166,26 @@ class CustomLayoutBoundsTest {
 
     @Test
     fun `滑块上界不随窗口尺寸变化`() {
-        // maxCoordinate 只看定位区，不看组件
-        assertEquals(CustomLayout.BASE_CANVAS, CustomLayout.maxCoordinate())
+        /*
+         * ⚠️ 坐标范围这一版改成**固定**的 `-1000 .. 1000`，不再与
+         * 定位区（600）或内容包围盒挂钩。
+         *
+         * 早先下界是 `-尺寸`、上界是定位区边长 —— 于是"改宽高会让
+         * X 滑块的范围跟着变"，用户把组件调小之后原本能拖到的那一端
+         * 会突然拖不到。
+         *
+         * 这条现在钉两件事:
+         * 1. 范围与 `BASE_CANVAS` **无关**（否则又会跟着定位区漂）；
+         * 2. 范围比定位区宽 —— 大组件要能摆到定位区之外。
+         *
+         * "与组件尺寸无关"那条在 `CustomLayoutTest` 里。
+         */
+        assertEquals(CustomLayout.COORDINATE_MAX, CustomLayout.maxCoordinate(), 0.001f)
+        assertEquals(CustomLayout.COORDINATE_MIN, CustomLayout.minCoordinate(), 0.001f)
+        assertTrue(
+            "坐标上界必须比定位区宽，否则大组件摆不出去",
+            CustomLayout.maxCoordinate() > CustomLayout.BASE_CANVAS,
+        )
     }
 
     /*

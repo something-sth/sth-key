@@ -1,6 +1,7 @@
 package com.something.sthkey.domain.style
 
 import com.something.sthkey.domain.config.KeyStrokesConfig
+import com.something.sthkey.domain.config.defaultShowSpaceKey
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -28,11 +29,30 @@ class Gamepad2LayoutTest {
      *
      * ⚠️ `id` 与 `name` 没有默认值 —— 它们是必填的标识，
      * 而测试里只需要"某个样式的配置"，所以这里给固定值。
+     *
+     * ============================================================
+     * ⚠️ 为什么这里要显式写 `showSpaceKey`
+     * ============================================================
+     * 这个字段的**字段默认值**是 `true`（键盘样式要"默认显示空格"，
+     * 用户要求），而它在 gamepad2 里的含义完全不同 ——
+     * 那是"显示 **SPACE 槽位**"，而 SPACE 与 `A_BUTTON`
+     * **是同一个屏幕位置**，同时开会重叠。
+     *
+     * ⚠️ 生产代码不靠这个默认值:解码时用 `json.has("showSpaceKey")`
+     * 区分"老配置（没这个键）"与"用户的选择"，缺省按**样式**给
+     * （见 `defaultShowSpaceKey`）。
+     *
+     * 但测试是**直接 new** 出配置的，绕过了解码 ——
+     * 于是会拿到键盘的默认值、凭空多出一行 SPACE，把 A 键挤出最后一行
+     * （`A 横跨两列并排在最后` 就是这么挂的）。
+     *
+     * 所以这里按样式的真实缺省补上，测试才与线上行为一致。
      */
     private fun config(styleId: String) = KeyStrokesConfig(
         id = "test-$styleId",
         name = "测试",
         styleId = styleId,
+        showSpaceKey = defaultShowSpaceKey(styleId),
     )
 
     private fun keyboard() = config(StyleId.KEYSTROKES)
@@ -73,6 +93,39 @@ class Gamepad2LayoutTest {
          * 也不该再退回推算法。
          */
         assertEquals(345f, KeyLayout.baseHeight(keyboard()), 0.5f)
+    }
+
+    /* ============================================================
+     * ⚠️ 回归：两个摇杆槽位的**水平中心必须不同**
+     * ============================================================
+     * 用户报过"转换后的标准配置，左右摇杆堆在一起"。
+     *
+     * 那条症状有两个可能的来源:
+     * 1. 布局给两个槽位算了**同一个** centerX（就是这条测的）；
+     * 2. 转换器把 centerX 换算成 x 时算错（见 `KeyToCustomConverter`）。
+     *
+     * ⚠️ 这条断言防的是第 1 种 —— 而它是**很容易发生**的那种错:
+     * `stickLeftCenter` / `stickRightCenter` 现在直接取
+     * `leftCenter` / `rightCenter`，哪天有人"顺手"把它们都写成 `center`，
+     * 画面上就是两个摇杆叠在一起，而**没有任何报错**。
+     */
+    @Test
+    fun `两个摇杆槽位的中心不同`() {
+        val boxes = KeyLayout.keys(gamepad2())
+        val left = boxes.first { it.slotId == KeyLayout.Id.JOYSTICK_LEFT }
+        val right = boxes.first { it.slotId == KeyLayout.Id.JOYSTICK_RIGHT }
+
+        assertTrue(
+            "左右摇杆必须有各自的中心（左 ${left.centerX}、右 ${right.centerX}）—— " +
+                "相等就意味着它们在画面上叠在一起",
+            right.centerX - left.centerX > 1f,
+        )
+
+        /* 而且左右摇杆的先后顺序不能反 */
+        assertTrue("左摇杆必须在右摇杆左边", left.centerX < right.centerX)
+
+        /* 两者尺寸相同（对称），否则"叠在一起"会变成"一个大一个小" */
+        assertEquals(left.width, right.width, 0.01f)
     }
 
     /* ============================================================

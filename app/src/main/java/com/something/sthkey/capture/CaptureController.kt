@@ -1,6 +1,9 @@
 package com.something.sthkey.capture
 
 import com.something.sthkey.capture.shizuku.ShizukuGeteventInputSource
+import com.something.sthkey.capture.gamepad.GamepadProcessLauncher
+import com.something.sthkey.capture.gamepad.RootGamepadLauncher
+import com.something.sthkey.capture.gamepad.ShizukuGamepadLauncher
 import com.something.sthkey.capture.gamepad.GamepadNativeMonitor
 import com.something.sthkey.capture.shizuku.ABS_HAT0X
 import com.something.sthkey.capture.shizuku.ABS_HAT0Y
@@ -268,20 +271,34 @@ object CaptureController {
         AppLog.i(TAG, "停止采集")
         stopGamepadMonitor()
         runCatching { source?.stop() }
-        AppLog.i(TAG, "停止采集")
-        runCatching { source?.stop() }
             .onFailure { AppLog.w(TAG, "停止输入源出错：${it.javaClass.simpleName}") }
         source = null
 
-        // 关键：必须清空按键状态，否则设备断开时会留下"卡住的键"
-        keyState.clear()
-        CaptureSession.clearKeys()
+        /*
+         * 关键：必须清空按键状态，否则设备断开时会留下"卡住的键"
+         *
+         * ⚠️ 这几行**以前是各自重复写了两遍**的（`source?.stop()` 也是）——
+         * 那是一次改动的残留。重复本身无害（都是幂等的），但会让后来人
+         * 以为是"两件不同的事"，所以清掉。
+         */
         keyState.clear()
         CaptureSession.clearKeys()
         /* 手柄的轴状态也要清 —— 否则悬浮窗上会留着"最后推到的位置" */
         CaptureSession.clearSticks()
         CaptureSession.updateChannel(null)
         CaptureSession.updateState(CaptureState.IDLE, "未监听")
+
+        /*
+         * ⚠️ **扳机门闩也必须清** —— 这一条以前漏了，而它正是
+         * "停止监听再重新开始，LT/RT 还是卡在按下状态"的原因:
+         * 门闩留着旧值，重启后第一帧就与真实值对不上，于是再也不发事件。
+         * 见 [resetTriggerState] 的注释。
+         *
+         * ⚠️ 必须放在**所有状态清理之后、且 monitor 已经完全停掉之后**
+         * （[stopGamepadMonitor] 在最上面）。反过来的话，还没退出的读线程
+         * 会在我们复位之后又写一次门闩 —— **那正好又会造出一个卡住的状态**。
+         */
+        resetTriggerState("停止采集")
     }
 
     /**
@@ -334,15 +351,27 @@ object CaptureController {
                 )
                 return false
             }
-
             /*
-             * 直连：让 Shizuku 起**一条** `sh -c "getevent -t"`，
-             * 事件走它的 stdout 回来。
+             * ============================================================
+             * ⚠️ 手柄 monitor 在 Shizuku 通道**也要启动**（这里曾经漏了）
+             * ============================================================
+             * 用户的原话:"我现在自己用 shizuku 也用不了摇杆那些，
+             * 扳机键也用不了……只能检测字母键，摇杆和其他键无反应"。
              *
-             * 一条就够 —— 全局监听覆盖全部设备，热插拔由 `getevent`
-             * 自己打印的设备公告给出。既不需要预扫设备清单，
-             * 也不需要"一个设备一个进程"。
+             * 根因:手柄的**轴**（`EV_ABS`）只有原生 helper 提供
+             * （见 [GamepadNativeMonitor] 的说明），而那个 helper
+             * 以前只在 root 分支启动、且写死走 `su` —— 于是 Shizuku 用户
+             * 的摇杆与扳机**永远不动**，按键却正常（那走 `getevent`）。
+             *
+             * ⚠️ Shizuku 的 shell 身份**本来就能读 `/dev/input`** ——
+             * 证据就是下面那条 `getevent` 在无 root 时跑得好好的。
+             * 所以缺的从来不是权限，只是没人用 Shizuku 去起 helper。
+             *
+             * ⚠️ 只换 [GamepadProcessLauncher]，**命令一字不改** ——
+             * 复制到 `/data/local/tmp` + `chmod 700` + `exec`
+             * 这套流程两条通道通用（`/data/local/tmp` shell 也可写）。
              */
+            startGamepadMonitor(ShizukuGamepadLauncher())
             return startSource(ShizukuGeteventInputSource(), "Shizuku 直连")
         }
 
@@ -367,13 +396,13 @@ object CaptureController {
                  * ⚠️ 手柄 monitor 与 `getevent` **并行**启动。
                  *
                  * 它是独立的一条链：`getevent` 管键盘鼠标，native monitor
-                 * 管手柄。两者失败互不影响 —— 手柄起不来时键鼠仍然工作。
+                 * 管手柄的摇杆与扳机。两者失败互不影响 ——
+                 * 手柄起不来时键鼠仍然工作。
                  *
-                 * ⚠️ **只在 root 通道启动**。Shizuku 通道要跑同一个 helper，
-                 * 得再起一条 `ShizukuShell` 进程并读它的 stdout，
-                 * 那是后一步的事 —— 现在先把手柄在 root 下跑通。
+                 * ⚠️ Shizuku 通道在**上面**也启动了同一个 monitor，
+                 * 只是换成 [ShizukuGamepadLauncher]（见那边的说明）。
                  */
-                startGamepadMonitor()
+                startGamepadMonitor(RootGamepadLauncher())
                 startSource(RootInputSource(), "root")
             }
 
@@ -622,19 +651,112 @@ object CaptureController {
      * 状态记在 [triggerDown] 里（每个扳机一位），所以反复经过阈值
      * 只会产生成对的 down / up。
      */
+    /**
+     * 扳机的过阈值判定 —— **每次拿到扳机值都调**，不是"只在变化时"。
+     *
+     * ============================================================
+     * ⚠️⚠️ 为什么改成"持续对账"而不是"边沿判定"
+     * ============================================================
+     * 老实现是纯粹的**边沿判定**:只在"跨越阈值"那一下发事件，
+     * 状态记在 [triggerDown] 那个锁存里。
+     *
+     * 那种结构的致命弱点是:**锁存一旦被脏数据顶上去，就再也没有
+     * 任何东西来纠正它** —— 后续的真实值每次都被判定成"没有变化"，
+     * 于是一条事件都不发。用户看到的正是这个:"LT/RT 一直显示按下、
+     * 按下去反而显示未按下、重启监听都没用"。
+     *
+     * 脏数据来自手柄**开机那一小段**:native 侧在对多轴活动做能力重探，
+     * 期间会吐出一串不可信的轴值。用户的原话:"单独动哪个摇杆都不会有事，
+     * **两个一起动就会复现**"。而 native 是预编译的 `.so`，那个源头
+     * **我们改不了** —— 所以只能让这一侧**自愈**。
+     *
+     * ============================================================
+     * 现在的做法:每一次都对账
+     * ============================================================
+     * 以**真实值**为准，把 [triggerDown] 那个锁存当成"我们上次报了什么"，
+     * 两者不一致就补一条事件。于是:
+     *
+     * - 脏数据顶上去 → 真实值回来时**立刻**被纠正（不再依赖边沿）；
+     * - 出任何异常（漏事件、顺序错乱、锁存漂了）→ **下一帧自愈**；
+     * - 幂等由 [setGamepadButton] 保证，所以"对账"**不会**产生重复事件。
+     *
+     * ⚠️ 每帧都调不等于每帧都发事件 —— 只在**确实不一致**时才发。
+     * 按住扳机不动时，`down` 与锁存一致，这里是空转。
+     */
     private fun emitTrigger(code: Int, value: Float) {
         val down = value >= TRIGGER_THRESHOLD
-        val wasDown = triggerDown.get()
         /* 位 0 = 左扳机，位 1 = 右扳机 */
         val bit = if (code == KeyCodes.PSEUDO_KEY_TRIGGER_LEFT) 1 else 2
 
-        if (down == (wasDown and bit != 0)) return
-        triggerDown.set(if (down) wasDown or bit else wasDown and bit.inv())
-        setGamepadButton(code, down)
+        /*
+         * ⚠️ 用 **CAS 循环**而不是 `get()` + `set()`。
+         *
+         * 这个锁存有两个写入者:本函数（monitor 的读线程）与
+         * [resetTriggerState]（"手柄就绪"回调 —— 可能是**另一次会话的新线程**，
+         * 旧线程还没退干净时两边会重叠）。非原子的 get-then-set 会让
+         * "读到的旧值"与"写回时的实际值"不一致，那**正好又会造出一个
+         * 卡住的锁存** —— 也就是刚修掉的那个 bug。
+         */
+        while (true) {
+            val wasDown = triggerDown.get()
+            if (down == (wasDown and bit != 0)) return
+            val next = if (down) wasDown or bit else wasDown and bit.inv()
+            if (triggerDown.compareAndSet(wasDown, next)) {
+                setGamepadButton(code, down)
+                return
+            }
+        }
     }
 
     /** 扳机的"按下"状态，位 0 = 左、位 1 = 右 */
     private val triggerDown = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /**
+     * 把两个扳机的门闩**清零**，并抬起还留在 `pressedCodes` 里的扳机键码。
+     *
+     * ============================================================
+     * ⚠️⚠️ 为什么必须有这个函数（这里漏了，导致一个很难描述的真机 bug）
+     * ============================================================
+     * 用户的原话:"我插上拓展坞后，手柄还没启动，然后我手动按开关启动手柄，
+     * 会有一小段时间开机，这一段时间，如果我着急动了摇杆，就会导致手柄开机
+     * 之后，悬浮窗上 LT 与 RT 被**一直识别成按下状态**……按 LT、RT 也不能恢复，
+     * 而是一种相反的状态……重启监听都没用，只能划掉后台才能恢复"。
+     *
+     * 成因是一条**没有出口的锁存**:
+     *
+     * 1. 手柄开机的那一小段时间会连续上报**抖动的轴值**（所以"着急动摇杆"
+     *    才会触发 —— 那段窗口里轴数据本来就在乱跳）；
+     * 2. 扳机是**过阈值**判定（见 [emitTrigger]），抖动值跨过阈值就把
+     *    [triggerDown] 的那一位**永久置上**；
+     * 3. [triggerDown] **以前从来没有任何地方重置**。于是手柄真正就绪、
+     *    真实值回到 0 时，`down(false) == wasDown(已置位 → true)` 成立 →
+     *    [emitTrigger] **直接 return，一条事件都不发**；
+     * 4. `pressedCodes` 里那两位就一直留着 → LT/RT 永远显示按下；
+     * 5. **"重启监听"救不回来**：[triggerDown] 是采集控制器的字段，
+     *    [stopInternal] 只清了 `keyState` 与摇杆，**没清它**；
+     * 6. **"按下显示未按下、松开显示按下"** 正是"锁存位卡住"的典型表现:
+     *    状态机与真实状态差了一次翻转之后，每一条事件都被反向解读。
+     *
+     * ============================================================
+     * 为什么在"手柄就绪"时调用（而不是加一个手动按钮）
+     * ============================================================
+     * 手柄**每次**就绪都是一个干净的起点 —— 那一刻逻辑上没有任何扳机是按下的。
+     * 清掉门闩之后，紧随其后的第一条 `GAMEPAD` 行会带上**真实**的扳机值，
+     * 于是 `down != wasDown` 成立，状态**自然就同步到真值**了
+     * （按着就亮、没按就不亮），不需要我们猜。
+     *
+     * ⚠️ 顺带把 `pressedCodes` 里的扳机键码也抬起 —— 否则"手柄开机时扳机
+     * 恰好是脏值、之后又没再上报"的情况下，那两个键码会一直卡在按下集合里。
+     *
+     * ⚠️ 幂等:本来就没按下时什么都不做（不发多余事件）。
+     */
+    private fun resetTriggerState(reason: String) {
+        if (triggerDown.getAndSet(0) == 0) return
+
+        AppLog.i(TAG, "复位扳机状态（$reason）")
+        setGamepadButton(KeyCodes.PSEUDO_KEY_TRIGGER_LEFT, down = false)
+        setGamepadButton(KeyCodes.PSEUDO_KEY_TRIGGER_RIGHT, down = false)
+    }
 
     /**
      * 手柄按键（**由原生 monitor 喂进来**）。
@@ -644,8 +766,48 @@ object CaptureController {
      *
      * 这也意味着 `pressedCodes` 里同时装着键盘键码与手柄键码，
      * 而消费方（按键组件 / 手柄组件）按**键码**取用，不需要知道来源。
+     *
+     * ============================================================
+     * ⚠️⚠️ **幂等**:状态没变就直接返回，绝不发重复事件
+     * ============================================================
+     * 这不是优化，是**修一个真机 bug 的必要条件**。
+     *
+     * [handleKeyEvent] 会把这个键记进 [heldKeys]，而 [HeldKeyTracker]
+     * 是**按引用计数**的:
+     *
+     * ```
+     * DOWN → byDevice[device] = 计数 + 1
+     * UP   → byDevice[device] = 计数 - 1，归零才真正释放
+     * ```
+     *
+     * 所以**重复发同一条 DOWN 会把计数顶上去，而一个 UP 只还原 1** ——
+     * 计数再也回不到 0，这个键**从此不会被释放**。
+     *
+     * 用户遇到的就是这个（原话）:"手柄开机之后，悬浮窗上 LT 与 RT 被
+     * **一直识别成按下状态**……重启监听都没用，只能划掉后台才能恢复"
+     * （`stopInternal` 会 `heldKeys.releaseAll()` 并重建，所以划掉后台能好）。
+     *
+     * ⚠️ 重复 DOWN 至少有三个来源，**都堵在这里最省事**:
+     * 1. 手柄开机那一小段上报**抖动的扳机值**，反复跨越阈值 →
+     *    [emitTrigger] 每次都发一条 DOWN；
+     * 2. [resetTriggerState] 发的"抬起"刚好落在真实状态仍是按下的时候 →
+     *    下一次真实状态又发一条 DOWN；
+     * 3. 摇杆/按键与扳机共用 `device = null`（空串）这一个计数器，
+     *    互相之间也会把计数垫高。
+     *
+     * ⚠️ 读 [keyState] 判断而不是自己再维护一份"上次发过什么":
+     * 那份影子状态迟早会与 `keyState` / `heldKeys` 漂开，而**漂开就是
+     * 又一个永久卡键**。`keyState` 本身就是那个唯一真源。
      */
     fun setGamepadButton(code: Int, down: Boolean) {
+        /*
+         * ⚠️ `keyState.snapshot()` 每次都要复制整个集合。
+         * 手柄按键的频率（摇杆每帧一条 `GAMEPAD` 行，但按键只在变化时才调这里）
+         * 远低于键盘，所以这点开销可以忽略 —— 换来的是"永远不会重复发"。
+         */
+        val alreadyDown = code in keyState.snapshot()
+        if (alreadyDown == down) return
+
         handleKeyEvent(
             InputEvent(
                 type = InputEvent.EV_KEY,
@@ -696,16 +858,34 @@ object CaptureController {
      * ⚠️ **失败不算采集失败**：手柄起不来时键盘鼠标仍然工作，
      * 所以这里只记日志、不改 `CaptureState`。用户看到的是
      * "键鼠正常、手柄没反应"，而不是整个采集红掉。
+     *
+     * ============================================================
+     * ⚠️ [launcher] 决定"谁去起 helper" —— 两条通道都要调它
+     * ============================================================
+     * | 通道 | launcher | 起进程的方式 |
+     * |---|---|---|
+     * | root | [RootGamepadLauncher] | `su -c` |
+     * | Shizuku | [ShizukuGamepadLauncher] | 远端 `sh -c`（复用 [ShizukuShell]） |
+     *
+     * ⚠️ 这里**必须传参、不能有默认值**:有默认值的话，将来新增一条通道时
+     * 会静默地用了错误的 launcher（手柄没反应，但看不出哪里错了）。
      */
-    private fun startGamepadMonitor() {
+    private fun startGamepadMonitor(launcher: GamepadProcessLauncher) {
         if (gamepadMonitor?.isRunning() == true) return
 
         val context = appContext ?: return
 
         val monitor = GamepadNativeMonitor(
             context = context,
+            launcher = launcher,
             onReady = { detail ->
                 AppLog.i(TAG, "手柄已连接：$detail")
+                /*
+                 * ⚠️ 手柄每次就绪都重新同步扳机状态 —— 这是那个"LT/RT 卡在
+                 * 按下状态、重启监听也救不回来"的 bug 的修复点。
+                 * 完整成因见 [resetTriggerState] 的注释。
+                 */
+                resetTriggerState("手柄就绪")
             },
             onDisconnected = {
                 /* 断开时把轴归零，避免摇杆停在最后的位置 */
@@ -717,7 +897,7 @@ object CaptureController {
 
         val error = monitor.start()
         if (error != null) {
-            AppLog.w(TAG, "手柄 monitor 启动失败：$error")
+            AppLog.w(TAG, "手柄 monitor 启动失败（${launcher.label}）：$error")
             return
         }
         gamepadMonitor = monitor

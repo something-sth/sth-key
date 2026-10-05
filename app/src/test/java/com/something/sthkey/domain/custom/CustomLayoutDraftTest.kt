@@ -367,7 +367,11 @@ class CustomLayoutDraftTest {
         assertFalse(d.dirty)
 
         val original = d.current.components.first()
-        d.replace(original.withPrimaryText("改过了"))
+        /*
+         * ⚠️ 要转成 [TextualComponent]:`withPrimaryText` 现在只接受**有文字**的组件
+         * （摇杆没有文字）。默认布局第一个是按键组件，所以这个转换一定成立。
+         */
+        d.replace((original as TextualComponent).withPrimaryText("改过了"))
         assertTrue(d.dirty)
 
         // 改回来就不该还是 dirty —— 比较的是整份快照，不是"改过没有"的标志位

@@ -18,6 +18,8 @@ import androidx.compose.ui.unit.dp
 import com.something.sthkey.domain.config.JoystickStyle
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.style.KeyLayout
+import com.something.sthkey.ui.component.collapsibleSection
+import com.something.sthkey.ui.component.setExpanded
 import com.something.sthkey.ui.component.CardDivider
 import com.something.sthkey.ui.component.HexColorRow
 import com.something.sthkey.ui.component.SectionHint
@@ -54,14 +56,31 @@ import com.something.sthkey.ui.component.SettingsCard
  * 那个文件太大，任何一次批量改动都很难核对。
  */
 
-/** 摇杆设置的三个分区。调用方负责判断"当前样式是不是手柄样式" */
+/**
+ * 摇杆设置的三个分区（**都可折叠**）。
+ *
+ * 调用方负责判断"当前样式是不是手柄样式"。
+ *
+ * ⚠️ 折叠状态与展开回调**从调用方传进来** —— 它们是**页面级**的 `remember`
+ * 状态，而本函数是 `LazyListScope` 的扩展、不在 composable 作用域里，
+ * 读不到页面里的局部变量。
+ */
 internal fun LazyListScope.joystickStyleSections(
     editable: KeyStrokesConfig,
+    expandedSections: Set<String>,
+    onExpandedChange: (Set<String>) -> Unit,
     applyChange: ((KeyStrokesConfig) -> KeyStrokesConfig) -> Unit,
 ) {
     val js = editable.joystick
 
-    item { SectionHeaderText("摇杆") }
+    collapsibleSection(
+        expanded = "joystick:摇杆" in expandedSections,
+        onExpandChange = { on ->
+            onExpandedChange(setExpanded(expandedSections, "joystick:摇杆", on))
+        },
+        key = "joystick:摇杆",
+        title = "摇杆",
+    ) {
 
     item {
         SettingsCard {
@@ -219,11 +238,20 @@ internal fun LazyListScope.joystickStyleSections(
         )
     }
 
+    } // ← 折叠结束：joystick:摇杆
+
     /* ============================================================
      * 摇杆帽
      * ============================================================ */
 
-    item { SectionHeaderText("摇杆帽") }
+    collapsibleSection(
+        expanded = "joystick:帽" in expandedSections,
+        onExpandChange = { on ->
+            onExpandedChange(setExpanded(expandedSections, "joystick:帽", on))
+        },
+        key = "joystick:帽",
+        title = "摇杆帽",
+    ) {
 
     item {
         SettingsCard {
@@ -321,11 +349,20 @@ internal fun LazyListScope.joystickStyleSections(
         }
     }
 
+    } // ← 折叠结束：joystick:帽
+
     /* ============================================================
      * 手感（**只影响显示**）
      * ============================================================ */
 
-    item { SectionHeaderText("摇杆手感") }
+    collapsibleSection(
+        expanded = "joystick:手感" in expandedSections,
+        onExpandChange = { on ->
+            onExpandedChange(setExpanded(expandedSections, "joystick:手感", on))
+        },
+        key = "joystick:手感",
+        title = "摇杆手感",
+    ) {
 
     item {
         SettingsCard {
@@ -402,10 +439,12 @@ internal fun LazyListScope.joystickStyleSections(
 
     item {
         SectionHint(
-            text = "「平滑」跟着 Axon 的弹簧曲线（起步有加速、停下有缓冲），" +
+            text = "「平滑」起步有加速、停下有缓冲，" +
                 "「精准」直接画手柄上报的原始位置、零延迟。",
         )
     }
+
+    } // ← 折叠结束：joystick:手感
 }
 
 /**
@@ -438,7 +477,7 @@ private fun DisplayModePicker(
 
         Text(
             text = if (smoothingMs > 0f) {
-                "平滑：跟着 Axon 的弹簧曲线，起步与停下都更柔和"
+                "平滑：起步与停下都更柔和"
             } else {
                 "精准：直接显示手柄上报的原始位置，没有任何延迟"
             },
@@ -455,7 +494,7 @@ private fun DisplayModePicker(
                 SegmentedButton(
                     selected = if (index == 0) smoothingMs > 0f else smoothingMs <= 0f,
                     onClick = {
-                        /* 平滑用 60ms（= Axon 原值），精准用 0 */
+                        /* 平滑用 60ms，精准用 0 */
                         onChange(if (index == 0) DEFAULT_SMOOTHING_MS else 0f)
                     },
                     shape = SegmentedButtonDefaults.itemShape(
@@ -470,7 +509,7 @@ private fun DisplayModePicker(
     }
 }
 
-/** 点「平滑」时用的默认时长（毫秒）。60 = Axon 的原始手感 */
+/** 点「平滑」时用的默认时长（毫秒）。*/
 private const val DEFAULT_SMOOTHING_MS = 60f
 
 /*
@@ -501,69 +540,80 @@ internal const val JOYSTICK_SMOOTHING_MAX = 300f
  * 「键位映射」里**不该出现**的槽位。
  *
  * ============================================================
- * ⚠️ 关掉的键不该还列在键位映射里
+ * ⚠️ 判据是"这个开关**真的控制**这个槽位吗"，不是"开关是关的吗"
  * ============================================================
- * 用户的原话:"shift 键我是关闭了的，但为什么还是出现"。
+ * 用户报过两件相反的事，根因是同一个:
  *
- * 根因:`KeyMappingEditor` 只按传进来的 `hiddenSlotIds` 过滤，
- * 而这个调用点**根本没传** —— 于是「显示 Shift 键」关掉之后，
- * 悬浮窗上确实不画了，但键位映射列表里那一行**还在**，
- * 用户会以为开关没生效（而开关是好的）。
+ * 1. "shift 键我是关闭了的，但为什么还是出现" → 该隐藏的**没隐藏**；
+ * 2. "键盘样式配置中，键位映射的 space 组件不见了" → 不该隐藏的**隐藏了**。
  *
- * ⚠️ 判据是**显示开关**，不是"这个映射存不存在":
- * 映射始终保留在配置里（关掉再打开，用户改过的绑定不该丢），
- * 变的只是**要不要给他看**。
+ * ⚠️ 第 2 条的成因:键盘样式里 `SPACE` 是**恒定画出来的**
+ * （`KeyLayout` 只在手柄样式那条路判断 `showSpaceKey`），
+ * 而 `showSpaceKey` 的默认值本来就是 `false`。把它一起接上就等于
+ * "布局在画、映射列表里却没有" —— 两边不一致。
  *
- * ⚠️ 摇杆槽位永远隐藏 —— 它不绑键码，让人去绑只会得到
- * "按了没反应"（摇杆上报的是**轴**，不是键码）。
+ * ⚠️ 所以第 2 条是我的错:用户只说了 Shift，我**顺手扩大了范围**。
+ * 下面逐个写明"哪个开关在哪一种样式下真的控制这个槽位"。
  */
 internal fun hiddenMappingSlots(config: KeyStrokesConfig): Set<String> = buildSet {
+    val gamepad = KeyLayout.usesJoystickLayout(config)
+
+    /*
+     * 两种样式里都**恒显示**、且没有对应开关的槽位现在只剩:
+     * 手柄样式的 `A_BUTTON`（它拿 A 当"空格位"）—— 见下面 `if (gamepad)` 那段。
+     */
+
+    /* `showShiftKey` 两种样式都控制 SHIFT 槽位（键盘显示 Shift、手柄显示 B） */
     if (!config.showShiftKey) add(KeyLayout.Id.SHIFT)
-    if (!config.showSpaceKey) add(KeyLayout.Id.SPACE)
-    if (!config.showAButton) add(KeyLayout.Id.A_BUTTON)
-    if (!config.showShoulderButtons) {
-        add(KeyLayout.Id.SHOULDER_L)
-        add(KeyLayout.Id.SHOULDER_R)
+
+    if (gamepad) {
+        /*
+         * 手柄专属开关 —— 它们**只**在手柄样式下有意义。
+         *
+         * ⚠️ 键盘样式没有 LB/RB 这两个键，而 `showShoulderButtons` 默认 `false`、
+         * `showAButton` 默认 `true` —— 拿它们在键盘样式下做判断是**语义错位**
+         * （碰巧不出问题，但那是巧合，不是设计）。
+         */
+        if (!config.showShoulderButtons) {
+            add(KeyLayout.Id.SHOULDER_L)
+            add(KeyLayout.Id.SHOULDER_R)
+        }
+        if (!config.showAButton) add(KeyLayout.Id.A_BUTTON)
+
+        /* 摇杆槽位永远隐藏:它不绑键码，让人去绑只会得到"按了没反应" */
+        add(KeyLayout.Id.JOYSTICK_LEFT)
+        add(KeyLayout.Id.JOYSTICK_RIGHT)
     }
+
+    /*
+     * ⚠️ `SPACE` 槽位**两种样式都看 `showSpaceKey`**（v2.6.0 起）。
+     *
+     * 以前键盘样式的空格是**恒定显示**的，所以那时这里**不能**隐藏它 ——
+     * 隐藏了就会出现"布局在画、映射列表里却没有"。用户为此报过两次:
+     *
+     * - "shift 键我是关闭了的，但为什么还是出现"（该隐藏的没隐藏）；
+     * - "键盘样式配置中，键位映射的 space 组件不见了"（不该隐藏的隐藏了）。
+     *
+     * ⚠️ 现在键盘样式有了「显示 SPACE 键」开关，空格**真的可以被关掉**，
+     * 于是它必须跟着开关一起隐藏 —— 否则又回到那个不一致:
+     * 悬浮窗上不画了、映射列表里还留着一行。
+     */
+    if (!config.showSpaceKey) add(KeyLayout.Id.SPACE)
+
+    /* `showMouseButtons` 两种样式都控制 LMB / RMB（手柄样式下它们是 LT / RT） */
     if (!config.showMouseButtons) {
         add(KeyLayout.Id.LMB)
         add(KeyLayout.Id.RMB)
-    }
-    if (KeyLayout.usesJoystickLayout(config)) {
-        add(KeyLayout.Id.JOYSTICK_LEFT)
-        add(KeyLayout.Id.JOYSTICK_RIGHT)
     }
 }
 
 /*
  * ============================================================
- * 按键高度 / 按键间距 的范围
+ * 按键高度 / 按键间距 的范围 —— 已挪到 `KeyLayout`
  * ============================================================
- * ⚠️ 与 `KeyLayout` 里的同名常量**必须一致** —— 滑块给得出、
- * 布局却夹掉的话，用户会看到"拖到底但没反应"。
- */
-
-/** 按键高度：只改高度，不改宽度、不改间距 */
-internal const val KEY_HEIGHT_PERCENT_MIN = 50f
-internal const val KEY_HEIGHT_PERCENT_MAX = 200f
-
-/**
- * 按键间距：**只改位置**。
+ * ⚠️ 它们原来在这里、与 `KeyLayout` 里各写一份，于是出了这个 bug:
+ * 滑块下限改成 0、读取那边还是 50，用户设的值**重进就被夹回**。
  *
- * ⚠️ 下限是 **0**（键挨在一起），不是"把键缩小" ——
- * 用户专门纠正过:"不能调整组件大小，只是起到调整间距的效果，
- * 本质是改位置，尺寸不能改"。
+ * 现在**只有一个真源**（`KeyLayout.KEY_GAP_PERCENT_*` / `KEY_HEIGHT_PERCENT_*`），
+ * 设置页、布局层、`JsonConfigCodec` 共用。
  */
-internal const val KEY_GAP_PERCENT_MIN = 0f
-internal const val KEY_GAP_PERCENT_MAX = 400f
-
-/** 分区标题（本文件内用，避免把 `SectionHeader` 的 import 也拖进来） */
-@Composable
-private fun SectionHeaderText(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.titleMedium,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(top = 8.dp, start = 4.dp),
-    )
-}

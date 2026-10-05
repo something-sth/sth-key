@@ -1,6 +1,7 @@
 package com.something.sthkey.domain.custom
 
 import com.something.sthkey.domain.config.AnimationMode
+import com.something.sthkey.domain.config.JoystickStyle
 import com.something.sthkey.domain.config.ShadowMode
 import com.something.sthkey.domain.keys.KeyCodes
 
@@ -71,7 +72,25 @@ sealed interface CustomComponent {
 
     /** 边框高度（基础坐标） */
     val height: Float
+}
 
+/**
+ * **有文字**的组件（按键 / 文本）。
+ *
+ * ============================================================
+ * ⚠️ 为什么把文字相关的字段从 [CustomComponent] 挪到这里
+ * ============================================================
+ * 摇杆组件**没有文字**。如果"文字缩放""文字偏移"还留在基接口上，
+ * 摇杆就得带着几个永远不生效的字段：
+ *
+ * - 属性面板要一路 `is KeyComponent || is TextComponent` 才敢显示它们；
+ * - 而**编辑摇杆时那几个值是死的**（改了没反应），用户会当成 bug。
+ *
+ * 现在按"有没有这个能力"分成两层，编译器帮着保证不会漏。
+ *
+ * ⚠️ 摇杆也不在这里 —— 它连 [ComponentStyle] 都不用（见 [JoystickComponent]）。
+ */
+sealed interface TextualComponent : CustomComponent {
     /**
      * 文字缩放百分比 50..150。
      *
@@ -260,7 +279,7 @@ data class KeyComponent(
     /** 按下动画，语义与 Key 样式完全一致（见 [AnimationMode]） */
     val animationMode: AnimationMode = AnimationMode.DEFAULT,
     val animationDurationSec: Float = 0.1f,
-) : CustomComponent
+) : TextualComponent
 
 /**
  * 文本组件：只显示文字（可以当水印，也可以显示 CPS）。
@@ -331,7 +350,7 @@ data class TextComponent(
     override val textScalePercent: Int = 100,
     override val textOffsetX: Float = 0f,
     override val textOffsetY: Float = 0f,
-) : CustomComponent
+) : TextualComponent
 
 /**
  * 文本组件 CPS 的默认取值：鼠标左键。
@@ -357,20 +376,128 @@ const val LEGACY_CPS_SLOT_LEFT = "LMB"
 const val LEGACY_CPS_SLOT_RIGHT = "RMB"
 
 /**
+ * 摇杆组件：显示一个跟着手柄摇杆动的**摇杆**。
+ *
+ * ============================================================
+ * 它为什么**不**用 [ComponentStyle]
+ * ============================================================
+ * [ComponentStyle] 是"键帽 + 文字"那一套（底色 / 文字色 / 描边 / 阴影 /
+ * 圆角 / 字体），而摇杆是**三层结构**（方框底盘 + 盘内的圆 + 摇杆帽），
+ * 两套外观项几乎没有一个能对上。
+ *
+ * 硬塞进去的后果是实现里到处 `if (是摇杆) 忽略这个字段`——
+ * 而那种"改了没反应"的设置项正是最招人烦的。
+ *
+ * ⚠️ 所以直接复用 [JoystickStyle]（「标准」样式 gamepad2 用的那一份）:
+ * 用户的原话是"配置项要与'标准'样式（gamepad2）相同" ——
+ * **同一个类型**才能真正保证"相同"，各写一份迟早会漂移
+ * （改了一边忘了另一边，两处摇杆长得不一样）。
+ *
+ * ⚠️ 这也意味着摇杆的外观**不属于**组件自己的"颜色/透明度"那几组，
+ * 属性面板为它单独开「摇杆 / 摇杆帽 / 摇杆手感」三组。
+ */
+data class JoystickComponent(
+    override val id: String,
+    override val x: Float,
+    override val y: Float,
+    override val width: Float,
+    override val height: Float,
+
+    /** 监听**哪一个**摇杆 */
+    val side: StickSide = StickSide.LEFT,
+
+    /** 全部外观与手感；与「标准」样式共用同一个类型 */
+    val joystick: JoystickStyle = JoystickStyle(),
+) : CustomComponent
+
+/**
+ * 摇杆组件监听哪一个摇杆。
+ *
+ * ⚠️ [id] 会写进 JSON，发布后不能改（与 [ComponentType] 同一个约定）。
+ */
+enum class StickSide(val id: String, val label: String) {
+    LEFT("left", "左摇杆"),
+    RIGHT("right", "右摇杆"),
+    ;
+
+    companion object {
+        /** 不认识的值回退到左摇杆 —— 老配置缺这个字段时也走这里 */
+        fun fromId(id: String?): StickSide = entries.firstOrNull { it.id == id } ?: LEFT
+    }
+}
+
+/**
  * 组件类型。
  *
- * ⚠️ [id] 会**写进 JSON**，发布之后不能改 —— 改了老配置里的组件就读不出来了。
- * 因此显示名走 [label]，两者刻意分开（与 [StyleId][com.something.sthkey.domain.style.StyleId]
- * 同一个约定）。
+ * ============================================================
+ * ⚠️ [id] 会**写进 JSON**，发布之后不能改
+ * ============================================================
+ * 改了老配置里的组件就读不出来了。因此显示名走 [label]，
+ * 两者刻意分开（与 [StyleId][com.something.sthkey.domain.style.StyleId] 同一个约定）。
+ *
+ * ============================================================
+ * ⚠️ 为什么多了 [category]
+ * ============================================================
+ * 用户的原话:"原本的 key 组件与文本组件分到'通用'栏，然后再分出键盘专栏
+ * 与手柄专栏组件，键盘专栏还没想好放什么，先写个无，留个占位，
+ * 手柄专栏就放个摇杆组件"。
+ *
+ * 于是"添加组件"弹窗按 [category] 分栏，而不是把四种类型平铺一行 ——
+ * 平铺的话以后每加一种就更挤一分，而且"这个组件属于哪一类"
+ * 在界面上完全看不出来。
  */
-enum class ComponentType(val id: String, val label: String, val description: String) {
-    KEY("key", "按键", "监听某个按键，按下时变色"),
-    TEXT("text", "文本", "只显示文字：可以当水印，也可以显示 CPS"),
+enum class ComponentCategory(val label: String) {
+    /** 与具体输入设备无关的组件 */
+    COMMON("通用"),
+
+    /**
+     * 键盘专属。
+     *
+     * ⚠️ **目前是空的**（用户要求"先写个无，留个占位"）。
+     * 留着一个空栏是有意的:它告诉用户"这里以后会放东西"，
+     * 而不是让人以为"键盘组件只有按键和文本"。
+     */
+    KEYBOARD("键盘"),
+
+    /** 手柄专属 */
+    GAMEPAD("手柄"),
+}
+
+enum class ComponentType(
+    val id: String,
+    val label: String,
+    val description: String,
+    val category: ComponentCategory,
+) {
+    KEY(
+        id = "key",
+        label = "按键",
+        description = "监听某个按键，按下时变色",
+        category = ComponentCategory.COMMON,
+    ),
+
+    TEXT(
+        id = "text",
+        label = "文本",
+        description = "只显示文字：可以当水印，也可以显示 CPS",
+        category = ComponentCategory.COMMON,
+    ),
+
+    JOYSTICK(
+        id = "joystick",
+        label = "摇杆",
+        description = "跟着手柄摇杆动：底盘、内圆、摇杆帽",
+        category = ComponentCategory.GAMEPAD,
+    ),
     ;
 
     companion object {
         /** 不认识的类型返回 null，由调用方跳过这一个组件（而不是整份布局读失败） */
         fun fromId(id: String?): ComponentType? = entries.firstOrNull { it.id == id }
+
+        /** 某一栏里的组件类型（按声明顺序） */
+        fun inCategory(category: ComponentCategory): List<ComponentType> =
+            entries.filter { it.category == category }
     }
 }
 

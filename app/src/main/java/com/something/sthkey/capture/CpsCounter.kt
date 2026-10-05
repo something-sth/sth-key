@@ -85,10 +85,26 @@ class CpsCounter {
         synchronized(lock) { clicks.clear() }
     }
 
-    /** 丢弃窗口之外的时间点 */
+    /**
+     * 丢弃窗口之外的时间点。
+     *
+     * ⚠️ 用 `removeAt(0)` 而不是 `removeFirst()`。
+     *
+     * `queue` 是 **`kotlin.collections.ArrayDeque`**（本文件没有 import，
+     * 所以 `ArrayDeque` 解析到 kotlin 包里那个），它的 `removeFirst()` 是
+     * Kotlin 自己的成员，**在 Android 上是安全的**。
+     *
+     * 但 `removeFirst()` 在 `java.util.List` 上还有个**同名同签名**的
+     * Java 21 默认方法（`SequencedCollection`），Android 没有它 ——
+     * 两者写法完全一样、只看名字分不出来。所以统一禁掉，
+     * 见 `AndroidApiSafetyTest`。
+     *
+     * ⚠️ `removeAt(0)` 对这个队列是 O(1)（ArrayDeque 是环形缓冲），
+     * 不影响性能。
+     */
     private fun pruneLocked(queue: ArrayDeque<Long>, now: Long) {
         while (queue.isNotEmpty() && now - queue.first() >= WINDOW_MS) {
-            queue.removeFirst()
+            queue.removeAt(0)
         }
     }
 

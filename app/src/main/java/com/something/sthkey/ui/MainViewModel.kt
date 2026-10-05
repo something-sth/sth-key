@@ -248,6 +248,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
+     * 设置「可移出屏幕外」（默认关）。
+     *
+     * ============================================================
+     * ⚠️ 它一次改两件事，靠 [updateOverlayLayout] 的重建兜住
+     * ============================================================
+     * 那个开关同时影响:
+     * 1. **窗口标志**（`FLAG_LAYOUT_NO_LIMITS`，见 `OverlayService.windowFlags`）；
+     * 2. **拖拽时的坐标范围**（见 `OverlayService` 里 `clampOrFree` 的调用点）。
+     *
+     * 两者都必须按新值生效 —— 而 [updateOverlayLayout] 结尾会
+     * `refreshOverlay()`，正好把窗口重建一遍，所以这里不需要额外做什么。
+     *
+     * ⚠️ 只改数据、不重建的话，表现是"开关打开了但拖不出去"，
+     * 那正是这类开关最容易出的问题。
+     */
+    fun setOverlayMovableOffScreen(configId: String, movable: Boolean) {
+        updateOverlayLayout(configId) { it.copy(movableOffScreen = movable) }
+        AppLog.i(TAG, "悬浮窗可移出屏幕外：$configId → $movable")
+    }
+
+    /**
      * 设置偏移量。
      *
      * **只改偏移，不碰基础坐标** —— 拖动改的是后者。

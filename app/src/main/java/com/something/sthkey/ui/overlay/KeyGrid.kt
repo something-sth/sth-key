@@ -23,6 +23,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Size
+import com.something.sthkey.domain.style.RippleGeometry
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.BlendMode
@@ -293,18 +296,20 @@ private fun OverlayKey(
     }
 
     /*
-     * 扩散圆的半径。
+     * ============================================================
+     * ⚠️ 扩散色块**不再是"一个圆"**，而是"一个按比例放大的组件"
+     * ============================================================
+     * 用户的原话:"在圆角矩形上（非正方形组件），扩散动画扩散完成时，
+     * 扩散出的最终图形，会超出该组件边框……猜测是因为，扩散动画本身就是
+     * 从组件中心生成一个圆然后逐渐扩大"。
      *
-     * 要盖满整个**圆角矩形**，半径必须达到最远角：
-     *     hypot(w/2 - r, h/2 - r) + r      （r 为圆角半径）
-     * 圆角为 0 时就是矩形对角线的一半。
+     * 他的猜测是对的 —— 旧实现用一个"圆心在键帽中心、半径取到最远角距离"
+     * 的圆去裁剪，中间过程里圆的弧边必然伸到圆角矩形之外。
+     *
+     * 现在改成:画一个与组件**同比例**的小色块，随进度放大到正好重合。
+     * 几何计算全部在 [RippleGeometry] 里（纯函数、有测试），
+     * 这里只负责把算出来的宽高/圆角画上去。
      */
-    val maxCornerRadius = minOf(widthDp, heightDp) / 2f
-    val cornerPx = radiusDp.coerceIn(0f, maxCornerRadius)
-    val coverRadiusDp = kotlin.math.hypot(
-        widthDp / 2f - cornerPx,
-        heightDp / 2f - cornerPx,
-    ) + cornerPx
 
     Box(
         modifier = Modifier
@@ -334,39 +339,52 @@ private fun OverlayKey(
                     },
                 )
                 /*
-                 * 扩散收缩：在**绘制阶段**显式裁剪，不依赖 Modifier.clip 的形状语义。
+                 * 扩散收缩:画一个**与键帽同形状**的小色块，随进度放大到重合。
                  *
-                 * 之前用 `clip()` + 形状动画试了两版都出现"方向反了 / 盖不满"
-                 * 这类无法从代码直接推出的现象（clip 的形状解析与布局尺寸耦合，
-                 * 且百分比圆角会随尺寸缩放）。改成自己画就完全确定了：
-                 *
-                 * 1. 覆盖层是**整个键帽大小**（尺寸恒定，不参与动画）；
-                 * 2. 用 clipPath 把它裁剪到"圆心在键帽中心、半径随进度增长"的圆内。
-                 *
-                 * 半径 0 时什么都画不出来，半径到最大时盖满整块 —— 方向不可能反。
-                 * 绘制块里读的是 State 本身（progressState.value），
+                 * ⚠️ 绘制块里读的是 State 本身（`progressState.value`），
                  * 这样动画每帧都会触发重绘；读解包后的普通值不会重绘。
+                 *
+                 * ⚠️ 用 `drawRoundRect` 而不是"裁剪一个圆":
+                 * 圆的弧边在非正方形组件上必然超出边框（见上面那段）。
+                 *
+                 * ⚠️ 色块**居中**画:`topLeft` 要让出"缩掉的那部分"的一半，
+                 * 否则它是从左上角长出来的，看起来像"从角落滑进来"。
                  */
                 .drawWithContent {
+                    /* 圆角换算成**像素**：绘制作用域里一切都是像素（见下面的说明） */
+                    val radiusPx = radiusDp * density
                     drawContent()
 
                     if (!isRipple) return@drawWithContent
-                    val animated = progressState.value
-                    if (animated <= 0f) return@drawWithContent
 
-                    val maxRadiusPx = coverRadiusDp * density
-                    clipPath(
-                        path = Path().apply {
-                            addOval(
-                                Rect(
-                                    center = Offset(size.width / 2f, size.height / 2f),
-                                    radius = maxRadiusPx * animated,
-                                ),
-                            )
-                        },
-                    ) {
-                        drawRect(color = rippleColor)
-                    }
+                    val (scaleX, scaleY) = RippleGeometry.rippleScale(progressState.value)
+                    if (scaleX <= 0f) return@drawWithContent
+
+                    /*
+                     * 色块尺寸 = 键帽尺寸 × 比例。
+                     *
+                     * ⚠️ 用**像素**而不是 dp:`drawWithContent` 的 `size`
+                     * 已经是像素，混用 dp 会让色块比键帽大或小一圈
+                     * （随屏幕密度变化，模拟器上正常、真机上不对）。
+                     */
+                    val w = size.width * scaleX
+                    val h = size.height * scaleY
+
+                    /* 圆角也按同一个比例缩 —— 否则形状会变（见 RippleGeometry） */
+                    val corner = RippleGeometry.rippleCornerRadius(
+                        componentRadius = radiusPx,
+                        scale = scaleX,
+                    )
+
+                    drawRoundRect(
+                        color = rippleColor,
+                        topLeft = Offset(
+                            x = (size.width - w) / 2f,
+                            y = (size.height - h) / 2f,
+                        ),
+                        size = Size(w, h),
+                        cornerRadius = CornerRadius(corner, corner),
+                    )
                 }
                 // 覆盖层要按键帽形状裁掉，否则会溢出到键帽之外（例如圆角处）
                 .clip(shape),

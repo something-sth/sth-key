@@ -28,6 +28,7 @@ import kotlin.math.roundToInt
 fun CustomComponent.movedTo(x: Float, y: Float): CustomComponent = when (this) {
     is KeyComponent -> copy(x = x, y = y)
     is TextComponent -> copy(x = x, y = y)
+    is JoystickComponent -> copy(x = x, y = y)
 }
 
 /** 平移一个组件（不改尺寸） */
@@ -58,15 +59,14 @@ fun CustomComponent.rounded(): CustomComponent = movedTo(
  * 就多一处忘了夹范围的地方。
  *
  * ============================================================
- * ⚠️ 为什么改尺寸要连位置一起夹
+ * ⚠️ 为什么改尺寸还是要连位置一起夹
  * ============================================================
- * 坐标下界是 `-尺寸`（见 [CustomLayout.minCoordinate]），**它跟着尺寸变**。
- * 一个贴住左边界的组件（x = -200、宽 200）被缩到宽 50 之后，
- * 合法下界变成 -50，而 x 还停在 -200。
+ * 坐标范围现在**不依赖尺寸**了（固定 `-1000 .. 1000`），所以
+ * "改小尺寸之后坐标突然越界"这种情况不会再发生。
  *
- * 这时 X 滑块读到的值已经超出自己的范围，会被夹到 -50 显示；
- * 用户一碰滑块，组件就会**凭空跳 150**。所以不变量必须是
- * "任何时刻坐标都在范围内"，而不是"只有直接改坐标时才检查"。
+ * ⚠️ 但夹取**依然要留着**:数据可能来自手工改过的配置包
+ * （x 写成 99999），而这条路径是编辑器唯一会碰尺寸的地方 ——
+ * 让它顺手把坏数据修正掉，比在别处再补一次检查便宜。
  */
 fun CustomComponent.resizedTo(width: Float, height: Float): CustomComponent {
     val w = width.coerceIn(CustomLayout.COMPONENT_SIZE_MIN, CustomLayout.COMPONENT_SIZE_MAX)
@@ -74,18 +74,58 @@ fun CustomComponent.resizedTo(width: Float, height: Float): CustomComponent {
     return when (this) {
         is KeyComponent -> copy(width = w, height = h).clampedToCanvas()
         is TextComponent -> copy(width = w, height = h).clampedToCanvas()
+        is JoystickComponent -> copy(width = w, height = h).clampedToCanvas()
+    }
+}
+
+/**
+ * 改**边长**（宽高一起改，永远正方形）。
+ *
+ * ============================================================
+ * ⚠️ 摇杆为什么是"边长"而不是"宽 / 高"
+ * ============================================================
+ * 用户的原话:"摇杆组件在自定义编辑中，应该是调**边长**，而不是像别的组件
+ * 一样设计长、宽，摇杆本身就是圆角正方形，单调一个长或宽，显示都有 bug"。
+ *
+ * 摇杆的三层几何（底盘圆角、盘内那个圆的半径、摇杆帽能走多远）全部由
+ * **一个边长**推出 —— 宽高不等时:
+ *
+ * - 盘内那个圆是按边长推半径的，宽高不等就会**看起来是椭圆**；
+ * - 渲染层实际取的是 `min(宽, 高)`（见 `CustomKeyGrid` 里那段），
+ *   于是"调宽"这个操作**画面上什么都不会变**，用户会以为滑块坏了。
+ *
+ * ⚠️ 所以对摇杆**根本不提供宽 / 高两个滑块**，只给一个"边长"。
+ * 这个函数是它唯一的入口 —— 与 [resizedTo] 一样，
+ * 顺手把坐标夹回合法范围（理由见 [resizedTo] 的说明）。
+ */
+fun CustomComponent.resizedToSide(side: Float): CustomComponent {
+    val s = side.coerceIn(CustomLayout.COMPONENT_SIZE_MIN, CustomLayout.COMPONENT_SIZE_MAX)
+    return when (this) {
+        /*
+         * 按键与文本**没有"边长"这个概念** —— 它们可以是任意长宽比
+         * （空格 260×55、CPS 文本 120×30 都是正常的）。
+         * 所以这里保持正方形（把两个方向都设成 s），而不是报错:
+         * 调用方本来就只该对摇杆用它，但"传错了也不会得到一个畸形组件"更安全。
+         */
+        is KeyComponent -> copy(width = s, height = s).clampedToCanvas()
+        is TextComponent -> copy(width = s, height = s).clampedToCanvas()
+        is JoystickComponent -> copy(width = s, height = s).clampedToCanvas()
     }
 }
 
 /**
  * 把坐标夹进合法范围。
  *
- * 滑块理论上不会越界，但坐标下界依赖尺寸、数据也可能来自手工改过的配置包，
+ * 滑块理论上不会越界，但数据可能来自手工改过的配置包，
  * 所以每次几何改动后都过一遍这个函数，比"相信调用方"便宜得多。
+ *
+ * ⚠️ 坐标范围现在是**固定**的（`-1000 .. 1000`），**不依赖组件尺寸** ——
+ * 早先下界是 `-尺寸`，于是"改宽高会让 X 滑块的范围跟着变"，
+ * 那是一种很难解释的界面行为（见 [CustomLayout.COORDINATE_MIN]）。
  */
 fun CustomComponent.clampedToCanvas(): CustomComponent = movedTo(
-    x = x.coerceIn(CustomLayout.minCoordinate(width), CustomLayout.maxCoordinate()),
-    y = y.coerceIn(CustomLayout.minCoordinate(height), CustomLayout.maxCoordinate()),
+    x = x.coerceIn(CustomLayout.minCoordinate(), CustomLayout.maxCoordinate()),
+    y = y.coerceIn(CustomLayout.minCoordinate(), CustomLayout.maxCoordinate()),
 )
 
 /** 把组件摆到画布中央（给"居中"按钮用） */
@@ -97,53 +137,102 @@ fun CustomComponent.centeredOnCanvas(): CustomComponent = movedTo(
 /**
  * 改外观主题，几何与内容不动。
  *
- * 属性面板改颜色/圆角/字体时都要"换掉 style"，而键面文字、键位映射这些
- * **类型特有的字段不能被顺手丢掉** —— 统一入口就不会出现"改个颜色把键位映射改没了"。
+ * ============================================================
+ * ⚠️ 只对**有文字**的组件（[TextualComponent]）有意义
+ * ============================================================
+ * [ComponentStyle] 是"键帽 + 文字"那一套。摇杆用的是 [JoystickStyle]
+ * （三层结构，见 [JoystickComponent] 的说明），所以它**不在这里** ——
+ * 硬给它一个 `copy(style = …)` 只会得到一个改了没反应的入口。
+ *
+ * 属性面板也因此**不为摇杆显示**颜色/透明度/圆角/描边那几组，
+ * 而是显示它自己的「摇杆 / 摇杆帽 / 摇杆手感」。
  */
-fun CustomComponent.withStyle(style: ComponentStyle): CustomComponent = when (this) {
+fun TextualComponent.withStyle(style: ComponentStyle): TextualComponent = when (this) {
     is KeyComponent -> copy(style = style)
     is TextComponent -> copy(style = style)
+}
+
+/**
+ * 取出**有文字组件**的样式；摇杆没有 [ComponentStyle]，返回 null。
+ *
+ * 给"打开字体选择器时要知道当前选的是哪个字体"这类**只读**场景用 ——
+ * 那种地方拿到 null 直接当成"没选字体"即可。
+ */
+fun CustomComponent.textStyle(): ComponentStyle? = (this as? TextualComponent)?.style
+
+/**
+ * 改样式，**不是文字组件就原样返回**。
+ *
+ * ============================================================
+ * ⚠️ 为什么需要它
+ * ============================================================
+ * 调用点（编辑器里"导入完字体顺手应用给选中的组件"）拿到的是一个
+ * `CustomComponent`，可能正好选中了摇杆。那种情况下 [withStyle] 用不了
+ * （它只接受 [TextualComponent]）。
+ *
+ * 在这里写 `as? TextualComponent` 的好处是**整个项目只有这一处**
+ * 做这个判断 —— 分散到各个调用点的话，"摇杆被当成文本改"这种错
+ * 迟早会在某一处漏掉。
+ */
+fun CustomComponent.withTextStyle(
+    transform: (ComponentStyle) -> ComponentStyle,
+): CustomComponent {
+    val textual = this as? TextualComponent ?: return this
+    return textual.withStyle(transform(textual.style))
+}
+
+/** 改样式（直接给一份新样式），非文字组件原样返回 */
+fun CustomComponent.withTextStyle(style: ComponentStyle): CustomComponent {
+    val textual = this as? TextualComponent ?: return this
+    return textual.withStyle(style)
 }
 
 /** 组件的类型名；UI 列表与调试信息共用一处 */
 fun CustomComponent.typeLabel(): String = when (this) {
     is KeyComponent -> "按键"
     is TextComponent -> "文本"
+    is JoystickComponent -> "摇杆"
 }
 
 /** 组件在列表里显示的一行摘要 */
 fun CustomComponent.summary(): String = when (this) {
     is KeyComponent -> label.ifBlank { "（无键名）" }
     is TextComponent -> text.ifBlank { "（空文本）" }
+    /* 摇杆没有文字，摘要就是它监听哪一边 —— 那是它唯一的"内容" */
+    is JoystickComponent -> side.label
 }
 
+/*
+ * ============================================================
+ * 文字相关的操作：只对 [TextualComponent] 有效
+ * ============================================================
+ * ⚠️ 摇杆**没有文字**，所以这几个函数刻意**不**接受 `CustomComponent`。
+ *
+ * 早先它们的签名是 `CustomComponent.xxx`，加摇杆之后就得在实现里写
+ * `is JoystickComponent -> this`（原样返回）—— 那样调用方传错了类型
+ * **编译期不会报错**，只会在运行时静默什么都不做。
+ * 收窄到 [TextualComponent] 之后，编译器就替我们挡住这一类错误。
+ */
+
 /** 主体文字：按键组件是键面文字，文本组件是文本内容 */
-fun CustomComponent.primaryText(): String = when (this) {
+fun TextualComponent.primaryText(): String = when (this) {
     is KeyComponent -> label
     is TextComponent -> text
 }
 
 /** 改主体文字 */
-fun CustomComponent.withPrimaryText(value: String): CustomComponent = when (this) {
+fun TextualComponent.withPrimaryText(value: String): TextualComponent = when (this) {
     is KeyComponent -> copy(label = value)
     is TextComponent -> copy(text = value)
 }
 
 /** 改文字缩放 */
-fun CustomComponent.withTextScale(percent: Int): CustomComponent = when (this) {
-    is KeyComponent -> copy(
-        textScalePercent = percent.coerceIn(
-            CustomLayout.TEXT_SCALE_MIN,
-            CustomLayout.TEXT_SCALE_MAX,
-        ),
-    )
-
-    is TextComponent -> copy(
-        textScalePercent = percent.coerceIn(
-            CustomLayout.TEXT_SCALE_MIN,
-            CustomLayout.TEXT_SCALE_MAX,
-        ),
-    )
+fun TextualComponent.withTextScale(percent: Int): TextualComponent {
+    val clamped = percent.coerceIn(CustomLayout.TEXT_SCALE_MIN, CustomLayout.TEXT_SCALE_MAX)
+    return when (this) {
+        is KeyComponent -> copy(textScalePercent = clamped)
+        is TextComponent -> copy(textScalePercent = clamped)
+    }
 }
 
 /**
@@ -151,7 +240,7 @@ fun CustomComponent.withTextScale(percent: Int): CustomComponent = when (this) {
  *
  * 只挪文字、**不影响边框** —— 文字偏一点不该把元件的占位也跟着挪走。
  */
-fun CustomComponent.withTextOffset(x: Float? = null, y: Float? = null): CustomComponent =
+fun TextualComponent.withTextOffset(x: Float? = null, y: Float? = null): TextualComponent =
     when (this) {
         is KeyComponent -> copy(
             textOffsetX = x ?: textOffsetX,
@@ -177,6 +266,8 @@ fun CustomComponent.withTextOffset(x: Float? = null, y: Float? = null): CustomCo
 fun CustomComponent.withCpsKeyCodes(keyCodes: List<Int>): CustomComponent = when (this) {
     is TextComponent -> copy(cpsKeyCodes = keyCodes)
     is KeyComponent -> this
+    /* 摇杆没有 CPS 可言 —— 它显示的是摇杆位置，不是次数 */
+    is JoystickComponent -> this
 }
 
 /**
@@ -211,4 +302,6 @@ fun CustomComponent.withInputKeyCodes(keyCodes: List<Int>): CustomComponent =
     when (this) {
         is KeyComponent -> copy(inputKeyCodes = keyCodes)
         is TextComponent -> this
+        /* 摇杆上报的是**轴**，不是键码 —— 绑键码没有意义（同键位映射那边） */
+        is JoystickComponent -> this
     }

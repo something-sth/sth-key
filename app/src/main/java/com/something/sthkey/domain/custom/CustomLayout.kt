@@ -54,9 +54,21 @@ object CustomLayout {
      */
     const val textBaseSize = 28f
 
-    /** 文字缩放下限 / 上限（百分比），与 Key 样式同一区间 */
+    /**
+     * 文字缩放下限 / 上限（百分比）。
+     *
+     * ============================================================
+     * ⚠️ 上限从 150 提到 300
+     * ============================================================
+     * 组件尺寸上限升到 1000 之后（见 [COMPONENT_SIZE_MAX]），
+     * 150% 在 1000 边长的组件上就是"看不见的小字" ——
+     * 字号必须能跟着组件一起变大。
+     *
+     * 下限保持 50:再小就没法读了，而"想更小"的正确做法是把**组件**调小
+     * （两者的效果等价，但组件调小更直观）。
+     */
     const val TEXT_SCALE_MIN = 50
-    const val TEXT_SCALE_MAX = 150
+    const val TEXT_SCALE_MAX = 300
 
     /**
      * CPS 那一行的额外缩放下限 / 上限（百分比）。
@@ -67,16 +79,30 @@ object CustomLayout {
     const val CPS_LINE_SCALE_MIN = 1
     const val CPS_LINE_SCALE_MAX = 200
 
-    /** 描边粗细范围（dp），与 Key 样式同一区间 */
+    /**
+     * 描边粗细范围。
+     *
+     * ============================================================
+     * ⚠️ 上限从 5 提到 20
+     * ============================================================
+     * 单位是**基础坐标**（与组件尺寸同一套），不是屏幕像素 ——
+     * 所以组件能有 1000 边长，5 的描边在它上面根本看不出来。
+     *
+     * ⚠️ 与 Key 样式那边**不再同一区间**了:那边是"固定尺寸的键帽"，
+     * 5 已经够；这边组件能大到 1000，必须能给出更粗的描边。
+     * 这不是漂移，是两边的尺寸量级本来就不同。
+     */
     const val OUTLINE_WIDTH_MIN = 0.5f
-    const val OUTLINE_WIDTH_MAX = 5f
+    const val OUTLINE_WIDTH_MAX = 20f
 
     /**
-     * 阴影尺寸范围（dp），与 Key 样式的 [com.something.sthkey.domain.config.TextShadow]
-     * 保持同一区间 —— 两个编辑器里"阴影多明显"的刻度感应当一致。
+     * 阴影尺寸范围。
+     *
+     * ⚠️ 上限从 8 提到 30 —— 理由与 [OUTLINE_WIDTH_MAX] 完全一样
+     * （组件能到 1000，8 的阴影在它上面看不见）。
      */
     const val SHADOW_SIZE_MIN = 0.5f
-    const val SHADOW_SIZE_MAX = 8f
+    const val SHADOW_SIZE_MAX = 30f
 
     /** 圆角程度范围（短边百分比） */
     const val CORNER_PERCENT_MIN = 0f
@@ -216,14 +242,52 @@ object CustomLayout {
 
     fun canvasHeight(components: List<CustomComponent>): Float = BASE_CANVAS
 
-    /** 组件尺寸的合法范围（基础单位） */
+    /**
+     * 组件尺寸的合法范围（基础单位）。
+     *
+     * ============================================================
+     * ⚠️ 上限为什么是 1000，而定位区只有 600
+     * ============================================================
+     * 用户的原话:"自定义编辑中组件的长宽上限应该放更大一些，
+     * 反正我这边宽度限制 300 是完全不够的，怎么说也得加到 1000 吧"。
+     *
+     * ⚠️ 1000 > [BASE_CANVAS]（600）是**允许的**:定位区只决定
+     * **X/Y 滑块的可选范围**（`[-尺寸, 600]`），不限制组件本身多大。
+     * 一个 1000 宽的组件放在 x = -200 处，同样能让窗口覆盖到它 ——
+     * `bounds()` 按所有组件的**包围盒**算窗口，与定位区无关。
+     *
+     * ⚠️ 编辑器画布会**按内容包围盒自动取景**（`fitScale`），
+     * 所以组件超过定位区时会整体缩小显示，不会"跑出屏幕看不到"。
+     */
     const val COMPONENT_SIZE_MIN = 20f
-    const val COMPONENT_SIZE_MAX = 300f
+    const val COMPONENT_SIZE_MAX = 1000f
 
-    /** 组件坐标的合法范围；允许负值是为了让组件能贴到画布外沿 */
-    fun minCoordinate(size: Float): Float = -size
+    /**
+     * 组件坐标的合法范围。
+     *
+     * ============================================================
+     * ⚠️ 改成**固定**范围，不再跟着组件尺寸变
+     * ============================================================
+     * 早先下界是 `-尺寸`（一个 200 宽的组件最小 x = -200），
+     * 于是组件的**尺寸一改，X 滑块能拖到哪也跟着变**:
+     * 用户把组件调小之后，原本合法的那一端会突然拖不到 ——
+     * 而"滑块范围会莫名其妙变"是最难解释的一种界面行为。
+     *
+     * 现在固定 `-1000 .. 1000`:
+     *
+     * - 上下都留得比 [COMPONENT_SIZE_MAX]（1000）宽 ——
+     *   1000 边长的组件也能完整摆进、摆出定位区;
+     * - 与尺寸解耦，调宽高时 X/Y 滑块的范围**纹丝不动**。
+     *
+     * ⚠️ 允许负值是为了让组件能贴到画布外沿（甚至完全移出去）——
+     * 窗口尺寸按 [bounds] 的包围盒算，组件在定位区外也能正常显示。
+     */
+    const val COORDINATE_MIN = -1000f
+    const val COORDINATE_MAX = 1000f
 
-    fun maxCoordinate(): Float = BASE_CANVAS
+    fun minCoordinate(): Float = COORDINATE_MIN
+
+    fun maxCoordinate(): Float = COORDINATE_MAX
 
     /*
      * ⚠️ 坐标/尺寸的**修改函数**（`centeredOnCanvas` / `resizedTo` / `clampedToCanvas`）
@@ -435,6 +499,11 @@ object CustomLayout {
     fun cpsKeyCodesOf(component: CustomComponent): List<Int> = when (component) {
         is KeyComponent -> component.inputKeyCodes
         is TextComponent -> component.cpsKeyCodesPerPlaceholder.flatten()
+        /*
+         * 摇杆**没有 CPS** —— 它显示的是摇杆位置，不是每秒次数。
+         * 返回空列表就是"这个组件不统计任何键"，渲染层自然不会给它套 CPS 文字。
+         */
+        is JoystickComponent -> emptyList()
     }
 
     /**
@@ -530,6 +599,12 @@ object CustomLayout {
     fun primaryTextOf(component: CustomComponent): String = when (component) {
         is KeyComponent -> component.label
         is TextComponent -> component.text
+        /*
+         * 摇杆**没有文字**。返回空串而不是报错:调用方（属性面板、
+         * 转自定义的诊断、CPS 渲染）都会走到这里，
+         * 让它返回空是"这个组件没有文字"最省事的表达。
+         */
+        is JoystickComponent -> ""
     }
 
     /**

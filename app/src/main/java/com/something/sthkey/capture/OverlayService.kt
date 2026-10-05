@@ -506,7 +506,10 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             size.first,
             size.second,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            windowFlags(touchable = OverlayLayouts.of(this, config.id).touchable),
+            windowFlags(
+                touchable = OverlayLayouts.of(this, config.id).touchable,
+                movableOffScreen = OverlayLayouts.of(this, config.id).movableOffScreen,
+            ),
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
@@ -628,7 +631,10 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             size.first,
             size.second,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            windowFlags(touchable = OverlayLayouts.of(this, configId).touchable),
+            windowFlags(
+                touchable = OverlayLayouts.of(this, configId).touchable,
+                movableOffScreen = OverlayLayouts.of(this, configId).movableOffScreen,
+            ),
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
@@ -736,7 +742,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
      * 只是不再拦截任何点击（这就是"贴图"的正确实现方式，
      * 而不是把窗口设成不可见或降低 alpha）。
      */
-    private fun windowFlags(touchable: Boolean): Int {
+    private fun windowFlags(touchable: Boolean, movableOffScreen: Boolean): Int {
         var flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             /*
              * 必须显式要求硬件加速。
@@ -749,6 +755,22 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
 
         if (!touchable) flags = flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+
+        /*
+         * ⚠️ 「可移出屏幕外」（默认关）—— 开着才加 `FLAG_LAYOUT_NO_LIMITS`。
+         *
+         * 这个标志让**系统不再约束窗口位置**，于是窗口能跑到屏幕外。
+         *
+         * ⚠️ 光加标志还不够:我们自己的拖拽夹取也必须一起放开，
+         * 否则窗口还是被夹在屏幕内 —— 表现是"开关打开了但没变化"。
+         * 两件事分别在这里和 [OverlayBounds.clampOrFree] 的调用点，**必须成对**。
+         *
+         * ⚠️ 关掉时**行为与以前完全一致**（一个 flag 都不多）——
+         * 这一点很重要，因为下面那段注释记录了当年去掉它的两个副作用。
+         */
+        if (movableOffScreen) {
+            flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        }
         return flags
     }
 
@@ -839,7 +861,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     private fun applyLayout(window: OverlayWindow) {
         val layout = OverlayLayouts.of(this, window.configId)
 
-        val flags = windowFlags(layout.touchable)
+        val flags = windowFlags(layout.touchable, layout.movableOffScreen)
         if (window.params.flags != flags) {
             window.params.flags = flags
             // 关掉可触摸时若手势还没结束，先把拖动状态清掉，
@@ -1295,13 +1317,19 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                      * 多窗口下后者会偏小，于是边界算宽、窗口能拖出屏幕外。
                      */
                     val (screenWidth, screenHeight) = OverlayBounds.screenSize(this)
-                    val (cx, cy) = OverlayBounds.clamp(
+                    val (cx, cy) = OverlayBounds.clampOrFree(
                         x = startX + dx.toInt(),
                         y = startY + dy.toInt(),
                         windowWidth = params.width,
                         windowHeight = params.height,
                         screenWidth = screenWidth,
                         screenHeight = screenHeight,
+                        /*
+                         * ⚠️ 开关为真时**不夹进屏幕内** —— 这是"能拖出屏幕外"
+                         * 真正生效的地方（另一半是 `windowFlags` 里的
+                         * `FLAG_LAYOUT_NO_LIMITS`，两处必须一致）。
+                         */
+                        movableOffScreen = OverlayLayouts.of(this, configId).movableOffScreen,
                     )
                     params.x = cx
                     params.y = cy

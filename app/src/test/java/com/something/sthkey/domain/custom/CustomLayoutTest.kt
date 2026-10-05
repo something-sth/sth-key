@@ -48,6 +48,21 @@ class CustomLayoutTest {
         cpsKeyCodes = keyCodes,
     )
 
+    /**
+     * 一个摇杆组件。
+     *
+     * ⚠️ **正方形**是它的不变量（见 [JoystickComponent]）——
+     * 渲染层的三层几何全部由**一个边长**推出，宽高不等时盘内那个圆
+     * 会画成椭圆，而且只调宽的话（`min(宽,高)` 不变）画面上什么都不动。
+     */
+    private fun joystickComponent() = JoystickComponent(
+        id = "j",
+        x = 0f,
+        y = 0f,
+        width = 200f,
+        height = 200f,
+    )
+
     /*
      * ============================================================
      * CPS 文本
@@ -251,34 +266,58 @@ class CustomLayoutTest {
      * 坐标范围与夹取
      * ============================================================
      * 不变量：**任何时刻组件的坐标都在合法范围内**。
-     * 因为坐标下界是 `-尺寸`、跟着尺寸变，所以"改尺寸"也必须夹坐标 ——
-     * 否则缩小一个贴左边界的组件之后，它的 X 滑块会突然跳一下。
+     *
+     * ⚠️ 坐标范围这一版改成了**固定**的 `-1000 .. 1000`，不再跟着尺寸变 ——
+     * 旧行为是下界 `-尺寸`，于是"改宽高会让 X 滑块的范围跟着变"，
+     * 用户把组件调小之后原本能拖到的那一端会突然拖不到。
      */
 
     @Test
-    fun `坐标下界跟着组件尺寸走`() {
-        assertEquals(-80f, CustomLayout.minCoordinate(80f), 0.001f)
-        assertEquals(-300f, CustomLayout.minCoordinate(300f), 0.001f)
-        assertEquals(CustomLayout.BASE_CANVAS, CustomLayout.maxCoordinate())
+    fun `坐标范围是固定的与组件尺寸无关`() {
+        assertEquals(-1000f, CustomLayout.minCoordinate(), 0.001f)
+        assertEquals(1000f, CustomLayout.maxCoordinate(), 0.001f)
+    }
+
+    /**
+     * ⚠️ 这条是那个"滑块范围会变"的直接回归。
+     *
+     * 组件的宽高怎么变，X 滑块的范围都必须**纹丝不动**。
+     */
+    @Test
+    fun `改尺寸不会改变坐标范围`() {
+        val before = CustomLayout.minCoordinate() to CustomLayout.maxCoordinate()
+
+        textComponent("a").resizedTo(width = 50f, height = 50f)
+        textComponent("a").resizedTo(width = 1000f, height = 1000f)
+        textComponent("a").resizedToSide(20f)
+
+        assertEquals(
+            "改尺寸不该影响坐标范围 —— 早先下界是 -尺寸，所以会变",
+            before,
+            CustomLayout.minCoordinate() to CustomLayout.maxCoordinate(),
+        )
     }
 
     @Test
-    fun `缩小贴左边界的组件会把坐标一起夹回来`() {
-        // 贴住左边界：x = -width
+    fun `改尺寸不会把贴边组件挪走`() {
+        /*
+         * 旧行为:x = -200、宽 200 的组件被缩到宽 50 之后，
+         * 坐标会被夹到新的下界 -50，组件**凭空跳 150**。
+         *
+         * 现在范围固定，缩小尺寸不该动位置。
+         */
         val wide = textComponent("a").copy(x = -200f, y = 0f, width = 200f, height = 40f)
         val narrow = wide.resizedTo(width = 50f, height = 40f)
 
         assertEquals(50f, narrow.width, 0.001f)
-        // 不夹的话 x 会留在 -200，超出新下界 -50，滑块一碰就跳 150
-        assertEquals(-50f, narrow.x, 0.001f)
-        assertEquals(CustomLayout.minCoordinate(narrow.width), narrow.x, 0.001f)
+        assertEquals("缩小尺寸不该挪动位置", -200f, narrow.x, 0.001f)
     }
 
     @Test
     fun `改尺寸会夹进合法范围`() {
         assertEquals(
             CustomLayout.COMPONENT_SIZE_MAX,
-            textComponent("a").resizedTo(width = 9999f, height = 9999f).width,
+            textComponent("a").resizedTo(width = 99999f, height = 99999f).width,
         )
         assertEquals(
             CustomLayout.COMPONENT_SIZE_MIN,
@@ -286,14 +325,57 @@ class CustomLayoutTest {
         )
     }
 
+    /**
+     * ⚠️ 上限从 300 提到 1000 —— 用户反馈"宽度限制 300 完全不够"。
+     */
+    @Test
+    fun `组件尺寸上限是 1000`() {
+        assertEquals(1000f, CustomLayout.COMPONENT_SIZE_MAX, 0.001f)
+        assertTrue(
+            "上限必须能超过定位区（600），否则大组件没法用",
+            CustomLayout.COMPONENT_SIZE_MAX > CustomLayout.BASE_CANVAS,
+        )
+    }
+
+    /**
+     * ⚠️ 摇杆的「边长」:宽高必须一起变，永远正方形。
+     *
+     * 用户的原话:"摇杆本身就是圆角正方形，单调一个长或宽，显示都有 bug"。
+     * 那个 bug 是必然的 —— 渲染层取 `min(宽, 高)`，只调宽时 `min` 不变。
+     */
+    @Test
+    fun `摇杆改边长时宽高一起变`() {
+        val stick = joystickComponent()
+        val widened = stick.resizedToSide(500f)
+
+        assertEquals(500f, widened.width, 0.001f)
+        assertEquals("宽度改了，高度必须跟着改 —— 否则渲染层取 min 会一动不动", 500f, widened.height, 0.001f)
+    }
+
+    @Test
+    fun `摇杆边长也被夹进合法范围`() {
+        val stick = joystickComponent()
+
+        assertEquals(
+            CustomLayout.COMPONENT_SIZE_MAX,
+            stick.resizedToSide(99999f).width,
+            0.001f,
+        )
+        assertEquals(
+            CustomLayout.COMPONENT_SIZE_MIN,
+            stick.resizedToSide(0f).width,
+            0.001f,
+        )
+    }
+
     @Test
     fun `夹取把越界坐标拉回范围`() {
         val clamped = textComponent("a")
-            .copy(x = 9999f, y = -9999f, width = 100f, height = 40f)
+            .copy(x = 99999f, y = -99999f, width = 100f, height = 40f)
             .clampedToCanvas()
 
         assertEquals(CustomLayout.maxCoordinate(), clamped.x, 0.001f)
-        assertEquals(CustomLayout.minCoordinate(clamped.height), clamped.y, 0.001f)
+        assertEquals(CustomLayout.minCoordinate(), clamped.y, 0.001f)
     }
 
     @Test
@@ -314,8 +396,8 @@ class CustomLayoutTest {
             .centeredOnCanvas()
             .clampedToCanvas()
 
-        assertTrue(huge.x >= CustomLayout.minCoordinate(huge.width))
-        assertTrue(huge.y >= CustomLayout.minCoordinate(huge.height))
+        assertTrue(huge.x >= CustomLayout.minCoordinate())
+        assertTrue(huge.y >= CustomLayout.minCoordinate())
     }
 
     /*
@@ -408,7 +490,7 @@ class CustomLayoutTest {
         components.forEach { component ->
             assertTrue(
                 "组件 ${component.id} 的底色默认不透明度过低，会看起来没有键帽",
-                component.style.fillOpacityUp > 0,
+                component.textStyle()!!.fillOpacityUp > 0,
             )
         }
     }

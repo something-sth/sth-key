@@ -533,6 +533,7 @@ fun HomeScreen(
             screenWidth = OverlayBounds.screenSize(context).first,
             screenHeight = OverlayBounds.screenSize(context).second,
             onTouchableChange = { viewModel.setOverlayTouchable(config.id, it) },
+            onMovableOffScreenChange = { viewModel.setOverlayMovableOffScreen(config.id, it) },
             onOffsetChange = { x, y -> viewModel.setOverlayOffset(config.id, x, y) },
             onReset = { viewModel.resetOverlayPosition(config.id) },
             onDismiss = { editing = null },

@@ -94,7 +94,8 @@ import com.something.sthkey.domain.custom.summary
 import com.something.sthkey.domain.custom.typeLabel
 import com.something.sthkey.domain.custom.withCpsKeyCodesAt
 import com.something.sthkey.domain.custom.withInputKeyCodes
-import com.something.sthkey.domain.custom.withStyle
+import com.something.sthkey.domain.custom.textStyle
+import com.something.sthkey.domain.custom.withTextStyle
 import com.something.sthkey.domain.font.FontRegistry
 import com.something.sthkey.domain.font.bitmap.AtlasGrid
 import com.something.sthkey.domain.font.bitmap.BitmapFontImporter
@@ -324,7 +325,7 @@ fun CustomLayoutEditorScreen(
                  * 这件事只有一个入口。
                  */
                 selectedForImport.value?.let { target ->
-                    draft.replace(target.withStyle(target.style.copy(fontId = imported.id)))
+                    draft.replace(target.withTextStyle { it.copy(fontId = imported.id) })
                 }
                 Toast.makeText(context, "已导入「${imported.displayName}」", Toast.LENGTH_SHORT)
                     .show()
@@ -397,7 +398,7 @@ fun CustomLayoutEditorScreen(
              * 需求原话正是这两条："既没有立马应用，还顶掉了原本的字体选择"。
              */
             selectedForImport.value?.let { target ->
-                draft.replace(target.withStyle(target.style.copy(bitmapFontId = fontId)))
+                draft.replace(target.withTextStyle { it.copy(bitmapFontId = fontId) })
             }
             fontRevision++
             Toast.makeText(context, "已导入「$name」", Toast.LENGTH_SHORT).show()
@@ -414,7 +415,7 @@ fun CustomLayoutEditorScreen(
             components = settings.components,
             modifier = panelModifier,
             onStyleChange = { style, asStep ->
-                selected?.let { target -> draft.replace(target.withStyle(style), asStep) }
+                selected?.let { target -> draft.replace(target.withTextStyle(style), asStep) }
             },
             onComponentChange = { updated, asStep -> draft.replace(updated, asStep) },
             onBeginContinuous = { draft.mutateOnce() },
@@ -621,10 +622,10 @@ fun CustomLayoutEditorScreen(
      */
     if (showFontPicker) {
         FontPickerDialog(
-            selectedId = selected?.style?.fontId.orEmpty(),
+            selectedId = selected?.textStyle()?.fontId.orEmpty(),
             onSelect = { fontId ->
                 selected?.let { target ->
-                    draft.replace(target.withStyle(target.style.copy(fontId = fontId)))
+                    draft.replace(target.withTextStyle { it.copy(fontId = fontId) })
                 }
             },
             onDismiss = { showFontPicker = false },
@@ -691,10 +692,10 @@ fun CustomLayoutEditorScreen(
 
     if (showBitmapFontPicker) {
         BitmapFontPickerDialog(
-            selectedId = selected?.style?.bitmapFontId.orEmpty(),
+            selectedId = selected?.textStyle()?.bitmapFontId.orEmpty(),
             onSelect = { fontId ->
                 selected?.let { target ->
-                    draft.replace(target.withStyle(target.style.copy(bitmapFontId = fontId)))
+                    draft.replace(target.withTextStyle { it.copy(bitmapFontId = fontId) })
                 }
             },
             onDismiss = { showBitmapFontPicker = false },

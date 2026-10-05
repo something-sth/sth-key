@@ -64,12 +64,21 @@ fun createComponent(
 ): CustomComponent {
     val id = newComponentId(type, settings.components.map { it.id })
 
-    /** 落点：画布中央偏上，按已有数量错开，再夹进范围 */
+    /*
+     * 落点：画布中央偏上，按已有数量错开，再夹进范围。
+     *
+     * ⚠️ 夹的是 **[0, BASE_CANVAS]**，**不是** [CustomLayout.maxCoordinate]。
+     *
+     * 两者这一版分开了:坐标上界是 1000（用户可以把组件摆到定位区之外），
+     * 而"新组件落在哪"应当始终在**看得见的定位区里** —— 用坐标上界的话，
+     * 组件一多（每多一个右移 20），新组件会跑到 600~1000 那段，
+     * 也就是加出来的组件**一开始就在定位区外面**，用户会以为没加上。
+     */
     val offset = (settings.components.size * 20).toFloat()
     val baseX = (CustomLayout.BASE_CANVAS / 2f - 60f + offset)
-        .coerceIn(0f, CustomLayout.maxCoordinate())
+        .coerceIn(0f, CustomLayout.BASE_CANVAS)
     val baseY = (140f + offset)
-        .coerceIn(0f, CustomLayout.maxCoordinate())
+        .coerceIn(0f, CustomLayout.BASE_CANVAS)
 
     return when (type) {
         ComponentType.KEY -> {
@@ -100,6 +109,27 @@ fun createComponent(
             height = CustomLayout.NEW_TEXT_HEIGHT,
             style = CustomLayout.styleFromConfigColors(config.colors, config.fontId),
             text = "水印",
+        )
+
+        ComponentType.JOYSTICK -> JoystickComponent(
+            id = id,
+            x = baseX,
+            y = baseY,
+            /*
+             * ⚠️ 摇杆默认做成**正方形**，而且边长与按键组件一致（[CustomLayout.NEW_KEY_SIZE]）。
+             *
+             * 摇杆的三层几何（底盘圆角、内圆半径、帽能走多远）都是按
+             * "边长"推的，宽高不等会让内圆变成椭圆 —— 那是渲染层没打算支持的形状。
+             */
+            width = CustomLayout.NEW_KEY_SIZE,
+            height = CustomLayout.NEW_KEY_SIZE,
+            side = StickSide.LEFT,
+            /*
+             * 外观用「标准」样式那份配置里的摇杆设置 ——
+             * 用户的原话是"配置项要与'标准'样式相同"，那么**默认值也该一致**，
+             * 否则同一个摇杆在两个样式下开箱长得不一样。
+             */
+            joystick = config.joystick,
         )
     }
 }
@@ -165,15 +195,18 @@ fun duplicateComponent(
 fun typeOf(component: CustomComponent): ComponentType = when (component) {
     is KeyComponent -> ComponentType.KEY
     is TextComponent -> ComponentType.TEXT
+    is JoystickComponent -> ComponentType.JOYSTICK
 }
 
 /**
  * 换一个 id（其它字段全不动）。
  *
  * ⚠️ 它**必须** `when` 到每一种组件类型：漏一种就是"某种组件复制出来还是同 id"，
- * 而编译**不会报错**（带 `else` 的 `when` 就过去了）。
+ * 而编译器会直接报错（这里是穷尽 `when`，没有 `else`）——
+ * 这正是当初刻意不写 `else` 的原因。
  */
 fun CustomComponent.withNewId(id: String): CustomComponent = when (this) {
     is KeyComponent -> copy(id = id)
     is TextComponent -> copy(id = id)
+    is JoystickComponent -> copy(id = id)
 }

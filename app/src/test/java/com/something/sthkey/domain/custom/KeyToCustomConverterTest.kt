@@ -54,6 +54,63 @@ class KeyToCustomConverterTest {
     private fun convert(config: KeyStrokesConfig) =
         KeyToCustomConverter.convert(config).custom.components
 
+    /* ============================================================
+     * ⚠️ 回归：手柄样式转出来必须是**两个分开的摇杆**
+     * ============================================================
+     * 用户报过"转换后的标准配置，左右摇杆堆在一起"。
+     *
+     * 成因是转换器原来**没处理摇杆槽位** —— 它俩的 `label` / `codes` 都是空的，
+     * 于是掉进普通按键那条路，变成一个空方块；修了分派之后，
+     * 还要保证**坐标也各自独立**（不能都落在同一个 x）。
+     *
+     * ⚠️ 这条测试同时钉住两件事:
+     * 1. 摇杆槽位转成了 [JoystickComponent]（不是空按键）；
+     * 2. 左右摇杆的 x **不同** —— 那正是"堆在一起"的直接成因。
+     */
+    @Test
+    fun `手柄样式转出两个位置不同的摇杆`() {
+        val components = convert(
+            KeyStrokesConfig(
+                id = "pad",
+                name = "手柄",
+                styleId = StyleId.GAMEPAD2,
+            ),
+        )
+
+        val sticks = components.filterIsInstance<JoystickComponent>()
+        assertEquals("手柄样式应当转出两个摇杆组件", 2, sticks.size)
+
+        val left = sticks.first { it.side == StickSide.LEFT }
+        val right = sticks.first { it.side == StickSide.RIGHT }
+
+        assertTrue(
+            "左右摇杆的 x 必须不同（左 ${left.x}、右 ${right.x}）—— " +
+                "相同就意味着画面上叠在一起",
+            right.x - left.x > 1f,
+        )
+        assertTrue("左摇杆必须在右摇杆左边", left.x < right.x)
+
+        /* 与布局槽位逐个对齐：转换后的位置必须与悬浮窗上原来的一致 */
+        val boxes = KeyLayout.keys(
+            KeyStrokesConfig(id = "pad", name = "手柄", styleId = StyleId.GAMEPAD2),
+        )
+        val leftBox = boxes.first { it.slotId == KeyLayout.Id.JOYSTICK_LEFT }
+        val rightBox = boxes.first { it.slotId == KeyLayout.Id.JOYSTICK_RIGHT }
+
+        assertEquals(
+            "左摇杆的左边距应当等于布局槽位的 centerX - width/2",
+            leftBox.centerX - leftBox.width / 2f,
+            left.x,
+            0.01f,
+        )
+        assertEquals(
+            "右摇杆的左边距应当等于布局槽位的 centerX - width/2",
+            rightBox.centerX - rightBox.width / 2f,
+            right.x,
+            0.01f,
+        )
+    }
+
     /*
      * ============================================================
      * 数量：哪些键该被转出来
