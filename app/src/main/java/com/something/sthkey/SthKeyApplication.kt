@@ -1,6 +1,7 @@
 package com.something.sthkey
 
 import android.app.Application
+import android.os.Build
 import android.os.Process
 import com.something.sthkey.capture.CaptureController
 import com.something.sthkey.core.log.AppLog
@@ -127,8 +128,16 @@ class SthKeyApplication : Application() {
      * 只是启动日志里进程名那一项空着。
      */
     private fun currentProcessName(): String {
-        val direct = runCatching { Process.myProcessName() }.getOrNull()
-        if (!direct.isNullOrBlank()) return direct
+        /*
+         * ⚠️ `Process.myProcessName()` 是 API 33 才有的。
+         * 本应用最低支持 Android 9（API 28），所以先判版本 ——
+         * 直接调会抛 `NoSuchMethodError`（虽然下面 `runCatching` 也接得住，
+         * 但每次都靠异常来走正常分支既慢又会刷日志）。
+         */
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val direct = runCatching { Process.myProcessName() }.getOrNull()
+            if (!direct.isNullOrBlank()) return direct
+        }
 
         return runCatching {
             java.io.File("/proc/self/cmdline").readText().trim().trimEnd('\u0000')

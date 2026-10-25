@@ -1,7 +1,11 @@
 package com.something.sthkey.capture
 
 import com.something.sthkey.capture.shizuku.ShizukuGeteventInputSource
+import com.something.sthkey.capture.accessibility.AccessibilityGrant
+import com.something.sthkey.capture.accessibility.AccessibilityInputSource
+import com.something.sthkey.capture.accessibility.SthKeyAccessibilityService
 import com.something.sthkey.capture.gamepad.GamepadProcessLauncher
+import com.something.sthkey.capture.touch.TouchCapture
 import com.something.sthkey.capture.gamepad.RootGamepadLauncher
 import com.something.sthkey.capture.gamepad.ShizukuGamepadLauncher
 import com.something.sthkey.capture.gamepad.GamepadNativeMonitor
@@ -212,6 +216,32 @@ object CaptureController {
     }
 
     /**
+     * 触屏样式需不需要**触摸采集**。
+     *
+     * ============================================================
+     * ⚠️ 为什么由 `OverlayService` 调、而通道由这里决定
+     * ============================================================
+     * 只有 [com.something.sthkey.capture.OverlayService] 知道"现在有没有
+     * 触屏样式的悬浮窗开着"（那是窗口集合的事）；而只有**这里**知道
+     * "实际走 root 还是 Shizuku"（它探测能力并解析 `KeyMode`）。
+     *
+     * ⚠️ 让 `OverlayService` 自己去判通道是错的 ——
+     * 它没有 root / Shizuku 的探测结果，只能猜，而猜错的后果是
+     * "采集走 Shizuku、触屏走 root"这种用户解释不了的状态。
+     * 所以分工是:**它说要不要，这里说怎么起**。
+     *
+     * ⚠️ 触屏采集是**一个**单例（`TouchCapture`），因为屏幕只有一块 ——
+     * 就算同时开了五个触屏配置，它们读的也是**同一份**触点数据，
+     * 各自按自己的区域去算。所以这里只需要一个布尔量。
+     */
+    fun setTouchNeeded(needed: Boolean) {
+        if (touchNeeded == needed) return
+        touchNeeded = needed
+        AppLog.i(TAG, if (needed) "需要触摸采集（有触屏样式的窗口）" else "不再需要触摸采集")
+        syncTouchCapture()
+    }
+
+    /**
      * 采集**实际上**在不在读事件。
      *
      * ⚠️ 与 [enabled] 的区别很重要：
@@ -228,6 +258,49 @@ object CaptureController {
      * 这类逻辑会以为一切正常，什么都不做。
      */
     fun isRunning(): Boolean = source?.isRunning() == true
+
+    /**
+     * 按当前状态决定触摸采集该起还是该停。
+     *
+     * ⚠️ 只在**采集在跑、且确实需要**时才起 ——
+     * 采集没跑的话起了也没用（没人消费那些触点），
+     * 而且会白占一个 `/data/local/tmp` 里的 helper 进程。
+     *
+     * ⚠️ 通道用**同一次**解析出来的那个（[resolvedTouchLauncher]，
+     * 在 [startOnce] 里按 `resolveCaptureMode` 的结果设好）——
+     * 不另判一次，那样会出现"采集走 Shizuku、触屏走 root"。
+     */
+    private fun syncTouchCapture() {
+        val context = appContext
+        if (context == null) {
+            AppLog.w(TAG, "尚未初始化，无法启动触摸采集")
+            return
+        }
+
+        if (!touchNeeded || !_enabled.value) {
+            if (TouchCapture.isRunning()) {
+                AppLog.i(TAG, "停止触摸采集")
+                TouchCapture.stop()
+            }
+            return
+        }
+
+        if (TouchCapture.isRunning()) return
+
+        val launcher = resolvedTouchLauncher
+        if (launcher == null) {
+            /*
+             * 采集还没起来过 → 通道还没解析。等 [startOnce] 设好之后
+             * 会再调一次 [syncTouchCapture]（见那里的调用）。
+             */
+            AppLog.i(TAG, "触摸采集等待通道解析")
+            return
+        }
+
+        TouchCapture.start(context, launcher)?.let { reason ->
+            AppLog.w(TAG, "触摸采集启动失败：$reason")
+        }
+    }
 
     /** 停止采集（用户主动关闭：清掉自动恢复的意图） */
     fun stop() {
@@ -254,10 +327,58 @@ object CaptureController {
     suspend fun refreshCapabilities() {
         val root = RootProbe.probe()
         val shizuku = ShizukuBridge.isPermissionGrantedSafe()
+
+        /*
+         * ============================================================
+         * ⚠️⚠️ 顺手**用 shell 把无障碍打开**（用户明确要求）
+         * ============================================================
+         * 用户的原话:
+         *
+         * > 用户如果授权了 shizuku/root，理应可以通过 shell 直接授权无障碍……
+         * > 既然有了 shell **那直接启动的时候也授权一下无障碍做个保障**就好了
+         *
+         * ⚠️ 为什么必须在**这里**（探测能力时）做:
+         *
+         * | 时机 | 问题 |
+         * |---|---|
+         * | 用户点"启动悬浮窗"时 | ⚠️ 太晚 —— 那时已经要建窗口了，建不出来就是失败 |
+         * | 应用启动 / 探测能力时 | ✅ 提前修好，用户点启动时一切就绪 |
+         *
+         * ⚠️ 而且它要能修**"用户自己把无障碍关掉了"**这种情况:
+         * 有 shell 就每次启动都检查一遍，关掉了就自动重新打开 ——
+         * 用户不用自己想起来去系统设置里点回来。
+         *
+         * ⚠️ 只在**已经拿到特权**时才做；拿不到就跳过（那种情况只能靠用户手动开）。
+         * ⚠️ 失败**不报错** —— 它只是"保障"，主流程不该因为它失败而中断。
+         */
+        if (!SthKeyAccessibilityService.isConnected() && (root.available || shizuku)) {
+            runCatching {
+                /*
+                 * ⚠️ `appContext` 是**可空的**（未初始化时为 null）——
+                 * 这里用 `?: return@runCatching` 兜住，而不是 `!!`:
+                 * 未初始化时"没授权成功"可以接受（别处还会重试），
+                 * 而崩掉整个采集就太过分了。
+                 */
+                val ctx = appContext ?: return@runCatching
+                val result = AccessibilityGrant.grant(
+                    context = ctx,
+                    useRoot = root.available,
+                )
+                if (result.ok) {
+                    AppLog.i(TAG, "已用 shell 自动开启无障碍服务")
+                } else {
+                    AppLog.w(TAG, "自动开启无障碍未成功：${result.detail}")
+                }
+            }.onFailure {
+                AppLog.w(TAG, "自动开启无障碍异常：${it.javaClass.simpleName}")
+            }
+        }
+
         _capabilities.value = CaptureCapabilities(
             rootAvailable = root.available,
             rootDetail = root.detail,
             shizukuReady = shizuku,
+            accessibilityReady = SthKeyAccessibilityService.isConnected(),
         )
     }
 
@@ -270,6 +391,15 @@ object CaptureController {
     private fun stopInternal() {
         AppLog.i(TAG, "停止采集")
         stopGamepadMonitor()
+        /*
+         * ⚠️ 触摸采集也要停 —— 它读的是同一类权限（`/dev/input`），
+         * 采集都停了还留着它只是白占一个 helper 进程。
+         *
+         * ⚠️ 顺便把"这次解析出来的通道"清掉:下次 start 会重新解析，
+         * 留着旧的会在通道变化（用户从 root 换成 Shizuku）时用错一条。
+         */
+        if (TouchCapture.isRunning()) TouchCapture.stop()
+        resolvedTouchLauncher = null
         runCatching { source?.stop() }
             .onFailure { AppLog.w(TAG, "停止输入源出错：${it.javaClass.simpleName}") }
         source = null
@@ -320,6 +450,13 @@ object CaptureController {
             rootAvailable = rootProbe.available,
             rootDetail = rootProbe.detail,
             shizukuReady = shizukuReady,
+            /*
+             * ⚠️ **每次启动都现探**，不要缓存。
+             *
+             * ⚠️ 用户随时可能在系统设置里关掉无障碍 ——
+             * 拿着启动时的快照做决定，就会出现"采集以为能用、实际收不到事件"。
+             */
+            accessibilityReady = SthKeyAccessibilityService.isConnected(),
         )
         _capabilities.value = capabilities
 
@@ -372,7 +509,44 @@ object CaptureController {
              * 这套流程两条通道通用（`/data/local/tmp` shell 也可写）。
              */
             startGamepadMonitor(ShizukuGamepadLauncher())
+            /*
+             * ⚠️ 触摸采集用**同一个** launcher（同一条通道）。
+             * 它不一定需要（没有触屏窗口时 [touchNeeded] 是 false），
+             * [syncTouchCapture] 会自己判断 —— 这里只负责把
+             * "这次解析出来的通道"告诉它。
+             */
+            resolvedTouchLauncher = ShizukuGamepadLauncher()
+            syncTouchCapture()
             return startSource(ShizukuGeteventInputSource(), "Shizuku 直连")
+        }
+
+        /*
+         * ============================================================
+         * 无障碍通道
+         * ============================================================
+         * ⚠️⚠️ 这一支**不启动** getevent / 手柄 monitor / 触摸采集 ——
+         * 它们**全都需要 `/dev/input`**，而纯无障碍读不到。
+         *
+         * ⚠️ 硬要启也是一样的结果:起个进程、读不到东西、白耗电，
+         * 而且会让状态卡显示"监听中"却什么反应都没有 —— 那种**假成功**
+         * 比明确失败更难查。
+         */
+        if (resolved.mode == KeyMode.ACCESSIBILITY) {
+            /*
+             * ⚠️ 再确认一次服务连着。
+             *
+             * ⚠️ 上面的 capabilities 是刚探的，但中间可能隔了一瞬 ——
+             * 用户真在那一刻关掉无障碍的话，这里要给出**准确的**提示，
+             * 而不是让 [AccessibilityInputSource] 静默失败。
+             */
+            if (!SthKeyAccessibilityService.isConnected()) {
+                CaptureSession.updateState(
+                    CaptureState.FAILED,
+                    "无障碍服务未开启，请在系统设置 → 无障碍里启用 sth key",
+                )
+                return false
+            }
+            return startSource(AccessibilityInputSource(), "无障碍")
         }
 
         /*
@@ -403,6 +577,9 @@ object CaptureController {
                  * 只是换成 [ShizukuGamepadLauncher]（见那边的说明）。
                  */
                 startGamepadMonitor(RootGamepadLauncher())
+                /* ⚠️ 触摸采集同一条通道，见上面 Shizuku 分支的说明 */
+                resolvedTouchLauncher = RootGamepadLauncher()
+                syncTouchCapture()
                 startSource(RootInputSource(), "root")
             }
 
@@ -839,6 +1016,27 @@ object CaptureController {
 
     @Volatile
     private var gamepadMonitor: GamepadNativeMonitor? = null
+
+    /**
+     * 现在有没有**触屏样式**的窗口开着（由 `OverlayService` 告知）。
+     *
+     * ⚠️ 默认 `false`:没有窗口当然不需要触摸采集。
+     */
+    @Volatile
+    private var touchNeeded: Boolean = false
+
+    /**
+     * 触摸采集该走哪条通道 —— 与手柄同一次解析的结果。
+     *
+     * ⚠️ 存下来而不是每次重判:重判会得到"可能不同"的答案
+     * （能力探测有缓存/时机差异），于是出现"采集走 Shizuku、
+     * 触屏走 root"这种用户解释不了的状态。
+     *
+     * ⚠️ `null` = 采集还没起来过、通道还没解析 ——
+     * 那时 [syncTouchCapture] 只记一条日志，等 [startOnce] 设好后再起。
+     */
+    @Volatile
+    private var resolvedTouchLauncher: GamepadProcessLauncher? = null
 
     /**
      * 启动原生手柄 monitor。

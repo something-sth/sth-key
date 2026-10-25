@@ -130,10 +130,27 @@ internal fun OverlayKeySlot(
     pressedCodes: Set<Int>,
     config: KeyStrokesConfig,
     scale: Float,
+    /**
+     * **触摸区域**按住的槽位 id。
+     *
+     * ============================================================
+     * ⚠️⚠️ 为什么不能只靠 `pressedCodes`
+     * ============================================================
+     * 下面那行 `box.codes.any { it in pressedCodes }` 对**触屏样式
+     * 永远不成立**:`box.codes` 来自 `KeyLayout.codeToSlotMap(config)`，
+     * 而那张表只从 `keyMappings.inputKeyCodes` 建 —— 触屏的
+     * `inputKeyCodes` **全是空的**（触屏不读物理按键）。
+     *
+     * ⚠️ 所以触屏要**另走一条路**:直接比槽位。
+     *
+     * ⚠️ 两条路是**并集**而不是二选一:触屏与手柄可以同时用，
+     * 替换会让另一边的按键熄灭。
+     */
+    pressedSlots: Set<String> = emptySet(),
 ) {
     OverlayKey(
         box = box,
-        pressed = box.codes.any { it in pressedCodes },
+        pressed = box.codes.any { it in pressedCodes } || box.slotId in pressedSlots,
         config = config,
         scale = scale,
     )

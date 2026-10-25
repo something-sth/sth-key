@@ -1,18 +1,12 @@
 package com.something.sthkey.ui.component
 
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.Icons
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
@@ -22,6 +16,15 @@ import androidx.compose.ui.unit.dp
  *
  * 设置页、关于页、调试页大量使用"标题 + 副标题 + 尾部"的结构，
  * 统一到这里，避免每个页面重复写 Row/Column 排版。
+ *
+ * ============================================================
+ * ⚠️ 现在的样子（照 SukiSU 的 Material 侧组件）
+ * ============================================================
+ * | 部分 | 做法 |
+ * |---|---|
+ * | 整行 | **独立圆角矩形**（`SettingRowSurface`，18dp 圆角），不再是"卡片 + 分割线" |
+ * | 左图标 | 装在 36dp 圆角方块里（`IconTile`），整列对齐 |
+ * | 可点行 | 自动在尾部补一个 ‹ 箭头 |
  *
  * @param onClick 为 null 时整行不可点击（纯展示项）
  */
@@ -34,42 +37,29 @@ fun SettingItem(
     onClick: (() -> Unit)? = null,
     trailing: @Composable (() -> Unit)? = null,
 ) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    SettingRowSurface(modifier = modifier, onClick = onClick) {
         if (leadingIcon != null) {
-            Icon(
-                imageVector = leadingIcon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(22.dp),
-            )
-            Spacer(modifier = Modifier.width(16.dp))
+            IconTile(icon = leadingIcon)
+            RowLeadingGap()
         }
 
-        androidx.compose.foundation.layout.Column(
-            modifier = Modifier.weight(1f),
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.bodyLarge,
-            )
-            if (subtitle != null) {
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
+        RowTextColumn(title = title, subtitle = subtitle)
 
         if (trailing != null) {
             Spacer(modifier = Modifier.width(12.dp))
             trailing()
+        } else if (onClick != null) {
+            /*
+             * ⚠️ 可点行**自动**补箭头:这是"点进去"的通用暗示。
+             * 只在 `trailing == null` 时补 —— 传了 `trailing` 说明调用方
+             * 自己画了右边的东西（开关、数值…），再挤一个箭头会很难看。
+             */
+            Spacer(modifier = Modifier.width(8.dp))
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -97,7 +87,12 @@ fun SwitchItem(
         leadingIcon = leadingIcon,
         onClick = { if (enabled) onCheckedChange(!checked) },
         trailing = {
-            Switch(
+            /*
+             * ⚠️ 用 `ExpressiveSwitch`（圆点里带对勾/叉），不是裸的 `Switch`。
+             * 开关自己的 `onCheckedChange` 也要判 `enabled` ——
+             * 禁用态下 Material3 虽然不响应，但这里再判一次更保险。
+             */
+            ExpressiveSwitch(
                 checked = checked,
                 onCheckedChange = { if (enabled) onCheckedChange(it) },
                 enabled = enabled,

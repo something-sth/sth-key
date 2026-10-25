@@ -178,6 +178,36 @@ class KeyPickerGroupTest {
             "必须有 ALL 这一项",
             KeyCodes.PickerGroup.entries.any { it == KeyCodes.PickerGroup.ALL },
         )
-        assertEquals("一共三项:键盘 / 手柄 / 全部", 3, KeyCodes.PickerGroup.entries.size)
+        /*
+         * ⚠️ 现在是**四项**:键盘 / 手柄 / **触屏** / 全部。
+         *
+         * ⚠️ 「触屏」是用户要求加进「选择按键分类」的**岔路** ——
+         * 选它之后不去挑键码，而是去选触摸区域类型（见 `PickerGroup.TOUCH`）。
+         */
+        assertEquals("一共四项:键盘 / 手柄 / 触屏 / 全部", 4, KeyCodes.PickerGroup.entries.size)
+    }
+
+    /**
+     * ⚠️⚠️ 「触屏」**不是键码分类** —— [KeyCodes.searchIn] 必须拦住它。
+     *
+     * ============================================================
+     * 触摸区域没有键码（见 `TouchBinding`）
+     * ============================================================
+     * 不拦的话它会掉进 `groupOf(code) == group`，而 `groupOf`
+     * **永远不返回 TOUCH**，于是结果是**空列表** ——
+     * 那个"空"看着像"触屏分类里一个键都没有"，而不是"这条路不该走这里"。
+     */
+    @Test
+    fun `触屏分类不参与键码检索`() {
+        assertEquals(
+            "触屏是岔路，不是键码分类 —— searchIn 应当返回空",
+            0,
+            KeyCodes.searchIn("", KeyCodes.PickerGroup.TOUCH).size,
+        )
+        /* ⚠️ 而 groupOf 也永远不该把任何键归到它上面 */
+        assertTrue(
+            "没有任何键码属于「触屏」分类",
+            KeyCodes.ALL.none { KeyCodes.groupOf(it.keyCode) == KeyCodes.PickerGroup.TOUCH },
+        )
     }
 }

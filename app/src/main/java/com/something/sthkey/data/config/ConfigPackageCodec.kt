@@ -2,6 +2,7 @@ package com.something.sthkey.data.config
 
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.font.bitmap.BitmapFontSpec
+import com.something.sthkey.core.log.AppLog
 import org.json.JSONObject
 
 /**
@@ -329,12 +330,14 @@ object ConfigPackageCodec {
     /**
      * 参数 JSON 与本版本的字段差异。
      *
-     * @param unknown 配置里有、本版本不认识的字段（多半来自更新的版本）
+     * @param unknown 配置里有、本版本**完全不认识**的字段（多半来自更新的版本）
      * @param missing 本版本认识、配置里没写的字段（会用默认值）
+     * @param otherStyle 配置里有、但**属于别的样式**的字段
      */
     data class FieldDiff(
         val unknown: List<String>,
         val missing: List<String>,
+        val otherStyle: List<String> = emptyList(),
     )
 
     /**
@@ -347,12 +350,73 @@ object ConfigPackageCodec {
      */
     private val MANIFEST_OWNED_KEYS: Set<String> = setOf("name", "description")
 
+    /**
+     * 比对一份 params.json 与本版本的字段差异。
+     *
+     * ============================================================
+     * ⚠️⚠️ 基准必须**按这份配置自己的样式**算（用户报的问题）
+     * ============================================================
+     * 用户的原话:
+     *
+     * > 不过现在导入配置显示的字段差异还没改，我**导出再导入有一大堆字段差异**，
+     * > 不过实际上没什么区别
+     *
+     * ⚠️ 成因:以前基准取的是 `KNOWN_KEYS`（**所有样式的并集**）。
+     * 而编码现在是按样式只写相关字段的 —— 于是一份自定义 Key 配置
+     * 会被拿去跟"键盘 + 手柄 + Live2D + 自定义"的全部字段比，
+     * 每一项键盘字段都报成"缺失"。**那是把正常情况说成异常。**
+     *
+     * ⚠️ 现在改成 [JsonConfigCodec.expectedKeysFor]（按 `styleId`）。
+     * 于是"导出再导入"应该**零差异** —— 那才是这两条列表该有的常态:
+     * 有内容就说明真有问题。
+     *
+     * ⚠️ `styleId` 在 params 里一定存在（编码无条件写它），
+     * 取不到时回落到默认样式。
+     */
     fun compareFields(params: JSONObject): FieldDiff {
         val present = params.keys().asSequence().toSet()
-        val expected = JsonConfigCodec.KNOWN_KEYS - MANIFEST_OWNED_KEYS
+        val expected = JsonConfigCodec.expectedKeysFor(params.optString("styleId")) -
+            MANIFEST_OWNED_KEYS
+
+        val unknown = present.filterNot { JsonConfigCodec.isKnownKey(it) }.sorted()
+        /*
+         * ⚠️ 单列"别的样式的字段":它既不是"未识别"（我们认识它），
+         * 也不是"缺失"（这份配置本来就不该有它）。
+         * 混进 unknown 会让人以为包有问题；混进 missing 就是用户报的那个现象。
+         */
+        val otherStyle = present
+            .filter { it !in expected && it !in MANIFEST_OWNED_KEYS && it !in unknown }
+            .sorted()
+
+        /*
+         * ============================================================
+         * ⚠️ 自检:自家导出的包不该有任何"缺失"（只在真出问题时说话）
+         * ============================================================
+         * "按样式算基准"这件事的**正确性**没法靠单测保证 ——
+         * 它取决于 `expectedKeysFor` 返回的集合与编码器真实写出的键是否一致，
+         * 而编码要走 `org.json`（本地单测里是空壳）。
+         *
+         * ⚠️ 所以让**运行时自己核对**:一份本版本刚导出的包，
+         * 导入时 `missing` 必须是空的。不是空的就说明两个集合漂了 ——
+         * 那时 `AppLog.w` 会打出到底差哪些键，比"报告里一长串看不懂的名字"好查得多。
+         *
+         * ⚠️ 只在有差异时打日志 —— 正常情况**一声不吭**，
+         * 否则每次导入都刷屏、真问题反而被淹掉。
+         */
+        if (expected.filterNot { it in present }.isNotEmpty() && unknown.isEmpty()) {
+            AppLog.w(
+                "ConfigDiff",
+                "导入自检:「${params.optString("styleId")}」有 " +
+                    "${expected.filterNot { it in present }.size} 个字段没写在包里 —— " +
+                    "若这是本版本自己导出的包，说明「预期字段」与编码器漂了: " +
+                    expected.filterNot { it in present }.sorted().joinToString(", "),
+            )
+        }
+
         return FieldDiff(
-            unknown = present.filterNot { JsonConfigCodec.isKnownKey(it) }.sorted(),
+            unknown = unknown,
             missing = expected.filterNot { it in present }.sorted(),
+            otherStyle = otherStyle,
         )
     }
 }

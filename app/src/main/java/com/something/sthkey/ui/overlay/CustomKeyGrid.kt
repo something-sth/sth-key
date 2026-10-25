@@ -60,6 +60,7 @@ import com.something.sthkey.capture.StickState
 import com.something.sthkey.domain.style.KeyBox
 import com.something.sthkey.ui.overlay.gamepad.JoystickSlot
 import com.something.sthkey.capture.MouseMotion
+import com.something.sthkey.domain.custom.TouchDirection
 import com.something.sthkey.domain.custom.JoystickFollowMode
 import com.something.sthkey.domain.custom.JOYSTICK_FOLLOW_DURATION_MIN
 import com.something.sthkey.domain.custom.JOYSTICK_FOLLOW_DURATION_MAX
@@ -347,6 +348,34 @@ fun CustomKeyCanvas(
      * （一个永远居中的摇杆，看起来像坏了）。
      */
     mouseMotion: MouseMotion? = null,
+    /**
+     * 触屏的读数（摇杆向量 + 被按住的区域 id）。
+     *
+     * ⚠️ 默认 `null` = 没有触摸数据源 —— 与 [sticks] / [mouseMotion]
+     * 同一个取舍:编辑器画布与配置预览**不传**（用户要求"纯静态"）。
+     *
+     * ⚠️ 悬浮窗**必须传**，否则:
+     *
+     * | 组件 | 不传的表现 |
+     * |---|---|
+     * | 摇杆-触屏 | 永远居中（像坏了） |
+     * | 带触摸区域的按键 / 文本 | **按了没反应** |
+     *
+     * ⚠️ 用 [TouchInputState] 而不是直接暴露 `TouchFrameTracker.Snapshot`:
+     * 那个类是 `internal`（它与 native 协议强绑定），而本函数是 `public` ——
+     * 直接收它在 Kotlin 里编译不过（"public 函数暴露了 internal 类型"）。
+     * 而把 tracker 改成 public 会**级联**要求 `TouchNativeProtocol` 也公开。
+     */
+    touchInput: TouchInputState? = null,
+    /**
+     * **触摸区域**那一路的 CPS（组件 id → 因区域被按到而累计的次数）。
+     *
+     * ⚠️ 触摸区域**没有键码**，走不了 `键码 → 槽位 → 计数` 那条路
+     * （见 `CustomLayout.cpsAt`），所以它**另开一路**。
+     *
+     * ⚠️ 默认 `{ 0 }` = 没有触摸贡献 —— 编辑器画布与配置预览都走它。
+     */
+    touchCpsOf: (String) -> Int = { 0 },
 ) {
     val alphaLayer = if (overallAlpha < 1f) {
         Modifier.graphicsLayer { alpha = overallAlpha.coerceIn(0f, 1f) }
@@ -361,7 +390,17 @@ fun CustomKeyCanvas(
         )
         Box(modifier = modifier.size((baseWidth * scale).dp, (baseHeight * scale).dp)) {
             Box(modifier = alphaLayer) {
-                CustomKeyCanvasContent(settings, pressedCodes, scale, cpsBySlot, slotIdOf, sticks, mouseMotion)
+                CustomKeyCanvasContent(
+                    settings,
+                    pressedCodes,
+                    scale,
+                    cpsBySlot,
+                    slotIdOf,
+                    sticks,
+                    mouseMotion,
+                    touchInput,
+                    touchCpsOf,
+                )
             }
         }
         return
@@ -389,7 +428,17 @@ fun CustomKeyCanvas(
                 .align(Alignment.Center),
         ) {
             Box(modifier = alphaLayer) {
-                CustomKeyCanvasContent(settings, pressedCodes, fittedScale, cpsBySlot, slotIdOf, sticks, mouseMotion)
+                CustomKeyCanvasContent(
+                    settings,
+                    pressedCodes,
+                    fittedScale,
+                    cpsBySlot,
+                    slotIdOf,
+                    sticks,
+                    mouseMotion,
+                    touchInput,
+                    touchCpsOf,
+                )
             }
         }
     }
@@ -405,6 +454,10 @@ private fun CustomKeyCanvasContent(
     slotIdOf: (Int) -> String?,
     sticks: StickState,
     mouseMotion: MouseMotion?,
+    /** 触屏的读数（摇杆向量 + 被按住的区域 id）；`null` = 没有触摸数据源 */
+    touchInput: TouchInputState?,
+    /** ⚠️ 触摸区域那一路的 CPS，见 [CustomKeyCanvas] 的说明 */
+    touchCpsOf: (String) -> Int,
 ) {
     settings.components.forEach { component ->
         /*
@@ -429,6 +482,7 @@ private fun CustomKeyCanvasContent(
                  */
                 pressedCodes = pressedCodes,
                 mouseMotion = mouseMotion,
+                touchInput = touchInput,
             )
             return@forEach
         }
@@ -445,21 +499,179 @@ private fun CustomKeyCanvasContent(
              * 而不是把那个组件当成文本画成一个方块。
              */
             component = component as TextualComponent,
-            pressed = component.isPressed(pressedCodes),
+            pressed = component.isPressed(pressedCodes, touchInput),
             scale = scale,
             cpsBySlot = cpsBySlot,
             slotIdOf = slotIdOf,
+            touchCpsOf = touchCpsOf,
         )
     }
 }
 
-/** 组件这一刻是否"按下"：只对按键组件有意义，其余永远返回 false */
-private fun CustomComponent.isPressed(pressedCodes: Set<Int>): Boolean = when (this) {
-    is KeyComponent -> inputKeyCodes.any { it in pressedCodes }
+/**
+ * 组件这一刻是否"按下"。
+ *
+ * ============================================================
+ * ⚠️⚠️ 两条并列的路，取并集
+ * ============================================================
+ * | 来源 | 判据 |
+ * |---|---|
+ * | **物理键** | `inputKeyCodes` 里有键按下 |
+ * | **触摸区域** | 组件被一块**绑定了它**的区域按到（方向匹配） |
+ *
+ * ⚠️ "哪块区域绑了它"由**配置级的区域列表**回答（见 `CustomTouchRegion`），
+ * 调用方把它算成 [TouchInputState.pressedComponentIds] 之后传进来 ——
+ * **渲染层不认识区域列表**。
+ *
+ * ⚠️ 所以这里只问 [TouchInputState.pressedComponentIds]。
+ *
+ * ============================================================
+ * ⚠️⚠️ 文本组件**不参与"亮不亮"**
+ * ============================================================
+ * 用户的原话:
+ *
+ * > 首先文本组件，**你不能亮啊**，你让他亮干什么
+ *
+ * ⚠️ 他说得对。文本组件"被按到"的**唯一**含义是**CPS 加一次**
+ * （由 `OverlayContent` 那边的边沿计数做），而它没有键帽、
+ * 没有按下动画 —— 让 `isPressed` 返回 `true` 只会让**键帽底色**
+ * 按下去变一下色，那是个谁也没要的效果。
+ */
+private fun CustomComponent.isPressed(
+    pressedCodes: Set<Int>,
+    touchInput: TouchInputState?,
+): Boolean = when (this) {
+    is KeyComponent -> inputKeyCodes.any { it in pressedCodes } ||
+        touchInput?.pressedComponentIds?.contains(id) == true
+
+    /* ⚠️ 文本组件**不亮** —— 它的绑定只用来让 CPS 加（见上面那段说明） */
     is TextComponent -> false
+
     /* 摇杆上报的是**轴**，"按下"对它没有意义 */
     is JoystickComponent -> false
 }
+
+/**
+ * 触屏这一刻的读数 —— **画布层看到的形状**。
+ *
+ * ============================================================
+ * ⚠️ 为什么要有这个类型（而不是直接用 `TouchFrameTracker.Snapshot`）
+ * ============================================================
+ * [CustomKeyCanvas] 是 `public`，而 `TouchFrameTracker` 是 `internal`
+ * （它与 native 协议强绑定）—— Kotlin **不允许** public 函数暴露
+ * internal 类型。而把 tracker 改成 public 会**级联**要求
+ * `TouchNativeProtocol` 也公开，那是把采集层的内部形状泄漏到 UI 层。
+ *
+ * ⚠️ 坐标系:X 右为正、**Y 下为正**（屏幕坐标），与 [StickState] 一致。
+ */
+data class TouchInputState(
+    /**
+     * **每个组件的移动摇杆向量**（组件 id → 向量）。
+     *
+     * ============================================================
+     * ⚠️⚠️ 为什么键是**组件 id**，而不是区域 id
+     * ============================================================
+     * 渲染层要回答的是"**这个摇杆组件**该画成什么姿势" ——
+     * 而它吃哪块区域由**绑定**决定（见 `CustomTouchRegion.bindings`）。
+     *
+     * ⚠️ 所以这里由调用方把"区域 → 它绑定的组件"**翻过来**:
+     * 一块轮盘区域绑了哪个摇杆组件，就给它算一份向量。
+     * 渲染层因此**不需要认识区域**（它只管画组件）。
+     */
+    val moveByComponent: Map<String, Pair<Float, Float>> = emptyMap(),
+    /** 视角摇杆值（`-1..1`，**不回中**） */
+    val camera: Pair<Float, Float> = 0f to 0f,
+    /**
+     * 这一刻**被按到**的组件 id。
+     *
+     * ⚠️ 是**组件** —— 一条绑定就是"某块区域 → 某个组件"，
+     * 被按到时该组件就是要亮（或加 CPS）的那个。
+     */
+    val pressedComponentIds: Set<String> = emptySet(),
+    /**
+     * **每块区域**这一刻的向量（区域 id → 向量）。
+     *
+     * ⚠️ 只有"带方向的绑定"要用它 —— 判"摇杆朝哪个方向"必须按
+     * **那块区域自己的中心**算（同一个手指、两块区域，方向可能相反）。
+     */
+    val moveByRegion: Map<String, Pair<Float, Float>> = emptyMap(),
+    /**
+     * 这一刻**被按到**的**区域** id。
+     *
+     * ⚠️ 与 [pressedComponentIds] 并存**不是冗余**:
+     *
+     * | 字段 | 谁用 | 为什么 |
+     * |---|---|---|
+     * | [pressedComponentIds] | 渲染（键帽亮） | 亮的是**组件** |
+     * | [pressedRegionIds] | CPS 计数 | ⚠️ 计数按**区域**记 —— 否则一块区域绑了两个组件时，两边的次数会互相污染 |
+     */
+    val pressedRegionIds: Set<String> = emptySet(),
+) {
+    /**
+     * **这块区域**当前是否指向某个方向（八段式）。
+     *
+     * ⚠️ 与 `TouchFrameTracker.Snapshot.pointsToward` **同一套判据**
+     * （只看该轴符号；斜向时两个方向都成立）。
+     *
+     * ⚠️ 找不到这块区域的向量（手指不在它里面）= 四个方向都不成立 ——
+     * 那正是"没按到就不该有方向"。
+     */
+    fun pointsToward(
+        regionId: String,
+        direction: TouchDirection,
+    ): Boolean {
+        val (x, y) = moveByRegion[regionId] ?: return false
+        /* ⚠️ 死区之内一律不算 —— 防"刚按下就四个方向全亮" */
+        if (kotlin.math.hypot(x, y) <= TOUCH_DIRECTION_DEAD_ZONE) return false
+        return when (direction) {
+            TouchDirection.FRONT -> y < 0f
+            TouchDirection.BACK -> y > 0f
+            TouchDirection.LEFT -> x < 0f
+            TouchDirection.RIGHT -> x > 0f
+        }
+    }
+}
+
+/**
+ * **某个组件**这一刻是不是"被按到"（且方向对得上）。
+ *
+ * ============================================================
+ * ⚠️⚠️ 判据从"区域"换成了"组件"（返工）
+ * ============================================================
+ * 旧模型（已撤掉）判的是"**这块区域**在不在 `pressedRegionIds` 里" ——
+ * 那时区域挂在组件上，所以两者是同一个东西。
+ *
+ * ⚠️ 新模型下区域与组件是**两块独立数据**，由**绑定**连起来:
+ * 一条绑定 = `(区域 id, 组件 id, 方向?)`。所以判据是:
+ *
+ * | 判据 | 少了会怎样 |
+ * |---|---|
+ * | 这个组件在 [TouchInputState.pressedComponentIds] 里 | 组件永远不会因触摸而亮 |
+ * | 有方向时，**它绑的那块区域**朝那个方向 | ⚠️ 前后左右几个组件会**一起亮** |
+ *
+ * @param componentId 要判的组件
+ * @param direction 这条绑定的方向；`null` = 按键区域（按到就算）
+ * @param regionId 这条绑定绑的是**哪块区域**（方向要按它算）
+ */
+internal fun TouchInputState?.isBoundPressed(
+    componentId: String,
+    direction: TouchDirection?,
+    regionId: String,
+): Boolean {
+    val snapshot = this ?: return false
+    if (componentId !in snapshot.pressedComponentIds) return false
+    val dir = direction ?: return true
+    return snapshot.pointsToward(regionId, dir)
+}
+
+/**
+ * 方向判定的死区。
+ *
+ * ⚠️ 取一个**很小**的值:作用只是"手指刚按下去时的微小抖动不该让四个方向全亮"，
+ * 而不是"用户要推很远才算方向"。真正的手感死区在摇杆自己的
+ * `touchFeel.deadZone` 里（它决定向量本身是不是 0）。
+ */
+private const val TOUCH_DIRECTION_DEAD_ZONE = 0.05f
 
 /**
  * 画一个摇杆组件。
@@ -485,6 +697,8 @@ private fun JoystickComponentView(
     sticks: StickState,
     pressedCodes: Set<Int>,
     mouseMotion: MouseMotion?,
+    /** ⚠️ 「摇杆-触屏」要用它；其余三种摇杆不看 */
+    touchInput: TouchInputState?,
 ) {
     /*
      * 边长取组件宽高里**较小**的那个:摇杆的三层几何（圆角、内圆半径、
@@ -581,6 +795,47 @@ private fun JoystickComponentView(
              */
             rememberMouseJoystickOffset(component.id, component.mouseFeel, mouseMotion)
         }
+
+        /*
+         * ============================================================
+         * 触屏摇杆
+         * ============================================================
+         * ⚠️ **移动 / 视角靠 `side` 分**（见 `JoystickSource.TOUCH`）:
+         *
+         * | `side` | 读数 |
+         * |---|---|
+         * | 左（**移动**） | `move` 向量 —— 只吃**触摸区域**里的触摸 |
+         * | 右（**视角**） | `camera` —— 吃**全屏**滑动，不回中 |
+         *
+         * ⚠️ **不加死区/灵敏度** —— 那两步已经在 `TouchInput` 里做过了
+         * （`moveVector` / `accumulateCamera`）。这里再做一遍会**做两遍**，
+         * 表现是"设置里填的值和实际手感对不上"。
+         * 这与 `TouchContent`（触屏样式那条路）的注释是同一件事。
+         *
+         * ⚠️ 没有触摸数据源时（编辑器画布）退回 `0` —— 摇杆居中，
+         * 与其它三种摇杆"纯静态"的取舍一致。
+         *
+         * ⚠️⚠️ 移动摇杆取的是**它自己那块区域**的向量
+         * （`moveByComponent[component.id]`）—— 不是某个全局的"移动向量"。
+         *
+         * | 情况 | 表现 |
+         * |---|---|
+         * | 手指**在它自己的区域里** | 跟着手指偏 |
+         * | 手指在别处（比如别的组件的区域） | ⚠️ **居中不动**（那是别人那块区域的） |
+         * | 还没配区域 | 永远居中（要去点「编辑触摸区域」） |
+         *
+         * ⚠️ 我第一版用的是全局 `move`，而它只由**轮盘槽位**产生 ——
+         * 自定义布局里没有那个槽位，于是触屏摇杆**怎么划都不动**
+         * （与"按键带方向不亮"是同一个根因）。
+         */
+        JoystickSource.TOUCH -> {
+            val snapshot = touchInput
+            if (component.side == StickSide.LEFT) {
+                snapshot?.moveByComponent?.get(component.id) ?: (0f to 0f)
+            } else {
+                snapshot?.camera ?: (0f to 0f)
+            }
+        }
     }
 
     JoystickSlot(
@@ -638,6 +893,32 @@ private fun JoystickComponentView(
 private fun linearDurationMsOf(component: JoystickComponent): Float = when (component.source) {
     JoystickSource.GAMEPAD -> 0f
     JoystickSource.MOUSE -> 0f
+    /*
+     * ⚠️ **触屏也走线性跟随**，但**只在「常规」模式下**。
+     *
+     * ============================================================
+     * ⚠️⚠️ 我第一版写错了:拿"平滑时间"当"跟随时长"用
+     * ============================================================
+     * 原来是 `component.touchFeel.smoothingMs` —— 而那是**弹簧的平滑时间**
+     * （"弹簧有多软"），不是"走完这段距离要多久"。两者含义不同，
+     * 混用的症状正是用户报的**一卡一卡**:
+     *
+     * ⚠️ native 只在 `SYN_REPORT` 时输出一帧，所以喂数据的间隔
+     * **由触摸屏决定、而且不均匀**（通常 30~120ms）。
+     * `smoothingMs = 60` 短于那个间隔 → 线性动画**走完之后停在那儿
+     * 等下一帧** → 一顿一顿。
+     *
+     * ⚠️ 现在与键盘摇杆**逐字同一个形状**:
+     *
+     * | 模式 | 线性时长 |
+     * |---|---|
+     * | 常规 | [TouchStickFeel.durationMs]（「响应时间」） |
+     * | 平滑 | `0` —— ⚠️ **交给弹簧**，那才是"平滑时间"该管的事 |
+     */
+    JoystickSource.TOUCH -> when (component.touchFeel.mode) {
+        JoystickFollowMode.REGULAR -> component.touchFeel.durationMs
+        JoystickFollowMode.SMOOTH -> 0f
+    }
     JoystickSource.KEYBOARD -> when (component.keyboardFeel.mode) {
         JoystickFollowMode.REGULAR -> component.keyboardFeel.durationMs
         JoystickFollowMode.SMOOTH -> 0f
@@ -689,6 +970,22 @@ private fun effectiveJoystickStyle(component: JoystickComponent): JoystickStyle 
             },
         )
         JoystickSource.MOUSE -> base.copy(smoothingMs = component.mouseFeel.smoothingMs)
+        /*
+         * ⚠️ 触屏:平滑时间在 `touchFeel` 里，**叠到 style 上** ——
+         * 与键盘/鼠标同一个做法（渲染层不认识三种手感，
+         * 见上面那段"为什么必须有它"）。
+         *
+         * ⚠️⚠️ **常规模式要把弹簧关掉**（`0f`）—— 与键盘摇杆同一个理由:
+         * 位置已经由 [linearDurationMsOf] 那条线性跟随算好了，
+         * 再叠一层弹簧就成了**两级平滑** —— 表现是"又软又慢"，
+         * 而且用户调「响应时间」时会觉得"改了没什么用"。
+         */
+        JoystickSource.TOUCH -> base.copy(
+            smoothingMs = when (component.touchFeel.mode) {
+                JoystickFollowMode.REGULAR -> 0f
+                JoystickFollowMode.SMOOTH -> component.touchFeel.smoothingMs
+            },
+        )
     }
 }
 
@@ -810,6 +1107,8 @@ private fun CustomComponentView(
     scale: Float,
     cpsBySlot: Map<String, Int>,
     slotIdOf: (Int) -> String?,
+    /** ⚠️ 触摸区域那一路的 CPS，见 [CustomKeyCanvas] 的说明 */
+    touchCpsOf: (String) -> Int,
 ) {
     val style = component.style
     val mode = (component as? KeyComponent)?.animationMode ?: AnimationMode.NONE
@@ -1004,7 +1303,20 @@ private fun CustomComponentView(
          * 会得到相同的数值 —— 这是合理的：那个组件的语义就是"这一个键"。
          * 文本组件则可以给每个占位符配不同的键位（见组件属性面板里的列表）。
          */
-        val cpsValues = CustomLayout.cpsValuesOf(component, cpsBySlot, slotIdOf)
+        val cpsValues = CustomLayout.cpsValuesOf(
+            component = component,
+            cpsBySlot = cpsBySlot,
+            slotIdOf = slotIdOf,
+            /*
+             * ⚠️ 触摸区域那一路的 CPS **由调用方算好传进来** ——
+             * 见 `CustomKeyCanvas.touchCpsOf`。
+             *
+             * ⚠️ 这里**不能**自己查区域列表:渲染层只该认识**组件**
+             * （区域 → 绑定的翻换算在 `OverlayContent` 那边做，
+             * 它才拿得到 `config.custom.touchRegions`）。
+             */
+            touchCpsOf = touchCpsOf,
+        )
         val cpsValue = cpsValues.firstOrNull() ?: 0
         val text = CustomLayout.displayTextAt(component, cpsValues)
 

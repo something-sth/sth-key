@@ -21,6 +21,13 @@ import com.something.sthkey.domain.config.Live2DSettings
 import com.something.sthkey.domain.config.Opacity
 import com.something.sthkey.domain.config.ShadowMode
 import com.something.sthkey.domain.config.TextShadow
+import com.something.sthkey.domain.config.TouchFeelSpec
+import com.something.sthkey.domain.config.TouchRegionBinding
+import com.something.sthkey.domain.config.TouchRegion
+import com.something.sthkey.domain.config.TouchRegionSpec
+import com.something.sthkey.domain.config.TouchSettings
+import com.something.sthkey.domain.config.TouchStickFeel
+import com.something.sthkey.domain.config.TouchStickSettings
 import com.something.sthkey.domain.config.defaultConfig
 import com.something.sthkey.domain.config.defaultKeyMappings
 import com.something.sthkey.domain.config.migratedOutlineColors
@@ -84,10 +91,240 @@ object JsonConfigCodec {
      *
      * 唯一还需要人盯的是 [KEY_LABELS]（给人看的措辞，没法推导），
      * 漏了不会错数据，只会在导入报告里露出内部键名。
+     *
+     * ============================================================
+     * ⚠️⚠️ 它必须遍历**每一种样式**（不能只探一份配置）
+     * ============================================================
+     * 编码改成"按样式只写相关字段"之后（见 [STYLE_SPECIFIC_KEYS]），
+     * 手柄样式的 `showShoulderButtons` / `aButtonOnTop` 这类字段
+     * **在键盘样式的探针里根本不会被写出来** —— 于是它们掉出这个集合，
+     * 导入游戏手柄配置时会被报成"未识别字段"。
+     *
+     * ⚠️ 所以这里改成**每种样式各探一份、取并集**。
+     * "从编码结果反推字段清单"这个机制本身没问题，
+     * 但**探针必须覆盖编码的所有分支** —— 条件写、按样式写，都算分支。
      */
     val KNOWN_KEYS: Set<String> by lazy {
-        encode(probeConfigForKnownKeys()).keys().asSequence().toSet()
+        probeConfigsForKnownKeys()
+            .flatMap { encode(it).keys().asSequence().toList() }
+            .toSet()
     }
+
+    /**
+     * **某个样式的配置本该有哪些字段**。
+     *
+     * ============================================================
+     * ⚠️⚠️ 为什么需要它（用户报的第二个问题）
+     * ============================================================
+     * 用户的原话:
+     *
+     * > 不过现在导入配置显示的字段差异还没改，我**导出再导入有一大堆字段差异**，
+     * > 不过实际上没什么区别
+     *
+     * ⚠️ 成因:导入报告的"缺失字段"拿 [KNOWN_KEYS] 当基准，
+     * 而那是**所有样式的并集**。编码改成按样式只写相关字段之后
+     * （见 [STYLE_SPECIFIC_KEYS]），一份自定义 Key 配置里
+     * 自然没有键盘/手柄那一堆字段 —— 于是每导入一次自家导出的包，
+     * 报告都会列出一长串"这些字段用了默认值"。
+     *
+     * ⚠️ 那是**把正常情况说成异常** —— 与 `MANIFEST_OWNED_KEYS`
+     * 当初要解决的问题一模一样（见那边的注释）。
+     *
+     * ⚠️ 所以基准要**按归档的样式**算:自定义 Key 的包只跟自定义 Key
+     * 该有的字段比，不多不少。
+     *
+     * ⚠️ 认不出的 `styleId`（来自更新版本的包）一律回落到
+     * [OverlayStyleRegistry.defaultStyleId] —— 那时报告的"未知字段"
+     * 才是真正该提示的东西。
+     */
+    fun expectedKeysFor(styleId: String): Set<String> {
+        val resolved = OverlayStyleRegistry.resolveOrDefault(styleId).id
+        return probeConfigsForKnownKeys()
+            .firstOrNull { it.styleId == resolved }
+            ?.let { encode(it).keys().asSequence().toSet() }
+            ?: KNOWN_KEYS
+    }
+
+    /**
+     * **哪些字段只对某些样式有意义** —— 编码时按 `styleId` 门控的唯一真源。
+     *
+     * ============================================================
+     * ⚠️⚠️ 为什么要这张表（用户报的问题）
+     * ============================================================
+     * 用户的原话:
+     *
+     * > 现在这个自定义 key 的配置字段里为什么会有 aButtonOnTop，showSpaceKey，
+     * > spaceKeyOnTop，showAButton 这些字段，这些字段不应该出现在自定义 key 里，
+     * > 因为本身就没什么用，自定义 key 的组件都是自己创建调整的
+     * >
+     * > 也不止自定义 key 字段有问题，别的也是，例如键盘样式配置字段里居然
+     * > 出现了 showAButton 和 aButtonOnTop，这两个应该是独属于手柄样式的字段
+     * > …… 我不想搞这种冗余的逻辑 …… 不要让配置字段里出现这个配置中多余的字段
+     *
+     * ⚠️ 他说得对。以前的做法是"所有字段无条件全写"，理由写的是
+     * "用户可能临时切走样式再切回来，不写会丢设置"。
+     *
+     * ⚠️⚠️ **而那个理由是不成立的**:样式创建后就**不能切换** ——
+     * 见 `ConfigListScreen` 里那句"不同样式的配置互不通用，创建后不能切换样式"
+     * 以及 `ConfigStore` 的样式解析。所以"切走再切回"这个场景**不存在**，
+     * 无条件写只换来一堆与这份配置无关的字段。
+     *
+     * ============================================================
+     * 表里没列出的字段 = **所有样式都写**（身份、外观等共用字段）
+     * ============================================================
+     * 只有"确实只属于某个样式"的才登记在这里 ——
+     * 表越短越好维护，而漏登记一个的后果只是"多写一个字段"（旧行为），
+     * 不会丢数据。
+     *
+     * ⚠️ 判据一律是**布局代码真的读它**，不是"看起来像"。
+     * 每一行的注释都写了读它的位置，改之前先看那里。
+     */
+    /**
+     * 有**键位网格**的三个样式（键盘 / 手柄 / **触屏**）。
+     *
+     * ⚠️ 布局、文字、外观那一大批字段只有这三个样式会读 ——
+     * 自定义 Key 与 Live2D 各有自己的一套（见 [STYLE_SPECIFIC_KEYS]）。
+     *
+     * ============================================================
+     * ⚠️⚠️ 触屏原来**不在这里** —— 那是"配置没做持久化"的根因
+     * ============================================================
+     * 用户的原话:
+     *
+     * > 刚刚发现的一些漏洞，**触屏配置有些东西没做配置持久化**，
+     * > 我就不一一列出了你自己排查
+     *
+     * ⚠️ 排查结果:触屏的**外观**（文字缩放/圆角/描边/阴影/透明度/字体）、
+     * **CPS**、**按键高度与间距**、**文字偏移与字间距**……
+     * **全都没被编码**，于是每次重启应用都回到默认值。
+     *
+     * ⚠️ 根因是这一行只列了两个样式，而触屏**本来就是"键盘布局 + 摇杆"**
+     * （见 `KeyLayout.usesJoystickLayout`）—— 它读的就是这一批字段。
+     *
+     * ⚠️ 这与用户在行为栏上的要求是同一个道理:
+     *
+     * > 触屏样式内，行为栏的功能外显都做成**与键盘样式一样**的
+     */
+    private val KEY_GRID_STYLES = setOf(StyleId.KEYSTROKES, StyleId.GAMEPAD2, StyleId.TOUCHING)
+
+    private val STYLE_SPECIFIC_KEYS: Map<String, Set<String>> = mapOf(
+        /*
+         * ── 「显示 SPACE 键」与「SPACE 键置顶」──
+         *
+         * ⚠️⚠️ **键盘与触屏都有**，只是含义按样式对齐到"那个 Space 组件"
+         * ============================================================
+         * 用户的原话:
+         *
+         * > 你应该想的是，把现在的「显示 SPACE 键」**改为绑定在现在触屏样式
+         * > 已经默认有的这个 Space 组件上**，并让他**默认打开**，
+         * > 而不是删去，**Space 置顶也用得到啊**，你这样改不合适吧
+         *
+         * ⚠️ 他说得对 —— 我上一版想"删掉开关"，方向错了。
+         *
+         * ⚠️ 正确的做法见 `touchingKeyMappings`:触屏**改用键盘那个 `SPACE`
+         * 槽位**当 Space（并把多余的 `A_BUTTON` 行藏起来），
+         * 于是开关与置顶**都作用在同一个组件上**。
+         *
+         * ⚠️ 手柄**不在这一组里** —— 它拿 `A_BUTTON` 当空格位、
+         * 显示 "A"，那个槽位有自己的开关（「显示 A 键」/「A 键置顶」），
+         * 再加一对会重复。
+         */
+        "showSpaceKey" to setOf(StyleId.KEYSTROKES, StyleId.TOUCHING),
+        "spaceKeyOnTop" to setOf(StyleId.KEYSTROKES, StyleId.TOUCHING),
+
+        /* ── 只属于手柄（标准）样式 —— 全在 KeyLayout.joystickLayoutBoxes 里 ── */
+        "showShoulderButtons" to setOf(StyleId.GAMEPAD2),
+        "showAButton" to setOf(StyleId.GAMEPAD2),
+        "aButtonOnTop" to setOf(StyleId.GAMEPAD2),
+
+        /*
+         * ⚠️ **摇杆互换：手柄与触屏共用** —— 用户明确要求触屏保留它。
+         *
+         * ⚠️ 判据是"有没有两个摇杆"，而那正是 `usesJoystickLayout`
+         * （键盘与自定义 Key 没有摇杆，显示这个开关点了也没反应）。
+         */
+        "swapSticks" to setOf(StyleId.GAMEPAD2, StyleId.TOUCHING),
+
+        /* ── 只属于 Live2D 样式 ── */
+        "live2d" to setOf(StyleId.KEYBOARD_CAT),
+
+        /*
+         * ============================================================
+         * ⚠️⚠️ 下面这一大批**只写给有键位网格的两个样式**
+         * ============================================================
+         * 自定义 Key 连"窗口里有什么"都是用户在编辑器里摆出来的 ——
+         * 所以这些"布局 / 文字 / 外观"字段它**一个都不读**。
+         *
+         * ⚠️ 这不是新判断，是 [KeyStrokesConfig] 里**早就写好的规格**
+         * （见它 `custom` 字段的注释）:
+         *
+         * > 上面那整套字段（keySize / keyGap / colors / outline / opacity /
+         * > cornerRadius / animationMode / showShiftKey / showMouseButtons /
+         * > mouseCpsEnabled / keyMappings…）**一个都不适用**……
+         * > 唯一仍然共用的是 `scalePercent`（整体缩放）
+         *
+         * ⚠️ 只是**编码器一直没照做**，于是自定义配置里堆了一大堆
+         * 与它无关的字段（用户报的正是这个）。
+         *
+         * ⚠️ 每一项的"自定义 Key 用什么替代":
+         *
+         * | 字段 | 自定义 Key 里的对应物 |
+         * |---|---|
+         * | 文字缩放 / 圆角 / 动画 / 描边 / 阴影 / 透明度 / 字体 | **每个组件自己的 `ComponentStyle`** |
+         * | 文字偏移 / 字间距 | **每个组件自己的字段**（`textOffsetX` 等） |
+         * | 键高 / 键间距 | 画布尺寸来自**组件包围盒**（`CustomLayout.bounds`） |
+         * | CPS 开关与模板 | 由**文本里的 `(cps)` / `(cps2)` 占位符**决定 |
+         * | 显示 SHIFT / 鼠标键 | 画布上没有这两个槽位 |
+         */
+        "textScalePercent" to KEY_GRID_STYLES,
+        "cornerRadiusEnabled" to KEY_GRID_STYLES,
+        "cornerRadiusPercent" to KEY_GRID_STYLES,
+        "animationMode" to KEY_GRID_STYLES,
+        "animationDurationSec" to KEY_GRID_STYLES,
+        "showShiftKey" to KEY_GRID_STYLES,
+        "showMouseButtons" to KEY_GRID_STYLES,
+        "keyHeightPercent" to KEY_GRID_STYLES,
+        "keyGapPercent" to KEY_GRID_STYLES,
+        "mouseCpsEnabled" to KEY_GRID_STYLES,
+        "mouseCpsMode" to KEY_GRID_STYLES,
+        "cpsTextTemplate" to KEY_GRID_STYLES,
+        "cpsTextTemplateMode1" to KEY_GRID_STYLES,
+        "bitmapFontId" to KEY_GRID_STYLES,
+        "textOffsetX" to KEY_GRID_STYLES,
+        "textOffsetY" to KEY_GRID_STYLES,
+        "slotTextOffsets" to KEY_GRID_STYLES,
+        "textSpacing" to KEY_GRID_STYLES,
+        "slotTextSpacings" to KEY_GRID_STYLES,
+        "outline" to KEY_GRID_STYLES,
+        "shadow" to KEY_GRID_STYLES,
+        "opacity" to KEY_GRID_STYLES,
+
+        /* ── 只属于触屏样式 ── */
+        "touch" to setOf(StyleId.TOUCHING),
+
+        /* ── 只属于自定义 Key 样式 ── */
+        "custom" to setOf(StyleId.CUSTOM_KEY),
+        "customOpacityPercent" to setOf(StyleId.CUSTOM_KEY),
+
+        /*
+         * ============================================================
+         * ⚠️ 这三个**所有样式都写**，虽然看起来"像"某个样式专有
+         * ============================================================
+         * | 字段 | 为什么留着 |
+         * |---|---|
+         * | `scalePercent` | 规格里明写"唯一仍然共用的是它" |
+         * | `colors` / `fontId` | ⚠️ 它们是**新建组件时的初始值来源** —— `ComponentFactory` 会读它给新组件定初始颜色与字体。删了的话用户新建的按键组件颜色就回默认了 |
+         * | `joystick` | 同理:新建摇杆组件时拿它当初始观感 |
+         * | `keyMappings` | 自定义 Key 的 CPS 占位符要靠它把键码解析到槽位（`KeyLayout.codeToSlotMap`） |
+         */
+    )
+
+    /**
+     * 这个样式该不该写这个键。
+     *
+     * ⚠️ 用 `getOrElse` 而不是 `get`:表里没有的键 = **所有样式都写**。
+     */
+    private fun appliesTo(styleId: String, key: String): Boolean =
+        STYLE_SPECIFIC_KEYS[key]?.let { styleId in it } ?: true
 
     /**
      * 用来推导 [KNOWN_KEYS] 的探针配置：**每个开关都打开**。
@@ -196,6 +433,40 @@ object JsonConfigCodec {
     }
 
     /**
+     * [KNOWN_KEYS] 的探针:**每种样式各一份**。
+     *
+     * ============================================================
+     * ⚠️ 为什么不能只探一份
+     * ============================================================
+     * 编码现在是**按样式门控**的（见 [STYLE_SPECIFIC_KEYS]）:
+     * 键盘样式的配置里不会写 `showAButton`、手柄样式的配置里不会写
+     * `spaceKeyOnTop`。只探一份的话，另一种样式的专有字段就**不在
+     * [KNOWN_KEYS] 里**，于是导入那种配置时会被报成"未识别字段" ——
+     * 「我们自己写的字段，我们自己说不认识」那个老毛病又回来了。
+     *
+     * ⚠️ 所以"探针要覆盖编码的所有分支"这条规则，在引入样式门控之后
+     * 就升级成"每种样式都要探"。
+     *
+     * ⚠️ 三种 **活跃**样式都列上。`gamepad1` 已下线（只剩渲染代码、
+     * 注册表里被注释掉），不必为它保字段 —— 真要重新上线，
+     * 它的字段就是 `gamepad2` 那一套。
+     *
+     * ⚠️ **每加一个样式都要往这里加一项** —— 漏了的话那个样式的
+     * 专属字段就掉出 [KNOWN_KEYS]，导入时被报成"未识别字段"。
+     * `StyleSpecificFieldsTest` 会在门控表出现新样式时报红，提醒这里。
+     */
+    private fun probeConfigsForKnownKeys(): List<KeyStrokesConfig> =
+        listOf(
+            StyleId.KEYSTROKES,
+            StyleId.GAMEPAD2,
+            StyleId.KEYBOARD_CAT,
+            StyleId.TOUCHING,
+            StyleId.CUSTOM_KEY,
+        ).map { styleId ->
+            probeConfigForKnownKeys().copy(styleId = styleId)
+        }
+
+    /**
      * 字段 → 中文说明。
      *
      * 导入报告里直接展示这个说明，而不是让用户看 `animationDurationSec`
@@ -208,8 +479,15 @@ object JsonConfigCodec {
         "id" to "配置标识",
         "builtIn" to "内置标记",
         "styleId" to "悬浮窗样式",
-        "keySize" to "按键大小",
-        "keyGap" to "键间距",
+        /*
+         * ⚠️ `keySize` / `keyGap` 的说明**故意不在这里** ——
+         * 这两个字段已经不再写出（见 `encodeForStorage` 里那段），
+         * 留着说明只会让人以为它们还在用。
+         *
+         * ⚠️ 解码端**仍然接受**它们（旧配置里带着）——
+         * 那种情况下导入报告会露出内部键名，这是可接受的代价:
+         * 它只在读**老配置**时出现，而"不让人以为死字段还活着"更重要。
+         */
         "keyHeightPercent" to "按键高度",
         "keyGapPercent" to "按键间距",
         "scalePercent" to "整体缩放",
@@ -399,19 +677,54 @@ object JsonConfigCodec {
         put("description", config.description)
         put("builtIn", config.builtIn)
         put("styleId", config.styleId)
-        put("keySize", config.keySize.toDouble())
-        put("keyGap", config.keyGap.toDouble())
+        /*
+         * ============================================================
+         * ⚠️⚠️ `keySize` / `keyGap` **不再写**（它们对所有样式都是死字段）
+         * ============================================================
+         * 这两个字段被**声明、被往返、被"恢复默认参数"复制**，
+         * 但**没有任何布局代码读它们**:
+         *
+         * - 真实键宽是常量 `KeyLayout.KEY_SIZE`；
+         * - 真实间距是常量 `KeyLayout.GAP × keyGapPercent / 100`。
+         *
+         * ⚠️ 项目自己的注释早就写明了这件事 —— 见 `KeyToCustomConverter`
+         * 开头那段:"配置里的 `keySize` / `keyGap` 两个字段其实没有被布局使用"。
+         * 只是编码器一直还在往外写。
+         *
+         * ⚠️ 读的那一侧**保留**（`decode` 仍然接受它们）——
+         * 旧配置里带着这两个键、删了会变成"未识别字段"。
+         * 写的时候不写、读的时候认得，是最省事且不丢数据的方向。
+         */
         put("scalePercent", config.scalePercent)
-        put("textScalePercent", config.textScalePercent)
-        put("cornerRadiusEnabled", config.cornerRadiusEnabled)
-        put("cornerRadiusPercent", config.cornerRadiusPercent.toDouble())
-        put("animationMode", config.animationMode.id)
-        put("animationDurationSec", config.animationDurationSec.toDouble())
-        put("showShiftKey", config.showShiftKey)
-        put("showMouseButtons", config.showMouseButtons)
-        put("showShoulderButtons", config.showShoulderButtons)
-        put("showAButton", config.showAButton)
-        put("aButtonOnTop", config.aButtonOnTop)
+        if (appliesTo(config.styleId, "textScalePercent")) {
+            put("textScalePercent", config.textScalePercent)
+            put("cornerRadiusEnabled", config.cornerRadiusEnabled)
+            put("cornerRadiusPercent", config.cornerRadiusPercent.toDouble())
+            put("animationMode", config.animationMode.id)
+            put("animationDurationSec", config.animationDurationSec.toDouble())
+            put("showShiftKey", config.showShiftKey)
+            put("showMouseButtons", config.showMouseButtons)
+        }
+        /*
+         * ============================================================
+         * ⚠️ 下面这几个**只写给用得到的样式**（见 [STYLE_SPECIFIC_KEYS]）
+         * ============================================================
+         * `showShoulderButtons` / `showAButton` / `aButtonOnTop` / `swapSticks`
+         * 只有手柄（标准）样式会读（全在 `KeyLayout.joystickLayoutBoxes` 里），
+         * `showSpaceKey` / `spaceKeyOnTop` 只有键盘样式会读
+         * （`KeyLayout.keys` 的键盘分支）。
+         *
+         * ⚠️ `showSpaceKey` 那段的"必须无条件写"依然成立 ——
+         * 这里只是**对它适用的样式**无条件写，与"要不要按样式门控"
+         * 是两件事（那段讲的是"不能因为等于默认值就不写"）。
+         */
+        if (appliesTo(config.styleId, "showShoulderButtons")) {
+            put("showShoulderButtons", config.showShoulderButtons)
+        }
+        if (appliesTo(config.styleId, "showAButton")) {
+            put("showAButton", config.showAButton)
+            put("aButtonOnTop", config.aButtonOnTop)
+        }
         /*
          * ============================================================
          * ⚠️ `showSpaceKey` **无条件写**（试过条件写，翻车了）
@@ -427,17 +740,34 @@ object JsonConfigCodec {
          * ⚠️ 顺带:这里写的是 `config.showSpaceKey` 本身，不做任何判断 ——
          * 判断一多就会有人（包括我自己）在解码那边试图"反推意图"，
          * 而那种反推必然吃掉用户的真实选择。
+         *
+         * ⚠️ 它**只写给键盘样式**（`spaceKeyOnTop` 同理）——
+         * gamepad2 那边管行顺序的是 `aButtonOnTop`，两个字段互不相干。
          */
-        put("showSpaceKey", config.showSpaceKey)
-        put("spaceKeyOnTop", config.spaceKeyOnTop)
-        put("swapSticks", config.swapSticks)
-        put("keyHeightPercent", config.keyHeightPercent)
-        put("keyGapPercent", config.keyGapPercent)
+        if (appliesTo(config.styleId, "showSpaceKey")) {
+            put("showSpaceKey", config.showSpaceKey)
+            put("spaceKeyOnTop", config.spaceKeyOnTop)
+        }
+        /* ⚠️ 原来这里还有一行重复的 `put("spaceKeyOnTop", ...)`，已删 */
+        if (appliesTo(config.styleId, "swapSticks")) {
+            put("swapSticks", config.swapSticks)
+        }
+        if (appliesTo(config.styleId, "keyHeightPercent")) {
+            put("keyHeightPercent", config.keyHeightPercent)
+            put("keyGapPercent", config.keyGapPercent)
+        }
+        /*
+         * ⚠️ `joystick` **所有样式都写** —— 它不只是"手柄的观感"，
+         * 还是**新建摇杆组件时的初始观感**（见 `ComponentFactory`）。
+         * 自定义 Key 里加一个摇杆组件时读的就是它。
+         */
         put("joystick", encodeJoystick(config.joystick))
-        put("mouseCpsEnabled", config.mouseCpsEnabled)
-        put("mouseCpsMode", config.mouseCpsMode)
-        put("cpsTextTemplate", config.cpsTextTemplate)
-        put("cpsTextTemplateMode1", config.cpsTextTemplateMode1)
+        if (appliesTo(config.styleId, "mouseCpsEnabled")) {
+            put("mouseCpsEnabled", config.mouseCpsEnabled)
+            put("mouseCpsMode", config.mouseCpsMode)
+            put("cpsTextTemplate", config.cpsTextTemplate)
+            put("cpsTextTemplateMode1", config.cpsTextTemplateMode1)
+        }
 
         put("colors", JSONObject().apply {
             put("keyUp", config.colors.keyUp)
@@ -453,11 +783,19 @@ object JsonConfigCodec {
 
         // 字体标识：不存的话重启后会回落到默认字体
         put("fontId", config.fontId)
-        put("bitmapFontId", config.bitmapFontId)
+        if (appliesTo(config.styleId, "bitmapFontId")) {
+            put("bitmapFontId", config.bitmapFontId)
+        }
 
-        // 文字偏移：图片字体常需要按图集微调，不存的话重启就白调了
-        put("textOffsetX", config.textOffsetX.toDouble())
-        put("textOffsetY", config.textOffsetY.toDouble())
+        /*
+         * 文字偏移 / 每槽位偏移 / 字间距 —— 与上面同一类，
+         * 只有**有键位网格的两个样式**会读（自定义 Key 是每组件各一套）。
+         */
+        if (appliesTo(config.styleId, "textOffsetX")) {
+            // 文字偏移：图片字体常需要按图集微调，不存的话重启就白调了
+            put("textOffsetX", config.textOffsetX.toDouble())
+            put("textOffsetY", config.textOffsetY.toDouble())
+        }
 
         /*
          * 每个槽位各自的偏移。
@@ -466,7 +804,7 @@ object JsonConfigCodec {
          * 数组要靠下标与槽位列表对应，布局一变就会错位；
          * 用槽位 id 做键则天然稳定，也不必保证"两个数组一样长"。
          *
-         * ⚠️ **无条件写**，哪怕为空。
+         * ⚠️ **在适用的样式里无条件写**，哪怕为空。
          *
          * 早先写的是"非空才写"，结果有两处不对：
          * 1. 读的时候无条件读、写的时候却不写 —— 编解码本身就是不对称的；
@@ -476,85 +814,98 @@ object JsonConfigCodec {
          *
          * 一个空对象（`{}`）的开销可以忽略，换来的是"读写对称 + 键始终已注册"。
          */
-        put(
-            "slotTextOffsets",
-            JSONObject().apply {
-                config.slotTextOffsets.forEach { (slotId, offset) ->
-                    put(
-                        slotId,
-                        JSONObject().apply {
-                            put("x", offset.x.toDouble())
-                            put("y", offset.y.toDouble())
-                        },
-                    )
-                }
-            },
-        )
+        if (appliesTo(config.styleId, "slotTextOffsets")) {
+            put(
+                "slotTextOffsets",
+                JSONObject().apply {
+                    config.slotTextOffsets.forEach { (slotId, offset) ->
+                        put(
+                            slotId,
+                            JSONObject().apply {
+                                put("x", offset.x.toDouble())
+                                put("y", offset.y.toDouble())
+                            },
+                        )
+                    }
+                },
+            )
+        }
 
         /*
          * 字间距 / 行间距：与文字偏移**同一套结构**（全局 + 每槽位）。
          *
-         * 同样**无条件写** —— 理由与上面 `slotTextOffsets` 完全一样
+         * 同样在适用样式里**无条件写** —— 理由与上面 `slotTextOffsets` 完全一样
          * （读写对称 + 键始终在 KNOWN_KEYS 里）。
          */
-        put(
-            "textSpacing",
-            JSONObject().apply {
-                put("letter", config.textSpacing.letter.toDouble())
-                put("line", config.textSpacing.line.toDouble())
-            },
-        )
-        put(
-            "slotTextSpacings",
-            JSONObject().apply {
-                config.slotTextSpacings.forEach { (slotId, spacing) ->
-                    put(
-                        slotId,
-                        JSONObject().apply {
-                            put("letter", spacing.letter.toDouble())
-                            put("line", spacing.line.toDouble())
-                        },
-                    )
-                }
-            },
-        )
+        if (appliesTo(config.styleId, "textSpacing")) {
+            put(
+                "textSpacing",
+                JSONObject().apply {
+                    put("letter", config.textSpacing.letter.toDouble())
+                    put("line", config.textSpacing.line.toDouble())
+                },
+            )
+        }
+        if (appliesTo(config.styleId, "textSpacing")) {
+            put(
+                "slotTextSpacings",
+                JSONObject().apply {
+                    config.slotTextSpacings.forEach { (slotId, spacing) ->
+                        put(
+                            slotId,
+                            JSONObject().apply {
+                                put("letter", spacing.letter.toDouble())
+                                put("line", spacing.line.toDouble())
+                            },
+                        )
+                    }
+                },
+            )
+        }
 
-        put(
-            "outline",
-            JSONObject().apply {
-                put("enabled", config.outline.enabled)
-                put("width", config.outline.width.toDouble())
-                /*
-                 * ⚠️ 颜色**不写在这里了**（已搬到 colors.outlineUp/outlineDown）。
-                 * 老版本读的是这个字段，所以导出时不再写它 ——
-                 * 新导入的包一律走 colors 那一套，兼容分支只对真正的老数据生效。
-                 */
-            },
-        )
+        /* ⚠️ 描边 / 阴影 / 透明度都是"键帽级"的外观 —— 只有键位网格样式读它们 */
+        if (appliesTo(config.styleId, "outline")) {
+            put(
+                "outline",
+                JSONObject().apply {
+                    put("enabled", config.outline.enabled)
+                    put("width", config.outline.width.toDouble())
+                    /*
+                     * ⚠️ 颜色**不写在这里了**（已搬到 colors.outlineUp/outlineDown）。
+                     * 老版本读的是这个字段，所以导出时不再写它 ——
+                     * 新导入的包一律走 colors 那一套，兼容分支只对真正的老数据生效。
+                     */
+                },
+            )
+        }
 
-        put(
-            "shadow",
-            JSONObject().apply {
-                put("enabled", config.shadow.enabled)
-                put("mode", config.shadow.mode.id)
-                put("size", config.shadow.size.toDouble())
-            },
-        )
+        if (appliesTo(config.styleId, "shadow")) {
+            put(
+                "shadow",
+                JSONObject().apply {
+                    put("enabled", config.shadow.enabled)
+                    put("mode", config.shadow.mode.id)
+                    put("size", config.shadow.size.toDouble())
+                },
+            )
+        }
 
-        put(
-            "opacity",
-            JSONObject().apply {
-                // 八个值：四个元素 × 按下/未按下
-                put("keyUp", config.opacity.keyUp)
-                put("keyDown", config.opacity.keyDown)
-                put("textUp", config.opacity.textUp)
-                put("textDown", config.opacity.textDown)
-                put("outlineUp", config.opacity.outlineUp)
-                put("outlineDown", config.opacity.outlineDown)
-                put("shadowUp", config.opacity.shadowUp)
-                put("shadowDown", config.opacity.shadowDown)
-            },
-        )
+        if (appliesTo(config.styleId, "opacity")) {
+            put(
+                "opacity",
+                JSONObject().apply {
+                    // 八个值：四个元素 × 按下/未按下
+                    put("keyUp", config.opacity.keyUp)
+                    put("keyDown", config.opacity.keyDown)
+                    put("textUp", config.opacity.textUp)
+                    put("textDown", config.opacity.textDown)
+                    put("outlineUp", config.opacity.outlineUp)
+                    put("outlineDown", config.opacity.outlineDown)
+                    put("shadowUp", config.opacity.shadowUp)
+                    put("shadowDown", config.opacity.shadowDown)
+                },
+            )
+        }
 
         put(
             "keyMappings",
@@ -579,28 +930,47 @@ object JsonConfigCodec {
         /*
          * Live2D 设置单独一块。
          *
-         * 按键样式用不到它，但**照样写出去** —— 用户可能随时把样式切到 Live2D，
-         * 不写的话那些设置会在切换时悄悄丢回默认值。
+         * ⚠️ 只写给 **Live2D 样式**。
+         *
+         * ⚠️ 原来这里写的是"按键样式用不到它，但照样写出去 ——
+         * 用户可能随时把样式切到 Live2D"。**那个理由不成立**:
+         * 样式创建后不能切换（见 [STYLE_SPECIFIC_KEYS] 那段）。
+         * 一份键盘配置里出现 `live2d` 只是与它无关的字段。
          */
-        put(
-            "live2d",
-            JSONObject().apply {
-                put("modelId", config.live2d.modelId)
-                put("opacityPercent", config.live2d.opacityPercent)
-            },
-        )
+        if (appliesTo(config.styleId, "live2d")) {
+            put(
+                "live2d",
+                JSONObject().apply {
+                    put("modelId", config.live2d.modelId)
+                    put("opacityPercent", config.live2d.opacityPercent)
+                },
+            )
+        }
 
-        // 自定义 Key 布局；同样与样式无关地照写（理由同上）
-        put("custom", CustomLayoutCodec.encode(config.custom))
+        /* ⚠️ 自定义 Key 布局：只写给自定义样式（理由同上） */
+        if (appliesTo(config.styleId, "custom")) {
+            put("custom", CustomLayoutCodec.encode(config.custom))
+        }
 
         /*
          * 自定义 Key 的**整体透明度**。
          *
-         * ⚠️ 与上面那些字段一样"与样式无关地照写" —— 只在
-         * [StyleId.CUSTOM_KEY] 下有意义，但换样式时不该把它丢掉
-         * （用户可能只是临时切走看一眼，再切回来）。
+         * ⚠️ 同样只写给自定义样式。原来写的是"换样式时不该把它丢掉
+         * （用户可能只是临时切走看一眼，再切回来）" —— 但**切不了**。
          */
-        put("customOpacityPercent", config.customOpacityPercent)
+        if (appliesTo(config.styleId, "customOpacityPercent")) {
+            put("customOpacityPercent", config.customOpacityPercent)
+        }
+
+        /*
+         * ⚠️ 触屏设置 —— **只写给触屏样式**。
+         *
+         * 它里面装着两个摇杆的缩放与手感、以及移动轮盘的触摸区域，
+         * 别的样式一个都不读（见 [TouchSettings] 的说明）。
+         */
+        if (appliesTo(config.styleId, "touch")) {
+            put("touch", encodeTouch(config.touch))
+        }
     }
 
     /*
@@ -699,6 +1069,26 @@ object JsonConfigCodec {
             showShiftKey = json.optBoolean("showShiftKey", false),
             showMouseButtons = json.optBoolean("showMouseButtons", true),
             showShoulderButtons = json.optBoolean("showShoulderButtons", false),
+            /*
+             * ============================================================
+             * ⚠️ `showAButton` 用**朴素缺省**就够了 —— 不需要按样式判断
+             * ============================================================
+             * ⚠️ 我上一版给它加了一段"按样式取缺省"的**特例处理**，
+             * 理由是"触屏不写这个字段 → 解码回 `true` → A 键行冒出来"。
+             *
+             * ⚠️ 但用户指出了更根本的修法:
+             *
+             * > 你应该**直接在触屏样式的配置字段直接去掉 showAButton** 吧。。。
+             * > 不然不是字段冗余了吗
+             *
+             * ⚠️ 对 —— 于是 `KeyLayout.joystickLayoutBoxes` 里加了
+             * `usesAButton`（**只有手柄读它**），触屏压根不看这个字段。
+             * 既然没人读，它存 `true` 还是 `false` 都无所谓，
+             * 那段特例自然就**没有存在的必要**了（相关函数也一并删掉）。
+             *
+             * ⚠️ 这就是"补丁"与"根治"的区别:补丁要维护两条必须一致的逻辑，
+             * 根治只需要**一个读它的地方都不留**。
+             */
             showAButton = json.optBoolean("showAButton", true),
             aButtonOnTop = json.optBoolean("aButtonOnTop", false),
             /*
@@ -811,6 +1201,169 @@ object JsonConfigCodec {
              * 不夹的话 alpha 会越界（>1 在某些设备上表现为整块不画）。
              */
             customOpacityPercent = json.optInt("customOpacityPercent", 100).coerceIn(0, 100),
+            touch = decodeTouch(json.optJSONObject("touch")),
+        )
+    }
+
+    /**
+     * 编码**触屏设置**。
+     *
+     * ⚠️ 每个数值都写**它自己那一份**，不做"与默认值相同就省掉"的优化:
+     * 省掉的话读回来只能靠默认值，而用户"特意调成默认值"与"没设过"
+     * 就分不出来了（`showSpaceKey` 那件事就是这么翻车的）。
+     *
+     * ⚠️ `regions` 是**列表**（每块区域绑一个槽位）:
+     * 空列表 = 用户还没配过（打开悬浮窗要弹提示）。
+     * 所以这里**不能**在空的时候写一个"默认区域"进去 ——
+     * 那会让"没配过"变成"配在了左下角"。
+     */
+    private fun encodeTouch(touch: TouchSettings): JSONObject = JSONObject().apply {
+        put(
+            "move",
+            JSONObject().apply {
+                put("sizeScale", touch.move.sizeScale.toDouble())
+                put("feel", encodeTouchFeel(touch.move.feel))
+            },
+        )
+        put(
+            "camera",
+            JSONObject().apply {
+                put("sizeScale", touch.camera.sizeScale.toDouble())
+                put("feel", encodeTouchFeel(touch.camera.feel))
+            },
+        )
+        /* ⚠️ 只在真有区域时写这个键 —— 见上面那段说明 */
+        if (touch.regions.isNotEmpty()) {
+            put(
+                "regions",
+                JSONArray().apply {
+                    touch.regions.forEach { region ->
+                        put(
+                            JSONObject().apply {
+                                put("slotId", region.slotId)
+                                put("centerX", region.centerX.toDouble())
+                                put("centerY", region.centerY.toDouble())
+                                put("size", region.size.toDouble())
+                                /*
+                                 * ⚠️ `pinned` **必须写** —— 它决定这块区域生不生效。
+                                 *
+                                 * ⚠️ 不写的话读回来一律是 `false`，于是
+                                 * **所有区域都失效、触屏彻底没反应**（一个很隐蔽的失能）。
+                                 *
+                                 * ⚠️ 而解码那边对"键不存在"有兼容处理（按 `true` 算），
+                                 * 见 [decodeTouch] —— 两者必须配对看。
+                                 */
+                                put("pinned", region.pinned)
+                            },
+                        )
+                    }
+                },
+            )
+        }
+    }
+
+    private fun encodeTouchFeel(feel: TouchStickFeel): JSONObject = JSONObject().apply {
+        put("deadZone", feel.deadZone.toDouble())
+        put("sensitivity", feel.sensitivity.toDouble())
+        put("smoothingMs", feel.smoothingMs.toDouble())
+    }
+
+    /**
+     * 读**触屏设置**。
+     *
+     * ⚠️ 每一处都 `coerceIn`:手改过的 JSON 里什么都可能有，
+     * 而越界的死区/灵敏度会让摇杆**永远不动**或**瞬间满偏** ——
+     * 那种表现很难让人联想到"某个数超了"。
+     */
+    private fun decodeTouch(json: JSONObject?): TouchSettings {
+        val defaults = TouchSettings()
+        if (json == null) return defaults
+
+        fun decodeStick(
+            obj: JSONObject?,
+            fallback: TouchStickSettings,
+        ): TouchStickSettings {
+            if (obj == null) return fallback
+            val feelObj = obj.optJSONObject("feel")
+            val feel = if (feelObj == null) {
+                fallback.feel
+            } else {
+                TouchFeelSpec.clamp(
+                    TouchStickFeel(
+                        deadZone = feelObj.optDouble("deadZone", fallback.feel.deadZone.toDouble())
+                            .toFloat(),
+                        sensitivity = feelObj.optDouble(
+                            "sensitivity",
+                            fallback.feel.sensitivity.toDouble(),
+                        ).toFloat(),
+                        smoothingMs = feelObj.optDouble(
+                            "smoothingMs",
+                            fallback.feel.smoothingMs.toDouble(),
+                        ).toFloat(),
+                    ),
+                )
+            }
+            return TouchStickSettings(
+                sizeScale = TouchFeelSpec.clampScale(
+                    obj.optDouble("sizeScale", fallback.sizeScale.toDouble()).toFloat(),
+                ),
+                feel = feel,
+            )
+        }
+
+        /*
+         * ⚠️ `regions` **只有 JSON 里真的有这个键时**才给内容 ——
+         * 不能 `?: 默认区域`（那会把"没配过"变成"配在左下角"，
+         * 于是用户再也看不到那句提示）。
+         *
+         * ⚠️ 逐项 `clamp` 并且**丢掉坏条目**（没有 slotId 的、坐标不是数的）——
+         * 手改过的 JSON 里什么都可能有，而一块坐标是 NaN 的区域
+         * 会让命中测试永远失败（表现是"这块区域按了没反应"）。
+         */
+        val regionsArray = json.optJSONArray("regions")
+        val regions = buildList {
+            if (regionsArray != null) {
+                for (i in 0 until regionsArray.length()) {
+                    val obj = regionsArray.optJSONObject(i) ?: continue
+                    val slotId = obj.optString("slotId")
+                    if (slotId.isBlank()) continue
+                    add(
+                        TouchRegionSpec.clamp(
+                            TouchRegionBinding(
+                                slotId = slotId,
+                                centerX = obj.optDouble("centerX", 0.5).toFloat(),
+                                centerY = obj.optDouble("centerY", 0.5).toFloat(),
+                                size = obj.optDouble("size", TouchRegionSpec.SIZE_DEFAULT.toDouble())
+                                    .toFloat(),
+                                /*
+                                 * ============================================================
+                                 * ⚠️⚠️ **缺省按 `true`**（与 `pinned` 字段声明的默认值相反）
+                                 * ============================================================
+                                 * 这是个**刻意的兼容处理**，理由:
+                                 *
+                                 * | 存档来源 | 有 `pinned` 键吗 | 该怎么办 |
+                                 * |---|---|---|
+                                 * | 旧版本写的 | ❌ 没有 | 那时**没有占位条目这回事**，写进去的都是用户真配过的 → 按 `true` |
+                                 * | 新版本写的 | ✅ 有 | 按它自己的值 |
+                                 *
+                                 * ⚠️ 按 `false` 的话，**所有老存档的触屏区域会一起失效** ——
+                                 * 用户升级后触屏突然不能用，而他什么都没改。
+                                 *
+                                 * ⚠️ 这正是 `pinned` 字段声明里那句"默认 false"要小心的地方:
+                                 * 那个默认值是给**新建**用的，不是给**读存档**用的。
+                                 */
+                                pinned = if (obj.has("pinned")) obj.optBoolean("pinned", true) else true,
+                            ),
+                        ),
+                    )
+                }
+            }
+        }
+
+        return TouchSettings(
+            move = decodeStick(json.optJSONObject("move"), defaults.move),
+            camera = decodeStick(json.optJSONObject("camera"), defaults.camera),
+            regions = regions,
         )
     }
 

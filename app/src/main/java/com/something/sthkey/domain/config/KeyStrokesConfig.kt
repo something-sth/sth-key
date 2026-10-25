@@ -622,6 +622,24 @@ data class KeyStrokesConfig(
      * 默认 100（不透明）:新配置看起来必须是"正常的样子"。
      */
     val customOpacityPercent: Int = 100,
+
+    /**
+     * **触屏**样式专有的设置（两个摇杆 + 触摸区域 + 手感）。
+     *
+     * ============================================================
+     * 与 [live2d] / [custom] 同一个思路:一块专属设置用一个嵌套对象
+     * ============================================================
+     * 触屏只是"长得像手柄"，输入来源完全不同 —— 见 [TouchSettings] 的说明。
+     *
+     * ⚠️ 为什么不复用 [joystick]（手柄摇杆的观感）:
+     * 那是"手柄摇杆在这个槽位里画多大、什么颜色"，
+     * 而触屏还要存**它自己的**缩放与手感。混在一起的话，
+     * 改触屏会把用手柄时的观感也改掉。
+     *
+     * ⚠️ 外观（颜色/圆角/描边）**仍然取自 [joystick]** ——
+     * 用户明确要求"UI 用同一套"，所以外观只有一份真源。
+     */
+    val touch: TouchSettings = TouchSettings(),
 ) {
     /** 样式描述；配置里存的样式 id 失效时自动回落到默认样式 */
     val style: OverlayStyleDescriptor
@@ -852,6 +870,102 @@ fun gamepad2KeyMappings(): List<KeyMapping> = listOf(
 )
 
 /**
+ * **触屏**样式的默认键位文字。
+ *
+ * ============================================================
+ * ⚠️ 用户指定的那一套（不是照抄手柄）
+ * ============================================================
+ * 用户的原话:
+ *
+ * > 默认的键位文字:A 改为 Space，LT 改为 LMB，RT 改成 RMB，
+ * > **LB 与 RB 是手柄样式专属的，触屏样式里不应该存在**，B 改为 Shift
+ *
+ * | 槽位 id | 手柄显示 | **触屏显示** |
+ * |---|---|---|
+ * | ⚠️ `SPACE` | — | **Space**（触屏用它当空格位） |
+ * | `SHIFT` | B | **Shift** |
+ * | `LMB` | LT | **LMB** |
+ * | `RMB` | RT | **RMB** |
+ * | ⚠️ `A_BUTTON` | A | ⚠️ **不用**（见下） |
+ * | `SHOULDER_L` / `SHOULDER_R` | LB / RB | ⚠️ **不存在** |
+ *
+ * ============================================================
+ * ⚠️⚠️ 触屏的 Space 用 `SPACE` 槽位，**不用 `A_BUTTON`**
+ * ============================================================
+ * 用户报的:
+ *
+ * > 触屏样式**已经默认带一个 Space 组件**了，但是行为栏里还有一个
+ * > 「开启 SPACE」是关闭的，**打开又会多一个 SPACE 组件**，
+ * > 而且「SPACE 置顶」也是置顶的这个**多余** SPACE 组件
+ *
+ * ⚠️ 我第一版把 `A_BUTTON` 的显示文字改成 "Space" —— 那是**错的**:
+ * 触屏于是有了一个"叫 Space 的 A 键"，而真正的 `SPACE` 槽位成了**多余的长条**，
+ * 「显示 SPACE 键」与「SPACE 置顶」都作用在那个多余的东西上。
+ *
+ * ⚠️ 用户指出的正确做法:
+ *
+ * > 把现在的「显示 SPACE 键」**改为绑定在现在触屏样式已经默认有的
+ * > 这个 Space 组件上**，并让他**默认打开**，而不是删去，
+ * > **Space 置顶也用得到啊**
+ *
+ * ⚠️ 所以触屏**改用 `SPACE` 槽位**，而 `A_BUTTON` 行由
+ * `showAButton = false` 关掉（见 `ConfigStore.create`）——
+ * 于是"显示 SPACE 键"与"SPACE 置顶"都作用在**同一个**组件上，
+ * 与键盘样式完全对齐（那正是用户要的"符合审美"）。
+ *
+ * ============================================================
+ * ⚠️ 为什么槽位 id 仍沿用键盘那套
+ * ============================================================
+ * 它们是**位置**的标识（见 `KeyLayout.Id`），屏幕上的位置不变 ——
+ * 换的只是"那个位置显示什么字"。这样布局代码一行都不用动。
+ *
+ * ============================================================
+ * ⚠️ `inputKeyCodes` 一律留空 —— 触屏不读物理按键
+ * ============================================================
+ * 它的输入来自屏幕坐标，由"触摸区域"回答"手指按哪里算操作哪个槽位"。
+ *
+ * ⚠️⚠️ 而**从 [gamepad2KeyMappings] 派生**（而不是自己写一份）:
+ * 自己写的话，以后手柄那边加槽位或改结构，触屏这份不会跟着变。
+ */
+fun touchingKeyMappings(): List<KeyMapping> =
+    gamepad2KeyMappings()
+        /*
+         * ⚠️ 去掉两类槽位:
+         * - 肩键（LB/RB）—— **手柄专属**，用户明确要求触屏不要
+         * - `A_BUTTON` —— 触屏的 Space 走 `SPACE` 槽位（见上面那段），
+         *   留着它会多出一个"叫 A 的键"，与 Space 重复
+         */
+        .filter {
+            it.id != KeyLayout.Id.SHOULDER_L &&
+                it.id != KeyLayout.Id.SHOULDER_R &&
+                it.id != KeyLayout.Id.A_BUTTON
+        }
+        .map { mapping ->
+            mapping.copy(
+                inputKeyCodes = emptyList(),
+                displayText = when (mapping.id) {
+                    "SHIFT" -> "Shift"
+                    "LMB" -> "LMB"
+                    "RMB" -> "RMB"
+                    /* ⚠️ 其余原样 —— 加了新槽位时不会静默丢掉它的名字 */
+                    else -> mapping.displayText
+                },
+            )
+        } +
+        /*
+         * ⚠️ `SPACE` 槽位手柄那套里没有（手柄拿 A 当空格位），
+         * 所以这里单独补一条 —— 它才是触屏的 Space。
+         */
+        listOf(
+            KeyMapping(
+                id = KeyLayout.Id.SPACE,
+                /* ⚠️ 触屏不读物理按键，所以不绑键码 */
+                inputKeyCodes = emptyList(),
+                displayText = "Space",
+            ),
+        )
+
+/**
  * 内置默认配置。
  *
  * 名称固定为 `Default`：它不可删除，是"配置被删光/数据损坏"时的兜底，
@@ -868,9 +982,17 @@ fun gamepad2KeyMappings(): List<KeyMapping> = listOf(
  * | 样式 | 含义 | 默认 |
  * |---|---|---|
  * | **键盘样式** | 显不显示空格那一行（v2.6.0 起才有这个开关） | **显示** |
+ * | 样式 | `showSpaceKey` 控制什么 | 缺省 |
+ * |---|---|---|
+ * | keystrokes | 显不显示 **SPACE 槽位** | ✅ **显示** |
+ * | **touching** | 显不显示 **SPACE 槽位**（⚠️ 它**就是**触屏的 Space） | ✅ **显示** |
  * | gamepad2 | 显不显示 **SPACE 槽位**（与 [KeyStrokesConfig.showAButton] **同一屏幕位置**） | **不显示** |
  *
  * 用户的原话:"key 样式，需要添加'显示 SPACE 键开关'（**默认开启**）"。
+ * 以及（触屏）:
+ *
+ * > 把现在的「显示 SPACE 键」**改为绑定在现在触屏样式已经默认有的
+ * > 这个 Space 组件上**，并让他**默认打开**
  *
  * ⚠️ 而字段的默认值**只能有一个**。取 `true` 的话:
  *
@@ -878,10 +1000,10 @@ fun gamepad2KeyMappings(): List<KeyMapping> = listOf(
  *   → **gamepad2 老配置凭空多出一行空格，和 A 键重叠**；
  * - 新建的 gamepad2 配置也同样是 `true` → 同样重叠。
  *
- * 取 `false` 的话键盘样式就不满足"默认开启"。
+ * 取 `false` 的话键盘与触屏就不满足"默认开启"。
  *
  * ⚠️ 所以:字段默认值保持 `false`（gamepad2 那边永远安全），
- * **键盘样式的"默认开"由这个函数表达**。
+ * **"默认开"由这个函数按样式表达**。
  * 布局、设置页、键位映射过滤都走它，就不会出现"三处各判一次、判断还不一样"。
  *
  * ⚠️ 用户**显式关掉**之后会存下 `false`，而这里仍然返回 `true` ——
@@ -889,7 +1011,9 @@ fun gamepad2KeyMappings(): List<KeyMapping> = listOf(
  * 见 `JsonConfigCodec` 里 `showSpaceKey` 那段（用 `json.has` 区分
  * "没写过"与"写的是 false"）。这个函数只管**缺省**，不管用户的选择。
  */
-fun defaultShowSpaceKey(styleId: String): Boolean = styleId == StyleId.KEYSTROKES
+fun defaultShowSpaceKey(styleId: String): Boolean =
+    styleId == StyleId.KEYSTROKES || styleId == StyleId.TOUCHING
+
 
 /**
  * 内置默认配置。

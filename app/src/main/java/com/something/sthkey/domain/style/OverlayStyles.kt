@@ -55,6 +55,19 @@ object StyleId {
      * 下面是空格与鼠标键）。
      */
     const val GAMEPAD2 = "gamepad2"
+
+    /**
+     * **触屏**样式：按屏幕上的触摸区域输出，与物理按键无关。
+     *
+     * ============================================================
+     * ⚠️ 命名沿用 snake_case，且**一旦发布就不能改**
+     * ============================================================
+     * 它会被写进用户配置的 `styleId` 里。
+     *
+     * ⚠️ 用 `touching` 而不是 `touch` —— 用户明确指定了这个 id
+     * （"配置里 styleid 写的是 touching"）。
+     */
+    const val TOUCHING = "touching"
 }
 
 /**
@@ -108,6 +121,16 @@ data class OverlayStyleDescriptor(
 enum class StyleCategory(val title: String) {
     KEYBOARD("键盘"),
     GAMEPAD("手柄"),
+
+    /**
+     * **触屏**。
+     *
+     * ⚠️ 单独一栏而不是塞进「手柄」:触屏的输出**不来自任何物理设备**，
+     * 而是用户在屏幕上划出来的。它与手柄只是"长得像"（两个摇杆），
+     * 运行原理完全不同 —— 混在一起会让人以为"接上手柄就能用"。
+     */
+    TOUCH("触屏"),
+
     GENERAL("通用"),
 }
 
@@ -215,7 +238,17 @@ object OverlayStyleRegistry {
         register(
             OverlayStyleDescriptor(
                 id = StyleId.GAMEPAD2,
-                label = "标准",
+                /*
+                 * ⚠️ 显示名从「标准」改成了「手柄」。
+                 *
+                 * 用户的原话:"之前手柄栏的配置是「标准」字样，但我感觉
+                 * 不是很方便表达，现在还没有加其他手柄样式，所以把「标准」
+                 * 字样改成「手柄」吧，这样也比较统一、直观"。
+                 *
+                 * ⚠️ 只改**显示名** —— `id` 是 `gamepad2`，
+                 * 它写在用户配置里，**永远不要动**。
+                 */
+                label = "手柄",
                 description = "键盘布局，WASD 那块换成左摇杆",
                 enabled = true,
                 iconKey = ICON_GAMEPAD,
@@ -286,6 +319,36 @@ object OverlayStyleRegistry {
                 },
             ),
         )
+
+        register(
+            OverlayStyleDescriptor(
+                id = StyleId.TOUCHING,
+                label = "触屏",
+                description = "在屏幕上划出触摸区域：一块当移动轮盘，其余滑动当视角",
+                enabled = true,
+                iconKey = ICON_TOUCH,
+                category = StyleCategory.TOUCH,
+                /*
+                 * ============================================================
+                 * ⚠️ 尺寸暂时**与手柄样式同源**
+                 * ============================================================
+                 * 因为触屏的可见部分就是"手柄那两个摇杆 + 长条键"。
+                 *
+                 * ⚠️ 等两个摇杆改成**组件化**（移动轮盘 / 视角摇杆各是一个
+                 * 可调大小与外观的组件）之后，这里要改成取组件的包围盒 ——
+                 * 届时与 [StyleId.CUSTOM_KEY] 那条路子一样用 `CustomLayout.bounds`。
+                 *
+                 * ⚠️ 布局层与这里**必须用同一个函数**，否则会出现"窗口很大、
+                 * 内容缩在一角"（手柄那边为这件事踩过一次，见 GAMEPAD2 的注释）。
+                 */
+                baseSize = { config, cpsBySlot ->
+                    OverlayBaseSize(
+                        width = KeyLayout.baseWidth(config),
+                        height = KeyLayout.baseHeight(config, cpsBySlot),
+                    )
+                },
+            ),
+        )
     }
 
     /** UI 图标标识 */
@@ -293,6 +356,16 @@ object OverlayStyleRegistry {
     const val ICON_LIVE2D = "live2d"
     const val ICON_CUSTOM = "custom"
     const val ICON_GAMEPAD = "gamepad"
+
+    /**
+     * 触屏样式。
+     *
+     * ⚠️ **不能与 [ICON_GAMEPAD] 共用** —— 手柄那个注释里写的是
+     * "两个手柄样式只是布局不同，共用一个图标免得用户以为是两种东西"。
+     * 而触屏与手柄**运行原理完全不同**（一个读物理设备、一个读屏幕触摸），
+     * 共图标会让用户以为"接上手柄就行"。
+     */
+    const val ICON_TOUCH = "touch"
 
     fun register(descriptor: OverlayStyleDescriptor) {
         descriptors[descriptor.id] = descriptor

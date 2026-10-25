@@ -54,13 +54,11 @@ import androidx.compose.material3.Surface
 import kotlin.math.roundToInt
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.Surface
 import kotlin.math.roundToInt
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material3.Switch
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
@@ -72,6 +70,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.something.sthkey.ui.component.ExpressiveSwitch
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -211,7 +210,7 @@ fun CustomLayoutEditorScreen(
     var selectedId by remember {
         mutableStateOf<String?>(draft.current.components.firstOrNull()?.id)
     }
-    var editingKeysFor by remember { mutableStateOf<KeyComponent?>(null) }
+    var editingListenFor by remember { mutableStateOf<KeyComponent?>(null) }
     /*
      * ⚠️ 「摇杆-键盘」的四个键位:必须带**第几个方向** —— 只存组件的话，
      * 点「下」也会改到「上」（与 `editingCpsKeysFor` 带占位符下标同一个理由）。
@@ -452,7 +451,7 @@ fun CustomLayoutEditorScreen(
             onEndContinuous = { draft.finishStep() },
             onPickFont = { showFontPicker = true },
             onPickBitmapFont = { showBitmapFontPicker = true },
-            onPickKeys = { key -> editingKeysFor = key },
+            onPickKeys = { key -> editingListenFor = key },
             onPickCpsKeys = { text, index -> editingCpsKeysFor = text to index },
             onPickJoystickKey = { joystick, index -> editingJoystickKeyFor = joystick to index },
         )
@@ -664,17 +663,33 @@ fun CustomLayoutEditorScreen(
         )
     }
 
-    editingKeysFor?.let { key ->
+    /*
+     * 「监听的键」—— 只绑**物理键**。
+     *
+     * ============================================================
+     * ⚠️⚠️ 触摸区域**不在这里**（返工后的结论）
+     * ============================================================
+     * 我第一版把触摸区域挂到**组件**上（`KeyComponent.touchBindings`），
+     * 于是这个对话框里要有一项「触屏」去加区域。用户否掉了那个模型:
+     *
+     * > 算了，我感觉这样**打补丁太难受了**，刚刚的方案漏洞百出，
+     * > 我们撤掉吧我重新想一个方案
+     *
+     * ⚠️ 新模型:**区域是配置级的独立实体**（见 `CustomTouchRegion`），
+     * 在**配置编辑页的「触屏设置」**里加、并在那里绑定组件 ——
+     * 所以这个对话框回到原来的样子:只管物理键。
+     */
+    editingListenFor?.let { key ->
         MultiKeyPickerDialog(
             title = "选择「${key.label.ifBlank { "按键" }}」监听的键",
             hint = "可以绑定多个物理键，任意一个按下都会点亮这个组件。" +
                 "例如左右 Shift 是两个不同的键码，两个都选上才会都亮。",
             initialCodes = key.inputKeyCodes,
             emptyHint = "当前未绑定任何按键（这个组件不会亮）",
-            onDismiss = { editingKeysFor = null },
+            onDismiss = { editingListenFor = null },
             onConfirm = { codes ->
                 draft.replace(key.withInputKeyCodes(codes))
-                editingKeysFor = null
+                editingListenFor = null
             },
         )
     }
@@ -696,6 +711,19 @@ fun CustomLayoutEditorScreen(
         val placeholders = CustomLayout.cpsPlaceholders(text.text)
         val placeholder = placeholders.getOrNull(placeholderIndex)
 
+        /*
+         * ⚠️ 回到**通用**的 `MultiKeyPickerDialog` —— 这一处只管物理键。
+         *
+         * 我第一版给它也接了「触屏」那一项（还加了"这块区域算给第几个
+         * 占位符"的 `placeholderIndex`），而那属于**已被否掉**的
+         * "区域挂在组件上"模型。用户的原话:
+         *
+         * > 算了，我感觉这样**打补丁太难受了**，刚刚的方案漏洞百出，
+         * > 我们撤掉吧我重新想一个方案
+         *
+         * ⚠️ 新模型下区域是**配置级的独立实体**（见 `CustomTouchRegion`），
+         * 在配置编辑页的「触屏设置」里加与绑定 —— 所以这里不再认识区域。
+         */
         MultiKeyPickerDialog(
             title = "第 ${placeholderIndex + 1} 个 CPS 占位符统计的键",
             hint = buildString {
@@ -1515,7 +1543,7 @@ private fun EditorOptionSwitch(
             )
         }
         Spacer(modifier = Modifier.width(12.dp))
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        ExpressiveSwitch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 

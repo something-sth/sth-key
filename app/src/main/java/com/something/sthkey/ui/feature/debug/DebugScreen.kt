@@ -1,31 +1,42 @@
-﻿package com.something.sthkey.ui.feature.debug
+package com.something.sthkey.ui.feature.debug
 
-import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ClipData
 import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.CompareArrows
+import androidx.compose.material.icons.rounded.Devices
+import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.Layers
+import androidx.compose.material.icons.rounded.Security
+import androidx.compose.material.icons.rounded.Sensors
+import androidx.compose.material.icons.rounded.Straighten
+import androidx.compose.material.icons.rounded.Terminal
+import androidx.compose.material.icons.rounded.TouchApp
+import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -39,10 +50,10 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -54,31 +65,34 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.something.sthkey.capture.CaptureSession
+import com.something.sthkey.capture.gamepad.RootGamepadLauncher
+import com.something.sthkey.capture.gamepad.ShizukuGamepadLauncher
 import com.something.sthkey.capture.OverlayService
 import com.something.sthkey.capture.shizuku.ShizukuShell
+import com.something.sthkey.capture.touch.TouchCapture
 import com.something.sthkey.core.log.AppLog
 import com.something.sthkey.core.log.CrashLogger
 import com.something.sthkey.core.log.LogLevel
 import com.something.sthkey.core.prefs.AppPrefs
-import com.something.sthkey.domain.capture.KeyMode
-import com.something.sthkey.ui.MainViewModel
+import com.something.sthkey.domain.style.StyleId
 import com.something.sthkey.ui.component.CardDivider
 import com.something.sthkey.ui.component.EmptyHint
+import com.something.sthkey.ui.component.findActivity
 import com.something.sthkey.ui.component.ScrollableScreen
 import com.something.sthkey.ui.component.SectionHeader
 import com.something.sthkey.ui.component.SectionHint
 import com.something.sthkey.ui.component.SettingItem
 import com.something.sthkey.ui.component.SettingsCard
 import com.something.sthkey.ui.component.SwitchItem
-import com.something.sthkey.ui.component.findActivity
+import com.something.sthkey.ui.MainViewModel
 import com.something.sthkey.ui.overlay.cpsDiagnosticReport
 import com.something.sthkey.ui.overlay.keyLayoutDiagnosticReport
 import com.something.sthkey.ui.overlay.liveWindowPickerHint
 import com.something.sthkey.ui.overlay.noLiveWindowReport
-import com.something.sthkey.domain.style.StyleId
 import com.something.sthkey.ui.theme.monoSmall
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
 
 /**
  * 调试页。
@@ -108,10 +122,18 @@ fun DebugScreen(
 
     var minLevelName by remember { mutableStateOf(prefs.logMinLevel) }
     var query by remember { mutableStateOf(prefs.logQuery) }
-    var pendingMode by remember { mutableStateOf(viewModel.requestedMode) }
 
-    /** 「检测直连通道」的结果；null = 还没点过 */
-    var probeResult by remember { mutableStateOf<String?>(null) }
+    /*
+     * ⚠️ 这里原来还有两个状态量，**已经跟着「采集模式」一起搬走**:
+     *
+     * | 搬走的 | 现在在哪 |
+     * |---|---|
+     * | `pendingMode`（待应用的采集模式） | `CaptureModeScreen` |
+     * | `probeResult`（Shizuku 直连自检结果） | `CaptureModeScreen` |
+     *
+     * ⚠️ 留在这里只会是**死变量** —— 它们不参与任何界面，
+     * 下一个人读到会以为这一页还有采集模式相关的逻辑。
+     */
 
     val minLevel = remember(minLevelName) {
         minLevelName?.let { name -> LogLevel.entries.firstOrNull { it.name == name } }
@@ -148,17 +170,13 @@ fun DebugScreen(
     var crashRevision by remember { mutableIntStateOf(0) }
     val crashText = remember(crashRevision) { CrashLogger.readLast(context) }
 
-    /*
-     * Shizuku 诊断状态。
-     *
-     * 手动刷新（按钮）而不是持续订阅：诊断信息变化不频繁，
-     * 持续订阅会让整页频繁重组，收益却很小。
-     */
-    val scope = rememberCoroutineScope()
-
     ScrollableScreen(
         title = "调试",
-        subtitle = "采集模式切换与运行日志",
+        /*
+         * ⚠️ 副标题原来写的是「采集模式切换与运行日志」——
+         * 采集模式已经搬到 `CaptureModeScreen`，再这么写就是**指错地方**。
+         */
+        subtitle = "能力检测与运行日志",
         onBack = onBack,
         modifier = modifier,
         actions = {
@@ -168,151 +186,21 @@ fun DebugScreen(
         },
     ) {
         /*
-         * ============================================================
-         * 采集模式
-         * ============================================================
+         * ⚠️ 「采集模式」那一整块**已经搬到 `CaptureModeScreen`**（从主页
+         * 「工作状态」大卡片点进去）。
+         *
+         * ⚠️ 为什么搬走:切换采集通道是**日常操作**，不是调试功能。藏在
+         * 「调试」里会让普通用户以为它是个危险开关。
+         *
+         * ⚠️ 用户的原话:
+         *
+         * > 调试页的工作模式切换的卡片，也可以做在我们这一班搞的工作状态
+         * > 卡片里，sukisu 的卡片点开后是关于 boot 之类的功能，
+         * > 我们把那个页面换一下就行了
+         *
+         * ⚠️ 这一页**留下的都是真正的诊断**（能力检测 / Shizuku 直连自检 /
+         * 悬浮窗 / 日志）—— 那些才是"出问题才来看"的东西。
          */
-
-        item { SectionHeader("采集模式") }
-
-        item {
-            SettingsCard {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "选择读取输入设备的方式",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                        KeyMode.entries.forEachIndexed { index, mode ->
-                            SegmentedButton(
-                                selected = pendingMode == mode,
-                                onClick = { pendingMode = mode },
-                                shape = SegmentedButtonDefaults.itemShape(
-                                    index = index,
-                                    count = KeyMode.entries.size,
-                                ),
-                            ) {
-                                Text(mode.label)
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Text(
-                        text = pendingMode.description,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-
-                    if (pendingMode != viewModel.requestedMode) {
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Button(
-                                onClick = { viewModel.applyRequestedMode(pendingMode) },
-                            ) {
-                                Text("应用")
-                            }
-                            OutlinedButton(
-                                onClick = { pendingMode = viewModel.requestedMode },
-                            ) {
-                                Text("撤销")
-                            }
-                        }
-                    }
-
-                    /*
-                     * 直连自检。
-                     *
-                     * 只在"这条通道可能真的会用到 Shizuku"时才显示 ——
-                     * 强制 root 的用户看到它只会困惑。
-                     *
-                     * 直连有两处外部依赖容易出问题：
-                     * ① `newProcess` 的事务号是硬编码的（见 ShizukuShell），
-                     *    Shizuku 升级后可能错位；
-                     * ② 有些 ROM 的 `getevent` 参数支持不一致。
-                     *
-                     * 自检按顺序各问一个问题，答案写在哪一步上 ——
-                     * 用户不必猜，我们也不必远程猜。
-                     */
-                    if (pendingMode != KeyMode.ROOT) {
-                        Spacer(modifier = Modifier.height(20.dp))
-                        CardDivider()
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        Text(
-                            text = "Shizuku 直连",
-                            style = MaterialTheme.typography.titleSmall,
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "事件由 Shizuku 启动的读取进程回传。" +
-                                "如果采集启动不起来，点下面的按钮做一次自检。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        OutlinedButton(
-                            onClick = {
-                                probeResult = "检测中…"
-                                scope.launch { probeResult = ShizukuShell.runDiagnostics() }
-                            },
-                            enabled = probeResult != "检测中…",
-                        ) {
-                            Text("检测直连通道")
-                        }
-                        probeResult?.let {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = it,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        item {
-            val resolved = viewModel.resolvedMode
-            SettingsCard {
-                SettingItem(
-                    title = "当前生效",
-                    subtitle = "${viewModel.requestedMode.label} → ${resolved.mode.label}",
-                )
-
-                CardDivider()
-
-                SettingItem(
-                    title = "解析依据",
-                    subtitle = resolved.reason,
-                )
-
-                if (resolved.fellBack) {
-                    CardDivider()
-                    SettingItem(
-                        title = "注意：发生了自动回退",
-                        subtitle = "请求的模式不可用，已自动切换。若结果不符合预期，" +
-                            "可在上方手动指定模式后点击应用。",
-                    )
-                }
-            }
-        }
-
-        item {
-            SectionHint(
-                text = "「自动」会优先使用 root，root 不可用或启动失败时回退到 Shizuku；" +
-                    "手动指定某个模式时不会自动回退，失败原因会直接记录到日志里。",
-            )
-        }
 
         /*
          * ============================================================
@@ -338,6 +226,7 @@ fun DebugScreen(
                 } else {
                     SettingItem(
                         title = "Root",
+                        leadingIcon = Icons.Rounded.Security,
                         subtitle = if (viewModel.capabilities.rootAvailable) {
                             "可用 · ${viewModel.capabilities.rootDetail}"
                         } else {
@@ -349,6 +238,7 @@ fun DebugScreen(
 
                     SettingItem(
                         title = "Shizuku",
+                        leadingIcon = Icons.Rounded.Terminal,
                         subtitle = if (viewModel.capabilities.shizukuReady) {
                             "已授权，可作为 root 之外的采集通道"
                         } else {
@@ -491,6 +381,7 @@ fun DebugScreen(
             SettingsCard {
                 SettingItem(
                     title = "悬浮窗状态",
+                    leadingIcon = Icons.Rounded.Layers,
                     subtitle = if (overlayRunning) {
                         "正在运行 · 实际显示 ${windows.size} 个窗口"
                     } else {
@@ -502,6 +393,7 @@ fun DebugScreen(
 
                 SettingItem(
                     title = "正在显示的配置",
+                    leadingIcon = Icons.Rounded.Visibility,
                     subtitle = if (windows.isEmpty()) {
                         "—（没有窗口）"
                     } else {
@@ -519,6 +411,7 @@ fun DebugScreen(
                  */
                 SettingItem(
                     title = "开关与窗口是否一致",
+                    leadingIcon = Icons.Rounded.CompareArrows,
                     subtitle = buildString {
                         append("开着的开关：$enabledCount 个")
                         if (enabledCount == windows.size) {
@@ -541,6 +434,7 @@ fun DebugScreen(
                  */
                 SettingItem(
                     title = "悬浮窗边界数据",
+                    leadingIcon = Icons.Rounded.Straighten,
                     subtitle = "复制显示器尺寸、系统最大窗口区域与每个窗口的实际/请求位置",
                     trailing = {
                         OutlinedButton(
@@ -664,6 +558,7 @@ fun DebugScreen(
 
                 SettingItem(
                     title = "全部关闭",
+                    leadingIcon = Icons.Rounded.Close,
                     subtitle = "一次关掉所有悬浮窗（等价于把主页的开关逐个关掉）",
                     trailing = {
                         OutlinedButton(
@@ -700,7 +595,15 @@ fun DebugScreen(
                      * 一个窗口都没开时回退到第一份配置。
                      */
                     val config = viewModel.debugConfig()
-                    val pressedCodes = CaptureSession.pressedKeys.value
+                    /*
+                     * ⚠️ 必须 `collectAsState()`，不能直接读 `.value`。
+                     *
+                     * 直接读 `.value` 拿到的是**那一刻的快照**，`StateFlow` 更新时
+                     * 不会触发重组 —— 表现是"按键高亮永远不亮"。
+                     * 这正是 lint 的 `StateFlowValueCalledInComposition` 在报的问题
+                     * （本项目里同一类坑在 `capabilities` 那段也踩过一次）。
+                     */
+                    val pressedCodes by CaptureSession.pressedKeys.collectAsState()
 
                     androidx.compose.foundation.layout.FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -751,6 +654,127 @@ fun DebugScreen(
          * 在这里展示并支持一键复制 —— 复现一次就能把原因贴出来。
          * ============================================================
          */
+
+        /*
+         * ============================================================
+         * 触屏采集（验证用）
+         * ============================================================
+         * 触屏功能还在做，这一步**只验证采集通道** ——
+         * 也就是"helper 能不能在这台机器上认出触屏设备、读出触点"。
+         *
+         * ⚠️ 为什么先做这个、而不是先做界面:
+         * native 挑设备是**靠打分猜的**（扫 /dev/input/event*，
+         * 按能力位与设备名打分），不同 ROM 表现可能不一样。
+         * 万一这台机器挑不中，上层的样式与编辑器全白做。
+         *
+         * ⚠️ 所以这里显示两样最容易出问题的东西:
+         * **认得是哪个设备**（挑错了要看得出来）与**实时的触点坐标**。
+         */
+        item { SectionHeader("触屏采集（验证）") }
+
+        item {
+            val touchState by TouchCapture.state.collectAsState()
+            val scope = rememberCoroutineScope()
+
+            SettingsCard {
+                SettingItem(
+                    title = "采集状态",
+                    leadingIcon = Icons.Rounded.Sensors,
+                    subtitle = touchState.status,
+                )
+
+                if (touchState.device.isNotEmpty()) {
+                    CardDivider()
+                    SettingItem(
+                        title = "认到的设备",
+                        leadingIcon = Icons.Rounded.Devices,
+                        subtitle = touchState.device,
+                    )
+                }
+
+                touchState.startError?.let { error ->
+                    CardDivider()
+                    SettingItem(
+                        title = "启动失败",
+                        leadingIcon = Icons.Rounded.ErrorOutline,
+                        subtitle = error,
+                    )
+                }
+
+                CardDivider()
+
+                SettingItem(
+                    title = "当前触点",
+                    leadingIcon = Icons.Rounded.TouchApp,
+                    subtitle = if (touchState.points.isEmpty()) {
+                        "—（屏幕上没有手指）"
+                    } else {
+                        touchState.points.joinToString("\n") { p ->
+                            "id=${p.id}  " +
+                                "x=%.3f  y=%.3f".format(p.x, p.y)
+                        }
+                    },
+                )
+
+                CardDivider()
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FilledTonalButton(
+                        onClick = {
+                            scope.launch {
+                                /*
+                                 * ⚠️ 通道**必须在这里按实际能力选** ——
+                                 * 与 `CaptureController` 的规则一致（root 优先）。
+                                 *
+                                 * ⚠️ `TouchCapture` 自己不判可用性:
+                                 * launcher 只回答"怎么起进程"，
+                                 * 而"这条通道现在通不通"是采集层的事
+                                 * （它有 rootProbe 与 Shizuku 状态）。
+                                 * 在这里现判一次是可接受的 —— **这是调试页**，
+                                 * 真实接入时会改成跟随采集层的模式。
+                                 */
+                                val launcher = when {
+                                    viewModel.capabilities.rootAvailable ->
+                                        RootGamepadLauncher()
+
+                                    viewModel.capabilities.shizukuReady ->
+                                        ShizukuGamepadLauncher()
+
+                                    else -> null
+                                }
+                                if (launcher == null) {
+                                    Toast.makeText(
+                                        context,
+                                        "root 与 Shizuku 都不可用，触屏采集需要其中之一",
+                                        Toast.LENGTH_LONG,
+                                    ).show()
+                                } else {
+                                    TouchCapture.start(context, launcher)?.let { reason ->
+                                        Toast.makeText(context, reason, Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            }
+                        },
+                        enabled = !touchState.running,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("开始采集")
+                    }
+                    OutlinedButton(
+                        onClick = { TouchCapture.stop() },
+                        enabled = touchState.running,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("停止")
+                    }
+                }
+            }
+        }
 
         if (crashText != null) {
             item { SectionHeader("上次崩溃") }

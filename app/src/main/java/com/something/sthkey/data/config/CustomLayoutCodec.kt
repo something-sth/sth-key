@@ -9,6 +9,9 @@ import com.something.sthkey.domain.config.ShadowMode
 import com.something.sthkey.domain.custom.ComponentStyle
 import com.something.sthkey.domain.custom.ComponentType
 import com.something.sthkey.domain.custom.CustomComponent
+import com.something.sthkey.domain.custom.CustomTouchRegion
+import com.something.sthkey.domain.custom.CustomTouchRegionBinding
+import com.something.sthkey.domain.custom.TouchDirection
 import com.something.sthkey.domain.custom.CustomLayout
 import com.something.sthkey.domain.custom.CustomLayoutSettings
 import com.something.sthkey.domain.custom.DEFAULT_CPS_KEY_CODES
@@ -27,6 +30,10 @@ import com.something.sthkey.domain.custom.KeyboardJoystickFeel
 import com.something.sthkey.domain.custom.MouseJoystickFeel
 import com.something.sthkey.domain.custom.StickSide
 import com.something.sthkey.domain.custom.TextComponent
+import com.something.sthkey.domain.config.TouchRegion
+import com.something.sthkey.domain.config.TouchRegionSpec
+import com.something.sthkey.domain.config.TouchStickFeel
+import com.something.sthkey.domain.config.TouchFeelSpec
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -85,6 +92,73 @@ object CustomLayoutCodec {
             "components",
             JSONArray().apply {
                 settings.components.forEach { put(encodeComponent(it)) }
+            },
+        )
+
+        /*
+         * ⚠️⚠️ **触摸区域必须写**（用户明确要求）
+         *
+         * 用户的原话:
+         *
+         * > 4 解决**配置持久化**就行，要能保证下次进触摸区域编辑**依然能看到
+         * > 上次新建与绑定**的触摸区域，且要做好存储，**配置导入导出也要处理好**
+         *
+         * ⚠️ 与旧模型最大的不同:区域**不挂在任何组件上** ——
+         * 所以它必须在这里有自己的一段。旧模型下"组件自己带区域"，
+         * 一旦组件的那个字段没被写进去，区域就**静默消失**了
+         * （那正是用户报的"只有移动摇杆的区域转过来了"的根因）。
+         *
+         * ⚠️ 空列表**照写**（`[]`）—— 与 `components` 同一个约定:
+         * 显式写出来让手工看 JSON 的人一眼明白。
+         */
+        put(
+            "touchRegions",
+            JSONArray().apply {
+                settings.touchRegions.forEach { put(encodeTouchRegion(it)) }
+            },
+        )
+    }
+
+    /**
+     * 一块自定义触摸区域。
+     *
+     * ⚠️ 四个字段**一个都不能少**:
+     *
+     * | 少了 | 后果 |
+     * |---|---|
+     * | `id` | 删除/绑定时定位不到它（下次进来就是一块"野"区域） |
+     * | `kind` | ⚠️ 轮盘区域退化成按键区域 —— 绑按键时不再问方向，摇杆也推不动 |
+     * | `region` | 回到屏幕正中（**用户对着游戏拖了半天，白拖**） |
+     * | `bindings` | 全部解绑 —— 界面显示"未绑定"，真机按下去毫无反应 |
+     */
+    private fun encodeTouchRegion(item: CustomTouchRegion): JSONObject = JSONObject().apply {
+        put("id", item.id)
+        put("kind", item.kind.id)
+        put(
+            "region",
+            JSONObject().apply {
+                put("centerX", item.region.centerX.toDouble())
+                put("centerY", item.region.centerY.toDouble())
+                put("size", item.region.size.toDouble())
+            },
+        )
+        put(
+            "bindings",
+            JSONArray().apply {
+                item.bindings.forEach { binding ->
+                    put(
+                        JSONObject().apply {
+                            put("componentId", binding.componentId)
+                            /*
+                             * ⚠️ `direction` **只在非空时写** —— 写 `null` 的话
+                             * 读回来要么是字符串 "null"、要么还要额外判空，
+                             * 而"没有这个键"在 [TouchDirection.fromId] 里
+                             * 天然就是 `null`（那是它的约定）。
+                             */
+                            binding.direction?.let { put("direction", it.id) }
+                        },
+                    )
+                }
             },
         )
     }
@@ -194,8 +268,53 @@ object CustomLayoutCodec {
                 )
                 put("keyboardFeel", encodeKeyboardFeel(component.keyboardFeel))
                 put("mouseFeel", encodeMouseFeel(component.mouseFeel))
+                put("touchFeel", encodeTouchFeel(component.touchFeel))
             }
         }
+    }
+
+    /**
+     * 「摇杆-触屏」的手感。
+     *
+     * ⚠️ **五项都要写** —— 与 [encodeKeyboardFeel] 同一个道理:
+     * 少写哪个，用户在那儿的改动就"重启后自己变回去"。
+     *
+     * ⚠️⚠️ `mode` 尤其**不能漏** —— 它是"常规 / 平滑"那个分段按钮，
+     * 漏了的话用户切到「常规」、重启后又变回「平滑」，
+     * 而那正好是他当初抱怨"一卡一卡"时想去调的东西。
+     */
+    private fun encodeTouchFeel(feel: TouchStickFeel): JSONObject = JSONObject().apply {
+        put("mode", feel.mode.id)
+        put("deadZone", feel.deadZone.toDouble())
+        put("sensitivity", feel.sensitivity.toDouble())
+        put("smoothingMs", feel.smoothingMs.toDouble())
+        put("durationMs", feel.durationMs.toDouble())
+    }
+
+    /**
+     * 读「摇杆-触屏」的手感。
+     *
+     * ⚠️ 与手柄/键盘那两种一样:字段缺失时**回退到默认值**，
+     * 而不是把 0 当成用户的选择（0 的死区、灵敏度、平滑时间都有意义）。
+     *
+     * ⚠️ **老配置**（那时候还没有 `mode` / `durationMs`）：
+     * `mode` 回退到默认的 [JoystickFollowMode.SMOOTH] ——
+     * 那正是它们升级前的行为（只有弹簧），所以**表现完全不变**。
+     */
+    private fun decodeTouchFeel(obj: JSONObject?, fallback: TouchStickFeel): TouchStickFeel {
+        if (obj == null) return fallback
+        return TouchFeelSpec.clamp(
+            TouchStickFeel(
+                mode = JoystickFollowMode.fromId(obj.optString("mode", null)),
+                deadZone = obj.optDouble("deadZone", fallback.deadZone.toDouble()).toFloat(),
+                sensitivity = obj.optDouble("sensitivity", fallback.sensitivity.toDouble())
+                    .toFloat(),
+                smoothingMs = obj.optDouble("smoothingMs", fallback.smoothingMs.toDouble())
+                    .toFloat(),
+                durationMs = obj.optDouble("durationMs", fallback.durationMs.toDouble())
+                    .toFloat(),
+            ),
+        )
     }
 
     /**
@@ -369,7 +488,109 @@ object CustomLayoutCodec {
         val components = decodeComponents(json.optJSONArray("components"))
             .ifEmpty { return defaults }
 
-        return CustomLayoutSettings(components = components)
+        /*
+         * ⚠️ 触摸区域（见 [encode] 里那段说明）。
+         *
+         * ⚠️ 老配置**没有这个键** → 空列表 —— 那正是要的:
+         * 老配置本来就没有触摸区域，读成空的话它"照旧只靠键码"，
+         * **不会**凭空多出一块区域、也**不会**白起触摸采集
+         * （见 `usesTouchCapture`）。
+         */
+        val touchRegions = decodeTouchRegions(json.optJSONArray("touchRegions"))
+
+        return CustomLayoutSettings(components = components, touchRegions = touchRegions)
+    }
+
+    /**
+     * 读**自定义触摸区域**。
+     *
+     * ⚠️ 与[组件][decodeComponents]同一个宽容策略:
+     *
+     * | 坏在哪 | 怎么处理 |
+     * |---|---|
+     * | 整条不是对象 | 跳过这一条 |
+     * | 没有区域（或坐标不是数） | ⚠️ **跳过** —— 一块坐标是 NaN 的区域会让命中测试永远失败，而且**看不出来** |
+     * | 没有 `id` | ⚠️ **跳过** —— 没有 id 就删不掉也绑不了，是一块"野"区域 |
+     * | `kind` 不认识 | 回退到**按键区域**（最保守的那种） |
+     * | 某条绑定没有 `componentId` | 只丢**那一条**绑定，区域本身照常读 |
+     *
+     * ⚠️ 最后一条很重要:一个组件可能在导出之后被删掉了，
+     * 于是那条绑定指向一个**不存在的组件** —— 那种绑定留着也只是
+     * 占一行"已绑 xxx"却什么都不做。它在**渲染时**也不产生影响
+     * （查不到组件就没人亮），所以这里不做"清理孤儿绑定"的额外动作，
+     * 那是另一件事。
+     */
+    private fun decodeTouchRegions(array: JSONArray?): List<CustomTouchRegion> {
+        if (array == null) return emptyList()
+        return buildList {
+            for (index in 0 until array.length()) {
+                val item = array.optJSONObject(index) ?: continue
+
+                val id = item.optString("id").takeIf { it.isNotBlank() }
+                if (id == null) {
+                    AppLog.w(TAG, "跳过没有 id 的触摸区域（第 ${index + 1} 条）")
+                    continue
+                }
+
+                val regionObject = item.optJSONObject("region")
+                if (regionObject == null || !regionObject.has("centerX") ||
+                    !regionObject.has("centerY")
+                ) {
+                    AppLog.w(TAG, "跳过没有区域的触摸区域：$id")
+                    continue
+                }
+
+                add(
+                    CustomTouchRegion(
+                        id = id,
+                        kind = CustomTouchRegion.Kind.fromId(item.optString("kind", null)),
+                        region = TouchRegionSpec.clamp(
+                            TouchRegion(
+                                centerX = regionObject.optDouble(
+                                    "centerX",
+                                    TouchRegionSpec.SIZE_DEFAULT.toDouble(),
+                                ).toFloat(),
+                                centerY = regionObject.optDouble(
+                                    "centerY",
+                                    TouchRegionSpec.SIZE_DEFAULT.toDouble(),
+                                ).toFloat(),
+                                size = regionObject.optDouble(
+                                    "size",
+                                    TouchRegionSpec.SIZE_DEFAULT.toDouble(),
+                                ).toFloat(),
+                            ),
+                        ),
+                        bindings = decodeTouchRegionBindings(item.optJSONArray("bindings")),
+                    ),
+                )
+            }
+        }
+    }
+
+    /** 读**区域上的绑定**（多选）；坏条目逐条丢，不影响区域本身 */
+    private fun decodeTouchRegionBindings(
+        array: JSONArray?,
+    ): List<CustomTouchRegionBinding> {
+        if (array == null) return emptyList()
+        return buildList {
+            for (index in 0 until array.length()) {
+                val item = array.optJSONObject(index) ?: continue
+                val componentId = item.optString("componentId").takeIf { it.isNotBlank() }
+                if (componentId == null) continue
+
+                add(
+                    CustomTouchRegionBinding(
+                        componentId = componentId,
+                        /*
+                         * ⚠️ 不认识的方向 → `null`（= 按到就算）——
+                         * 比"猜一个方向"安全得多:猜错的话组件会
+                         * **只在某个方向上**亮，而用户完全看不出为什么。
+                         */
+                        direction = TouchDirection.fromId(item.optString("direction", null)),
+                    ),
+                )
+            }
+        }
     }
 
     private fun decodeComponents(array: JSONArray?): List<CustomComponent> {
@@ -456,6 +677,7 @@ object CustomLayoutCodec {
                     ComponentType.JOYSTICK,
                     ComponentType.JOYSTICK_KEYBOARD,
                     ComponentType.JOYSTICK_MOUSE,
+                    ComponentType.JOYSTICK_TOUCH,
                     -> add(
                         JoystickComponent(
                             id = id,
@@ -515,6 +737,11 @@ object CustomLayoutCodec {
                                 item.optJSONObject("keyboardFeel"),
                             ),
                             mouseFeel = decodeMouseFeel(item.optJSONObject("mouseFeel")),
+                            /* ⚠️ 触屏摇杆的手感 —— 老配置没有这个字段 → 默认值 */
+                            touchFeel = decodeTouchFeel(
+                                item.optJSONObject("touchFeel"),
+                                TouchStickFeel(),
+                            ),
                         ),
                     )
                 }

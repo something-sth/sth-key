@@ -1,54 +1,76 @@
 package com.something.sthkey.ui.feature.settings
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BugReport
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Power
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import com.something.sthkey.ui.EditMode
-import com.something.sthkey.ui.MainViewModel
-import com.something.sthkey.ui.component.CardDivider
-import com.something.sthkey.ui.component.ScrollableScreen
-import androidx.compose.material.icons.filled.Campaign
-import com.something.sthkey.ui.feature.announcement.AnnouncementDialog
-import com.something.sthkey.ui.feature.announcement.AppAnnouncement
-import com.something.sthkey.core.prefs.AppPrefs
-import com.something.sthkey.ui.component.EditableSliderRow
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Campaign
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Power
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.FontDownload
+import androidx.compose.material.icons.rounded.MoreHoriz
+import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.RestartAlt
+import androidx.compose.material.icons.rounded.Subject
+import androidx.compose.material.icons.rounded.ViewInAr
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import com.something.sthkey.core.prefs.AppPrefs
 import com.something.sthkey.data.config.ExportMethod
-import kotlinx.coroutines.launch
+import com.something.sthkey.domain.font.bitmap.BitmapFontImporter
+import com.something.sthkey.domain.font.FontRegistry
+import com.something.sthkey.domain.ui.AppearanceColorMode
+import com.something.sthkey.ui.component.CardDivider
+import com.something.sthkey.ui.component.EditableSliderRow
+import com.something.sthkey.ui.component.ExpressiveSwitch
+import com.something.sthkey.ui.component.FontLibraryDialog
+import com.something.sthkey.ui.component.Live2DModelPickerDialog
+import com.something.sthkey.ui.component.PendingBitmapImportDialog
+import com.something.sthkey.ui.component.ScrollableScreen
 import com.something.sthkey.ui.component.SectionHeader
 import com.something.sthkey.ui.component.SectionHint
+import com.something.sthkey.ui.component.SettingDropdownItem
 import com.something.sthkey.ui.component.SettingItem
 import com.something.sthkey.ui.component.SettingsCard
+import com.something.sthkey.ui.EditMode
+import com.something.sthkey.ui.feature.announcement.AnnouncementDialog
+import com.something.sthkey.ui.feature.announcement.AppAnnouncement
+import com.something.sthkey.ui.MainViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+
+
 
 /**
  * 设置页。
@@ -62,6 +84,7 @@ import com.something.sthkey.ui.component.SettingsCard
 @Composable
 fun SettingsScreen(
     viewModel: MainViewModel,
+    onOpenTheme: () -> Unit,
     onOpenDebug: () -> Unit,
     onOpenAbout: () -> Unit,
     onReopenSetup: () -> Unit,
@@ -73,16 +96,119 @@ fun SettingsScreen(
     var showAnnouncement by remember { mutableStateOf(false) }
 
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val prefs = remember { AppPrefs.get(context) }
 
     /** 导出方式的当前值；改完要立刻反映到界面上，所以用 Compose 状态 */
     var exportMethod by remember { mutableStateOf(prefs.exportMethod) }
+
+    /* ---------------- 库 ---------------- */
+
+    var showFontLibrary by remember { mutableStateOf(false) }
+    var showLive2DLibrary by remember { mutableStateOf(false) }
+
+    /** 库的版本号：导入/改名/删除后自增，让对话框重读列表 */
+    var fontRevision by remember { mutableIntStateOf(0) }
+    var live2DRevision by remember { mutableIntStateOf(0) }
+
+    /** 一次性的提示（导入结果之类） */
+    var libraryNotice by remember { mutableStateOf<String?>(null) }
+
+    /*
+     * 字体文件导入（.ttf / .otf / .ttc）。
+     *
+     * ⚠️ 与编辑页里那份逻辑一致：走 SAF，不申请存储权限。
+     * ⚠️ 库里导入**不需要选中它** —— 只是把资源放进库。
+     */
+    val vectorFontPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) {
+            // SAF 返回会把对话框窗口 dismiss 掉，这里重新打开它
+            showFontLibrary = true
+            return@rememberLauncherForActivityResult
+        }
+        scope.launch {
+            val imported = withContext(Dispatchers.IO) { FontRegistry.import(uri) }
+            showFontLibrary = true
+            if (imported == null) {
+                libraryNotice = "导入失败：请确认文件是 .ttf / .otf / .ttc"
+            } else {
+                fontRevision++
+                libraryNotice = "已导入「${imported.displayName}」"
+            }
+        }
+    }
+
+    /*
+     * 图片字体导入（.png / Java 材质包 .zip / 基岩版 .mcpack）。
+     *
+     * ⚠️ 读出来之后要用户确认名字与参数，所以弹的是 `PendingBitmapImportDialog`。
+     */
+    val pendingBitmapImport = remember {
+        mutableStateOf<BitmapFontImporter.Source?>(null)
+    }
+    val bitmapFontPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) {
+            showFontLibrary = true
+            return@rememberLauncherForActivityResult
+        }
+        scope.launch {
+            val source = withContext(Dispatchers.IO) {
+                BitmapFontImporter.readFrom(context, uri)
+            }
+            showFontLibrary = true
+            if (source is BitmapFontImporter.Source.Failure) {
+                libraryNotice = source.reason
+                return@launch
+            }
+            pendingBitmapImport.value = source
+        }
+    }
 
     ScrollableScreen(
         title = "设置",
         subtitle = "权限、诊断与关于信息",
         modifier = modifier,
     ) {
+
+        /*
+         * ============================================================
+         * 外观
+         * ============================================================
+         * 用户的原话:
+         *
+         * > 现在我想把 material 的 ui 主题也做细节一点，我们也像 sukisu 那样
+         * > 单独分一个「主题设置」
+         *
+         * ⚠️ 所以这里只剩**一行入口**，具体选项（明暗模式、底栏样式）都搬到
+         * `ThemeScreen` 那一页去了。放在本页一长串里的话，
+         * 「配色」「底栏」会和「导出方式」「画布底色」混在一起，很难找。
+         *
+         * ⚠️ 副标题显示当前明暗模式 —— 用户不进二级页也能看到现在是哪一档。
+         */
+        item { SectionHeader("外观") }
+
+        item {
+            SettingsCard {
+                SettingItem(
+                    title = "主题设置",
+                    leadingIcon = Icons.Rounded.Palette,
+                    subtitle = viewModel.appearanceColorMode.label,
+                    onClick = onOpenTheme,
+                    trailing = {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                )
+            }
+        }
+
         /*
          * ============================================================
          * 更新公告
@@ -133,6 +259,7 @@ fun SettingsScreen(
 
                 SettingItem(
                     title = "重置首次启动引导",
+                    leadingIcon = Icons.Rounded.RestartAlt,
                     subtitle = "清除引导完成标记，下次启动重新进入引导页",
                     onClick = { showResetSetupDialog = true },
                 )
@@ -145,7 +272,7 @@ fun SettingsScreen(
          * ============================================================
          */
 
-        item { SectionHeader("配置编辑") }
+        item { SectionHeader("配置") }
 
         item {
             SettingsCard {
@@ -194,7 +321,6 @@ fun SettingsScreen(
          * 把排版开关塞进去会让每次操作都面对一堆与当前任务无关的控件，
          * 而且那种"页面内切换排版"在平板横屏下很难摆得下。
          */
-        item { SectionHeader("配置列表") }
 
         item {
             SettingsCard {
@@ -205,9 +331,10 @@ fun SettingsScreen(
                  */
                 SettingItem(
                     title = "显示配置描述",
+                    leadingIcon = Icons.Rounded.Subject,
                     subtitle = "关掉之后卡片只有名称，列表更紧凑",
                     trailing = {
-                        Switch(
+                        ExpressiveSwitch(
                             checked = viewModel.configListShowDescription,
                             onCheckedChange = { viewModel.updateConfigListShowDescription(it) },
                         )
@@ -218,9 +345,10 @@ fun SettingsScreen(
 
                 SettingItem(
                     title = "把导出/复制/删除收进「更多」",
+                    leadingIcon = Icons.Rounded.MoreHoriz,
                     subtitle = "开启后卡片右上角只有一个竖三点图标，卡片更干净",
                     trailing = {
-                        Switch(
+                        ExpressiveSwitch(
                             checked = viewModel.configListCompactActions,
                             onCheckedChange = { viewModel.updateConfigListCompactActions(it) },
                         )
@@ -260,7 +388,6 @@ fun SettingsScreen(
          * 用户的心智是"以后都存这个目录"，而不是"这次存哪个目录"。
          * 早先做成两个并列的导出按钮是错的（见 `ExportMethod` 的说明）。
          */
-        item { SectionHeader("配置导出") }
 
         item {
             SettingsCard {
@@ -362,6 +489,50 @@ fun SettingsScreen(
 
         /*
          * ============================================================
+         * 库
+         * ============================================================
+         * 用户的原话:
+         *
+         * > 设置页加一个「库」栏，标题就是「库」，里面放字体库，live2d库，
+         * > 在这里就可以导入字体（包括字体文件和图片位图）字体 / live2d 资源，
+         * > 窗口应该可以用已有的那一块的吧，只不过不做「选择」，
+         * > 因为是「库」，不是在编辑配置
+         *
+         * ⚠️ 与编辑页里那两个"选择"对话框**复用同一个外壳**，区别只有:
+         * 行不可选（点了没反应）、列表列出**全部**资源、导入入口更全。
+         * 详见 `FontLibraryDialog` 与 `Live2DModelPickerDialog(libraryMode = true)`。
+         */
+        item { SectionHeader("库") }
+
+        item {
+            SettingsCard {
+                SettingItem(
+                    title = "字体库",
+                    subtitle = "导入、改名、删除字体（含图片字体）",
+                    leadingIcon = Icons.Rounded.FontDownload,
+                    onClick = { showFontLibrary = true },
+                )
+
+                CardDivider()
+
+                SettingItem(
+                    title = "Live2D 库",
+                    subtitle = "导入、改名、删除 Live2D 模型",
+                    leadingIcon = Icons.Rounded.ViewInAr,
+                    onClick = { showLive2DLibrary = true },
+                )
+            }
+        }
+
+        item {
+            SectionHint(
+                text = "库里的资源是**全局**的：导入一次，所有配置都能用。" +
+                    "编辑配置时仍然在原来的位置「选择」用哪一个。",
+            )
+        }
+
+        /*
+         * ============================================================
          * 诊断
          * ============================================================
          */
@@ -457,6 +628,82 @@ fun SettingsScreen(
             onConfirm = { showAnnouncement = false },
             onDismiss = { showAnnouncement = false },
         )
+    }
+
+    /* ---------------- 字体库 ---------------- */
+
+    if (showFontLibrary) {
+        FontLibraryDialog(
+            onDismiss = { showFontLibrary = false },
+            onImportVector = {
+                vectorFontPicker.launch(
+                    arrayOf(
+                        "font/ttf",
+                        "font/otf",
+                        "font/ttc",
+                        "application/x-font-ttf",
+                        "application/octet-stream",
+                    ),
+                )
+            },
+            onImportBitmap = {
+                bitmapFontPicker.launch(
+                    arrayOf(
+                        "image/*",                  // 直接选 ascii.png
+                        "application/zip",          // .zip 与 .mcpack（后者就是 zip）
+                        "application/x-zip-compressed",
+                        "application/octet-stream", // 有些 ROM 只认这个，否则 .mcpack 选不了
+                    ),
+                )
+            },
+            refreshKey = fontRevision,
+        )
+    }
+
+    /*
+     * 图片字体的「确认名字 / 参数」对话框。
+     *
+     * ⚠️ 注册成功后要自增 `fontRevision`，否则库列表还是旧的
+     * （`BitmapFontStore` 是普通对象，不是 Compose 状态）。
+     */
+    PendingBitmapImportDialog(
+        source = pendingBitmapImport.value,
+        onDismiss = { pendingBitmapImport.value = null },
+        onRegistered = { _, name ->
+            pendingBitmapImport.value = null
+            fontRevision++
+            libraryNotice = "已导入图片字体「$name」"
+        },
+        /* ⚠️ 注册失败也要给反馈，否则用户不知道刚才那一下到底成没成 */
+        onFailed = { reason ->
+            pendingBitmapImport.value = null
+            libraryNotice = reason
+        },
+    )
+
+    /* ---------------- Live2D 库 ---------------- */
+
+    if (showLive2DLibrary) {
+        Live2DModelPickerDialog(
+            /*
+             * ⚠️ 库模式:不选中任何东西。`selectedId` 传空串即可 ——
+             * `libraryMode = true` 时它根本不会被用到。
+             */
+            selectedId = "",
+            onSelect = {},
+            onLibraryChanged = { live2DRevision++ },
+            onDismiss = { showLive2DLibrary = false },
+            libraryMode = true,
+        )
+    }
+
+    /* ---------------- 库操作的一次性提示 ---------------- */
+
+    libraryNotice?.let { message ->
+        LaunchedEffect(message) {
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+            libraryNotice = null
+        }
     }
 }
 

@@ -31,7 +31,6 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -42,6 +41,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.something.sthkey.ui.component.ExpressiveSwitch
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
@@ -173,7 +173,8 @@ private fun CategoryRow(
                             .weight(1f)
                             .clickable { onPick(type) },
                         colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                            /* ⚠️ `surface` 而不是 `surfaceContainer`：后者等于页面底色，卡片会消失 */
+                            containerColor = MaterialTheme.colorScheme.surface,
                         ),
                     ) {
                         Column(
@@ -396,6 +397,7 @@ fun PropertyPanel(
                      * 「摇杆手感」栏），所以这个回调也从这里往下传。
                      */
                     onPickJoystickKey = onPickJoystickKey,
+                    /* ⚠️ 触屏移动摇杆的「编辑触摸区域」—— 视角摇杆不显示它 */
                 )
 
                 is KeyComponent, is TextComponent -> ContentSection(
@@ -699,6 +701,7 @@ private fun ContentSection(
             onEdit = { onPickKeys(component) },
         )
 
+
         /*
          * 按键组件的 CPS 来源就是上面那组键，没有单独的选项 ——
          * 所以这里只是一行说明，而不是第二个选择器。
@@ -756,12 +759,14 @@ private fun ContentSection(
                     onEdit = { onPickCpsKeys(component, placeholder.index) },
                     labelColor = cpsMarkerColor(placeholder.index),
                 )
+
             }
 
             HintText("数字为 0 时 (cps) 显示 0，(cps2) 会把括号一起隐藏（多选时相加）")
         } else {
             HintText("文字里写上 (cps) 就一直显示数字，(cps2) 则在为 0 时把括号一起隐藏")
         }
+
     }
 }
 
@@ -1940,7 +1945,7 @@ private fun SwitchRow(
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.weight(1f),
         )
-        Switch(checked = checked, onCheckedChange = onChange)
+        ExpressiveSwitch(checked = checked, onCheckedChange = onChange)
     }
 }
 

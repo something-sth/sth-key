@@ -25,6 +25,8 @@ import com.something.sthkey.domain.custom.JOYSTICK_FOLLOW_DURATION_MAX
 import androidx.compose.material3.TextButton
 import com.something.sthkey.domain.keys.KeyCodes
 import com.something.sthkey.domain.custom.CustomComponent
+import com.something.sthkey.domain.config.TouchFeelSpec
+import com.something.sthkey.domain.config.TouchStickFeel
 import com.something.sthkey.domain.custom.JoystickComponent
 import com.something.sthkey.domain.custom.StickSide
 import com.something.sthkey.ui.component.HexColorRow
@@ -100,6 +102,13 @@ internal fun JoystickContentSection(
     component: JoystickComponent,
     onComponentChange: (CustomComponent, Boolean) -> Unit,
     onPickJoystickKey: (JoystickComponent, Int) -> Unit,
+    /**
+     * 点「编辑触摸区域」。
+     *
+     * ⚠️ 只有**触屏 + 移动摇杆**会出现这个按钮 ——
+     * 视角摇杆吃全屏、**没有区域**（用户明确说过）。
+     */
+    onEditTouchRegion: (JoystickComponent) -> Unit = {},
 ) {
     when (component.source) {
         JoystickSource.GAMEPAD -> {
@@ -181,6 +190,66 @@ internal fun JoystickContentSection(
             "固定监听鼠标位移:鼠标往哪移，摇杆帽就往哪偏。" +
                 "灵敏度与平滑在「摇杆手感」里。",
         )
+
+        /*
+         * ============================================================
+         * 触屏摇杆:先选"移动 / 视角"，再按需要配区域
+         * ============================================================
+         * 用户的原话:
+         *
+         * > 应该**只新增一个触屏摇杆组件**，然后新建后在上面**自己选择**
+         * > 是移动摇杆组件还是视角摇杆组件
+         *
+         * ⚠️ 所以"移动 / 视角"就是复用 `side` 那个分段按钮 ——
+         * 与手柄那两个摇杆**同一个交互、同一个字段**。
+         *
+         * ⚠️ 而两者的差别在提示里说清:**移动吃区域、视角吃全屏**。
+         */
+        JoystickSource.TOUCH -> {
+            JoystickSubLabel("监听的触摸")
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                StickSide.entries.forEach { side ->
+                    JoystickChoiceButton(
+                        /* ⚠️ 触屏下 `LEFT/RIGHT` 的含义是**移动/视角**，不是左右手 */
+                        label = if (side == StickSide.LEFT) "移动摇杆" else "视角摇杆",
+                        selected = component.side == side,
+                        onClick = { onComponentChange(component.copy(side = side), true) },
+                    )
+                }
+            }
+
+            /*
+             * ⚠️ ⚠️ 这里**原来有一个「编辑触摸区域」按钮，已经删掉**。
+             *
+             * 用户的原话:
+             *
+             * > 自定义编辑页里面塞东西并不美观，我们把之前加的东西都撤掉，
+             * > 除了新建组件的触屏摇杆
+             *
+             * ⚠️ 新方案:触摸区域在**配置编辑页的「触屏设置」**里加与绑定
+             * （那儿是一个专门的编辑面板，两种样式共用），
+             * 而不是在自定义编辑页的属性面板里 —— 后者会越塞越乱。
+             *
+             * ⚠️ 而"这个摇杆吃哪块区域"由**绑定**决定（见 `CustomTouchRegion`），
+             * 不再由组件自己带一份区域。
+             */
+            if (component.side == StickSide.LEFT) {
+                JoystickHint(
+                    "移动摇杆**只**吃**绑定了它**的轮盘区域里的触摸 —— " +
+                        "要去「配置编辑页 → 触屏设置」里给它加一块区域并绑定。" +
+                        "推的方向与远近由区域内的偏移决定，松手回中。",
+                )
+            } else {
+                JoystickHint(
+                    "视角摇杆吃**所有没落在任何触摸区域里**的滑动（像一块触摸板），" +
+                        "松手**不回中**。所以它**不需要**绑触摸区域。",
+                )
+            }
+        }
     }
 }
 
@@ -515,7 +584,153 @@ internal fun JoystickFeelSection(
             onPickJoystickKey,
         )
         JoystickSource.MOUSE -> MouseJoystickFeelSliders(component, onComponentChange)
+        JoystickSource.TOUCH -> TouchJoystickFeelSliders(component, onComponentChange)
     }
+}
+
+/**
+ * 「摇杆-触屏」的手感:死区 / 灵敏度 / 平滑时间。
+ *
+ * ============================================================
+ * ⚠️ 与触屏样式里那两个摇杆**同一套参数**
+ * ============================================================
+ * 用的是同一个 [TouchStickFeel] 与同一组范围（[TouchFeelSpec]）——
+ * 于是两个样式的触屏摇杆手感**不可能漂**（改一边就两边都变，
+ * 而那正是我们要的:同一个东西只有一份定义）。
+ *
+ * ⚠️ 三项的**含义**按 `side` 不同:
+ *
+ * | 项 | 移动摇杆（左） | 视角摇杆（右） |
+ * |---|---|---|
+ * | 死区 | 离区域中心多近算"没动" | ⚠️ **用不上**（它是增量式的，没有"中心"） |
+ * | 灵敏度 | 推多远算满偏 | 增量倍率 |
+ * | 平滑 | 起步/停下的柔和程度 | 同左 |
+ *
+ * ⚠️ 所以视角摇杆**不显示死区** —— 那会是一个"改了没反应"的骗人滑块
+ * （与 [KeyboardJoystickFeelSliders] 里"不给键盘摇杆显示死区"同一个理由）。
+ */
+@Composable
+private fun TouchJoystickFeelSliders(
+    component: JoystickComponent,
+    onComponentChange: (CustomComponent, Boolean) -> Unit,
+) {
+    val feel = component.touchFeel
+
+    fun apply(transform: (TouchStickFeel) -> TouchStickFeel) {
+        onComponentChange(component.copy(touchFeel = transform(feel)), false)
+    }
+
+    /*
+     * ============================================================
+     * ⚠️ 「常规 / 平滑」是用户点名要的
+     * ============================================================
+     * > 自定义 key 里的触屏摇杆也**需要有精准和平滑切换**吧，
+     * > 你这个不是都在触屏样式做过了吗
+     *
+     * ⚠️ 而它同时修掉了那个**一卡一卡**:我原来拿"平滑时间"当
+     * "线性跟随时长"用（含义不同），而 native 喂数据的间隔由触摸屏
+     * 决定、且不均匀 —— 60ms 短于那个间隔，于是"走完停在原地等下一帧"。
+     *
+     * ⚠️ 交互与键盘摇杆**逐字相同**:分段按钮 + 一个共用位置的滑块。
+     */
+    JoystickSubLabel("跟随方式")
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        JoystickFollowMode.entries.forEach { mode ->
+            JoystickChoiceButton(
+                label = mode.label,
+                selected = feel.mode == mode,
+                /* ⚠️ 切模式是**结构化**改动（`asStep = true`）—— 与键盘摇杆一致 */
+                onClick = {
+                    onComponentChange(
+                        component.copy(touchFeel = feel.copy(mode = mode)),
+                        true,
+                    )
+                },
+            )
+        }
+    }
+
+    if (component.side == StickSide.LEFT) {
+        SliderRow(
+            label = "死区",
+            value = feel.deadZone,
+            range = TouchFeelSpec.DEAD_ZONE_MIN..TouchFeelSpec.DEAD_ZONE_MAX,
+            display = "%d%%".format((feel.deadZone * 100).toInt()),
+            onBegin = {},
+            onChange = { v -> apply { it.copy(deadZone = v) } },
+            onEnd = {},
+        )
+    }
+
+    SliderRow(
+        label = "灵敏度",
+        value = feel.sensitivity,
+        range = TouchFeelSpec.SENSITIVITY_MIN..TouchFeelSpec.SENSITIVITY_MAX,
+        display = "%.2f".format(feel.sensitivity),
+        onBegin = {},
+        onChange = { v -> apply { it.copy(sensitivity = v) } },
+        onEnd = {},
+    )
+
+    /*
+     * ⚠️ 这一个滑块**两个模式共用同一个位置**，只换标签与含义 ——
+     * 用户的原话:"常规模式的滑块你自己想一个……**这两个滑块位置相同**"。
+     *
+     * ⚠️ 所以不摆两个滑块按模式二选一，而是**同一个 `SliderRow`**
+     * 按模式换取值与标签 —— 位置天然相同，不会因为两处 padding 不同而错位。
+     */
+    when (feel.mode) {
+        JoystickFollowMode.SMOOTH -> SliderRow(
+            label = "平滑时间",
+            value = feel.smoothingMs,
+            range = TouchFeelSpec.SMOOTHING_MIN..TouchFeelSpec.SMOOTHING_MAX,
+            display = "%.0f ms".format(feel.smoothingMs),
+            onBegin = {},
+            onChange = { v -> apply { it.copy(smoothingMs = v) } },
+            onEnd = {},
+        )
+
+        JoystickFollowMode.REGULAR -> SliderRow(
+            label = "响应时间",
+            value = feel.durationMs,
+            range = JOYSTICK_FOLLOW_DURATION_MIN..JOYSTICK_FOLLOW_DURATION_MAX,
+            display = "%.0f ms".format(feel.durationMs),
+            /*
+             * ⚠️ **1 毫秒一档** —— 与键盘摇杆那个滑块同一个理由
+             * （用户报过"滑块没设最小单位，会拖出一堆小数"）。
+             */
+            steps = (JOYSTICK_FOLLOW_DURATION_MAX - JOYSTICK_FOLLOW_DURATION_MIN).toInt() - 1,
+            onBegin = {},
+            onChange = { v -> apply { it.copy(durationMs = v) } },
+            onEnd = {},
+        )
+    }
+
+    JoystickHint(
+        when {
+            /*
+             * ⚠️ 「常规」那一支把**为什么默认 120ms** 说出来 ——
+             * 用户会想"调小不是更跟手吗"，而答案是"太短会一顿一顿"。
+             */
+            feel.mode == JoystickFollowMode.REGULAR ->
+                "常规:在「响应时间」之内匀速走到手指的位置。" +
+                    "⚠️ 时间太短会**一顿一顿**（触摸屏上报的间隔不均匀），" +
+                    "太长则明显跟不上手指 —— 默认 120ms 是折中。"
+
+            component.side == StickSide.LEFT ->
+                "平滑:弹簧跟随，起步与停下都更柔和。" +
+                    "死区是「离区域中心多近算没动」（防手抖）；" +
+                    "灵敏度是「推多远算满偏」。"
+
+            else ->
+                "平滑:弹簧跟随。灵敏度是**增量倍率** —— " +
+                    "手指滑同样的距离，数值越大视角转得越快。"
+        },
+    )
 }
 
 /**

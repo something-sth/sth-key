@@ -133,7 +133,7 @@ object KeyLayout {
     }
 
     /**
-     * 这个样式是不是"键盘布局 + 左摇杆"（即 gamepad2）。
+     * 这个样式是不是"**键盘布局 + 摇杆**"（手柄 / 触屏）。
      *
      * ⚠️ 判据是 **styleId**，不是"有没有手柄在连" ——
      * 它是配置的属性，建配置时就定了，之后不会变。
@@ -141,9 +141,22 @@ object KeyLayout {
      * 放这里而不是让 UI 层各处写 `if (styleId == GAMEPAD2)`：
      * 那个判断在三个地方要用（布局、渲染、键位映射），
      * 散着写迟早有一处漏掉。
+     *
+     * ============================================================
+     * ⚠️ 触屏样式也在这一支里（它的布局与手柄**确实一样**）
+     * ============================================================
+     * 用户的原话:"触屏样式其他地方UI都与手柄样式基本相同，
+     * 左摇杆换成触屏摇杆的移动组件，右摇杆换成视角摇杆组件"。
+     *
+     * ⚠️ 所以"槽位在哪、多大"是共用的（本函数管的就是这件事），
+     * 而**渲染与输入**在 [com.something.sthkey.ui.overlay.OverlayContent]
+     * 里另开一支 —— 触屏的摇杆读数来自屏幕触摸，不是手柄的轴。
+     *
+     * ⚠️ 别把两者混起来:本函数为 `true` **只表示布局相同**，
+     * 不表示"读手柄的轴"。
      */
     fun usesJoystickLayout(config: KeyStrokesConfig): Boolean =
-        config.styleId == StyleId.GAMEPAD2
+        config.styleId == StyleId.GAMEPAD2 || config.styleId == StyleId.TOUCHING
 
     /*
      * ============================================================
@@ -586,8 +599,7 @@ object KeyLayout {
          * 上限是"两个摇杆刚好贴在一起"，不是随便一个大数。
          * 更大的话左右摇杆会**互相重叠**，而用户明确说过不要那个。
          */
-        val stickSize = buttonWidth * config.joystick.sizeScale.coerceIn(0.3f, stickMaxScale)
-
+        val baseStickSize = buttonWidth * config.joystick.sizeScale.coerceIn(0.3f, stickMaxScale)
         /* 当前行的顶边，每加一行就往下推 */
         var y = TOP_MARGIN
 
@@ -596,10 +608,44 @@ object KeyLayout {
         }
 
         /* ---------------- 行 1：两个摇杆 ---------------- */
+
+        /**
+         * 这个槽位的摇杆边长。
+         *
+         * ============================================================
+         * ⚠️ 触屏样式用**自己的**缩放（两个摇杆各一个）
+         * ============================================================
+         * 手柄那边两个摇杆共用一个 `joystick.sizeScale` —— 因为它们是
+         * **同一个物理手柄**的左右摇杆，本来就该一样大。
+         *
+         * ⚠️ 而触屏的两个摇杆是**两类不同的东西**（移动轮盘 / 视角摇杆），
+         * 用户明确要求"摇杆手感之类的设置单独做"，所以缩放也各一个
+         * （移动轮盘通常比视角摇杆大）。
+         *
+         * ⚠️ 缩放**必须在这里算进 `width`**，不能留给渲染层乘:
+         * 窗口高度取的是"各行最高元素"，而这一行的元素就是摇杆 ——
+         * 渲染时才放大的话，放大的部分会**压住下面的键**、
+         * 而窗口也不会跟着变高。这正是 `sizeScale` 当初写进布局的原因。
+         */
+        fun stickSizeFor(slotId: String): Float {
+            if (!usesJoystickLayout(config)) return baseStickSize
+            if (config.styleId != StyleId.TOUCHING) return baseStickSize
+            val scale = when (slotId) {
+                Id.JOYSTICK_LEFT -> config.touch.move.sizeScale
+                Id.JOYSTICK_RIGHT -> config.touch.camera.sizeScale
+                else -> return baseStickSize
+            }
+            /* ⚠️ 夹取范围与手柄那条一致（上限由调用方算好） */
+            return buttonWidth *
+                config.joystick.sizeScale.coerceIn(0.3f, stickMaxScale) *
+                scale.coerceIn(0.3f, 1.5f)
+        }
+
         listOf(
             Id.JOYSTICK_LEFT to stickLeftCenter,
             Id.JOYSTICK_RIGHT to stickRightCenter,
         ).forEach { (slotId, cx) ->
+            val size = stickSizeFor(slotId)
             boxes += KeyBox(
                 slotId = slotId,
                 /* 摇杆没有键面文字，label 留空（渲染层会画摇杆） */
@@ -608,11 +654,12 @@ object KeyLayout {
                 codes = emptyList(),
                 centerX = cx,
                 topY = y,
-                width = stickSize,
-                height = stickSize,
+                width = size,
+                height = size,
             )
         }
-        advance(stickSize)
+        /* ⚠️ 推进用的是**最大的那个**摇杆的高度，否则矮的那个会让整行变矮、高的压住下一行 */
+        advance(maxOf(stickSizeFor(Id.JOYSTICK_LEFT), stickSizeFor(Id.JOYSTICK_RIGHT)))
 
         /**
          * 一个"窄按钮"（LT / RT / 肩键），落在左右两列。
@@ -698,8 +745,30 @@ object KeyLayout {
             rows += shoulderRow.reversed()
         }
 
-        /* 行:A（独占一行，横跨两列） */
-        if (config.showAButton) {
+        /*
+         * ============================================================
+         * ⚠️⚠️ A 键那一行是**手柄专属** —— 触屏不读 `showAButton`
+         * ============================================================
+         * 用户的原话:
+         *
+         * > 你应该**直接在触屏样式的配置字段直接去掉 showAButton** 吧。。。
+         * > 不然不是字段冗余了吗
+         *
+         * ⚠️ 他说得对，而且这是**根治**而不是打补丁:
+         *
+         * | 做法 | 问题 |
+         * |---|---|
+         * | 创建时把触屏的 `showAButton` 设成 `false` | ⚠️ 那字段**被门控掉了、不写进存档**，重新解码时又变回 `true` → **A 键行自己冒出来**（用户报的"划了下后台多了个 A_BUTTON"） |
+         * | 再给解码加一条"按样式取缺省" | ⚠️ 那是在**给一个触屏压根不该有的字段写特殊逻辑** |
+         * | ✅ **让布局不读它** | 触屏的 `showAButton` 变成**谁也不读的字段** —— 存 `true` 还是 `false` 都一样，冗余消失 |
+         *
+         * ⚠️ 触屏的 Space 走 `SPACE` 槽位（见 `touchingKeyMappings`），
+         * A 键行对它**没有任何意义**；手柄才是拿 A 当空格位的那个。
+         */
+        val usesAButton = config.styleId == StyleId.GAMEPAD2
+
+        /* 行:A（独占一行，横跨两列）—— ⚠️ 手柄专属 */
+        if (usesAButton && config.showAButton) {
             pushWideButton(Id.A_BUTTON)
             rows += listOf(popLast())
         }
@@ -723,12 +792,40 @@ object KeyLayout {
          * ⚠️ 只挪 A 那一行，**不动** LT/RT/肩键那一组 —— 那是"跟扳机键
          * 在一起"的要求。老写法把 A 插在行序前面时会连带影响肩键，
          * 正是用户报的那个问题。
+         *
+         * ============================================================
+         * ⚠️⚠️ SPACE 置顶（**触屏用得到**，用户指出来的）
+         * ============================================================
+         * 用户的原话:
+         *
+         * > Space 置顶也**用得到**啊，你这样改不合适吧
+         *
+         * ⚠️ 他说得对 —— 我原来只在这个布局里实现了 A 置顶，
+         * 而 `spaceKeyOnTop` 的代码**只在键盘分支**里（见 `keys()` 尾部
+         * 的 `orderedTailRows`）。触屏改用 `SPACE` 槽位当 Space 之后，
+         * 那个开关必须在这里也生效，否则"置顶"点了没反应。
+         *
+         * ⚠️ 两个置顶**同时打开**时:SPACE 先提到最前，A 再提到最前 ——
+         * 于是 A 在 SPACE 之上。这是**刻意**的（A 是更"主要"的那个键），
+         * 而且两种样式下都只有其中一个可用（触屏没有 A 行、手柄的
+         * `showSpaceKey` 为 false），所以现实中不会同时命中。
          */
-        val orderedRows = if (config.showAButton && config.aButtonOnTop) {
-            val aRow = rows.first { row -> row.any { it.slotId == Id.A_BUTTON } }
-            listOf(aRow) + rows.filter { it !== aRow }
+        val afterSpace = if (config.showSpaceKey && config.spaceKeyOnTop) {
+            val spaceRow = rows.firstOrNull { row -> row.any { it.slotId == Id.SPACE } }
+            if (spaceRow != null) {
+                listOf(spaceRow) + rows.filter { it !== spaceRow }
+            } else {
+                rows
+            }
         } else {
             rows
+        }
+
+        val orderedRows = if (usesAButton && config.showAButton && config.aButtonOnTop) {
+            val aRow = afterSpace.first { row -> row.any { it.slotId == Id.A_BUTTON } }
+            listOf(aRow) + afterSpace.filter { it !== aRow }
+        } else {
+            afterSpace
         }
 
         /*

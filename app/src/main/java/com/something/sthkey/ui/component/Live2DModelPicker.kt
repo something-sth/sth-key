@@ -69,6 +69,15 @@ fun Live2DModelPickerDialog(
     onSelect: (String) -> Unit,
     onLibraryChanged: () -> Unit,
     onDismiss: () -> Unit,
+    /**
+     * **库模式**（设置 → 库 → Live2D 库）。
+     *
+     * ⚠️ 库模式下:标题改成「Live2D 库」、行**不可选**（点了没反应）、
+     * 导入成功后**不自动选中** —— 这里只是管理资源，不是在编辑某份配置。
+     *
+     * ⚠️ 改名 / 删除**照样可用**，那才是「管理库」该做的事。
+     */
+    libraryMode: Boolean = false,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -103,8 +112,8 @@ fun Live2DModelPickerDialog(
                 .onSuccess { outcome ->
                     revision++
                     onLibraryChanged()
-                    // 导入完直接选中它：用户导入就是为了用它
-                    onSelect(outcome.entry.id)
+                    // 导入完直接选中它：用户导入就是为了用它（⚠️ 库模式下不选）
+                    if (!libraryMode) onSelect(outcome.entry.id)
                     notice = buildString {
                         append(
                             if (outcome.reused) {
@@ -124,7 +133,7 @@ fun Live2DModelPickerDialog(
 
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
-        title = { Text("选择 Live2D 模型") },
+        title = { Text(if (libraryMode) "Live2D 库" else "选择 Live2D 模型") },
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
                 LazyColumn(
@@ -137,9 +146,10 @@ fun Live2DModelPickerDialog(
                     items(models, key = { it.id }) { model ->
                         ModelRow(
                             model = model,
-                            selected = model.id == selectedId,
+                            /* ⚠️ 库模式不显示「已选中」标记 —— 库里没有选中这回事 */
+                            selected = !libraryMode && model.id == selectedId,
                             enabled = !busy,
-                            onClick = { onSelect(model.id) },
+                            onClick = { if (!libraryMode) onSelect(model.id) },
                             onRename = { renaming = model },
                             onDelete = { deleting = model },
                         )
@@ -185,7 +195,7 @@ fun Live2DModelPickerDialog(
 
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = "导入的模型对所有配置可用；只会保存在本机，不会自动分享给别人。",
+                    text = "导入的模型对所有配置可用；会跟随着配置文件一起导出。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

@@ -5,33 +5,119 @@ package com.something.sthkey.ui
  *
  * 引导阶段与主界面分开管理，而不是"主页上盖一层遮罩"：
  * 引导页需要整屏展示权限说明，且完成后不应留在返回栈里（否则返回键会回到引导页）。
+ *
+ * ============================================================
+ * ⚠️⚠️ 这里**没有**"校验中"这个阶段（曾经加过，被否掉了）
+ * ============================================================
+ * 用户的原话:
+ *
+ * > 而且我并不想让用户每次进入都放一个这么丑的检查权限的页面，
+ * > **你冷检查就行了**
+ *
+ * ⚠️ 于是校验改成**静默**的:
+ *
+ * | 做法 | 观感 |
+ * |---|---|
+ * | 显示"正在检查权限…"再决定 | ⚠️ 每次启动都多一屏，用户嫌丑 |
+ * | **按上次的状态直接进，查出问题再切回去** | ✅ 正常情况**完全无感** |
+ *
+ * ⚠️ 具体见 `MainActivity` 里那段"静默校验"。
  */
 enum class AppStage {
     SETUP,
     MAIN,
 }
 
-/** 主界面底部导航的三个一级页面 */
-enum class TopDestination(
-    val route: String,
-    val label: String,
-) {
-    HOME("home", "主页"),
-    CONFIG("config", "配置"),
-    SETTINGS("settings", "设置"),
+/**
+ * 主界面底部导航的三个一级页面。
+ *
+ * ============================================================
+ * ⚠️⚠️ 一级页面**不再是一条条导航路由**，而是 [HorizontalPager] 的三页
+ * ============================================================
+ * 用户的原话:
+ *
+ * > 下一步把底栏优化一下，让主页切到设置栏的过程中，
+ * > **配置页也渲染在滚动过程中**
+ *
+ * ⚠️ 以前它们是 `NavHost` 里的三个 `composable`，切换靠 `AnimatedContent`
+ * 做一次性滑动 —— 过渡期间**中间那一页根本不存在**，所以从主页切到设置时
+ * 配置页是看不见的。
+ *
+ * ⚠️ 现在三页常驻在 `HorizontalPager` 里，切页是**真的横向滚动**：
+ * 主页 → 设置的途中，配置页会从屏幕上真实地滑过去。
+ *
+ * ⚠️ 所以这里的 `route` 字段**已经删掉** —— 它们不再是路由名。
+ * 页序号直接用 [ordinal]（枚举顺序 = pager 页序），**不要**另存一份
+ * `page` 数字:两处各写一份迟早会对不上。
+ */
+enum class TopDestination(val label: String) {
+    HOME("主页"),
+    CONFIG("配置"),
+    SETTINGS("设置"),
     ;
 
     companion object {
-        val ROUTES: Set<String> = entries.map { it.route }.toSet()
+        /** 首屏落在哪一页 */
+        val START: TopDestination = HOME
 
-        fun of(route: String?): TopDestination? = entries.firstOrNull { it.route == route }
+        /** pager 的总页数 */
+        val pageCount: Int get() = entries.size
     }
 }
 
 /** 二级页面路由（不显示底栏） */
 object SubRoutes {
+    /**
+     * **一级页面的宿主路由**（里面是一个 `HorizontalPager`）。
+     *
+     * ⚠️ 为什么一级页面也要有个路由:它们要和二级页面**共存于同一个
+     * `NavHost`**。这样从「设置 → 调试」再返回时，pager 停在原来那一页
+     * （`PagerState` 走 `rememberSaveable`，返回栈条目会把它存下来）。
+     *
+     * ⚠️ 如果反过来做（pager 包着 NavHost），二级页面就会在 pager 内部打开，
+     * 底栏的隐藏、返回键的语义都会变得很难讲清。
+     */
+    const val MAIN = "main"
+
     const val DEBUG = "debug"
     const val ABOUT = "about"
+
+    /**
+     * **主题设置** —— 从「设置 → 外观 → 主题设置」点进来。
+     *
+     * ============================================================
+     * ⚠️ 为什么单独一页（用户要求 + 照 SukiSU）
+     * ============================================================
+     * 用户的原话:
+     *
+     * > 现在我想把 material 的 ui 主题也做细节一点，我们也像 sukisu 那样
+     * > 单独分一个「主题设置」
+     *
+     * ⚠️ SukiSU 那边也是独立一页（`ColorPaletteScreen`，从设置页的一行推入）。
+     * 放在设置页那一长串里的话，配色、底栏这些"外观类"选项会和
+     * 「导出方式」「画布底色」混在一起，找起来很难。
+     */
+    const val THEME = "theme"
+
+    /**
+     * **采集通道设置** —— 从主页「工作状态」大卡片点进来。
+     *
+     * ============================================================
+     * ⚠️ 为什么它是个"二级页面"而不是调试页里的一块
+     * ============================================================
+     * 用户的原话:
+     *
+     * > 调试页的工作模式切换的卡片，也可以做在我们这一班搞的
+     * > 工作状态卡片里，sukisu 的卡片点开后是关于 boot 之类的功能，
+     * > 我们把那个页面换一下就行了
+     *
+     * ⚠️ 「切换采集通道」是**日常操作**（换了设备、root 掉了、想省电切 Shizuku），
+     * 藏在「调试」里会让普通用户以为它是个危险开关。
+     *
+     * ⚠️ 而且 SukiSU 那张卡点开也是**推开一个独立页面**
+     * （`navigator.push(Route.Install())`），不是对话框 —— 照抄这个形状。
+     */
+    const val CAPTURE_MODE = "capture_mode"
 
     /** 配置编辑页；路径形如 config_editor/{configId} */
     const val CONFIG_EDITOR = "config_editor"
@@ -50,6 +136,17 @@ object SubRoutes {
     fun configEditor(configId: String): String = "$CONFIG_EDITOR/$configId"
 
     fun customEditor(configId: String): String = "$CUSTOM_EDITOR/$configId"
+
+    /**
+     * **配置组合详情页** —— 从配置页的组合卡片点进来。
+     *
+     * ⚠️ 路径里带 groupId，与 `config_editor/{configId}` 同一套写法。
+     */
+    const val GROUP_DETAIL = "group_detail"
+
+    const val ARG_GROUP_ID = "groupId"
+
+    fun groupDetail(groupId: String): String = "$GROUP_DETAIL/$groupId"
 }
 
 /**
@@ -188,7 +285,6 @@ object AppLinks {
 
     const val QQ_GROUP_NUMBER = "908887474"
 
-    const val QQ_GROUP_PASSWORD = "sthkey"
 
     const val DEVELOPER = "something-sth"
 }

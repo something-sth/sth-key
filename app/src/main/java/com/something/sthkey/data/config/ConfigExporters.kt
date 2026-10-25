@@ -3,13 +3,20 @@ package com.something.sthkey.data.config
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.Manifest
+import android.media.MediaScannerConnection
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import androidx.annotation.RequiresApi
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.something.sthkey.core.log.AppLog
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import java.io.File
+
 
 /**
  * 两种"不用每次挑位置"的配置包导出方式。
@@ -48,6 +55,15 @@ import java.io.File
  * 走 `ACTION_CREATE_DOCUMENT`（系统界面），那条路一直正常。
  * 与"预先设一个目录、之后静默写入"是两回事 —— 后者才是被删掉的。
  */
+/**
+ * 把"往这个 Uri 里写一个包"抽象出来。
+ *
+ * ⚠️ 配置与配置组合走**同一条落盘通道**（MediaStore / 老式目录 / 分享缓存），
+ * 唯一的区别就是"写什么进去"。把这件小事抽成函数之后，
+ * 两边不会出现"某种导出方式少带资源"这种分叉。
+ */
+typealias PackageWriter = (android.net.Uri) -> Boolean
+
 object ConfigExporters {
 
     /** 下载目录里的子目录名 */
@@ -74,15 +90,42 @@ object ConfigExporters {
      * ============================================================ */
 
     /**
-     * 写进系统下载目录，**零权限**。
+     * 写进系统下载目录。
+     *
+     * ============================================================
+     * ⚠️⚠️ 两条路，因为 `MediaStore.Downloads` 是 API 29 才有的
+     * ============================================================
+     * | 系统 | 走哪条 | 权限 |
+     * |---|---|---|
+     * | Android 10（API 29）及以上 | **MediaStore** | 零权限 |
+     * | Android 9（API 28）及以下 | **老式公共目录 `File`** | `WRITE_EXTERNAL_STORAGE` |
+     *
+     * ⚠️ 为什么必须分开:在 API 28 上访问 `MediaStore.Downloads.EXTERNAL_CONTENT_URI`
+     * 会抛 **`NoSuchFieldError`** —— 它是 `Error` 不是 `Exception`，
+     * 外面那个 `catch (e: Exception)` **接不住**，表现为"一点导出就闪退"。
+     * 这已经由 lint 的 `NewApi` 检查确认过（minSdk 降到 28 时唯一一条真报错）。
      *
      * @param subDir `Download/` 下的子目录名；空表示直接放 `Download/`
      */
     fun exportToDownloads(
         context: Context,
-        config: KeyStrokesConfig,
+        write: PackageWriter,
         fileName: String,
         subDir: String = SUBDIR,
+    ): ExportResult = when {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ->
+            exportToDownloadsMediaStore(context, write, fileName, subDir)
+
+        else -> exportToDownloadsLegacy(context, write, fileName, subDir)
+    }
+
+    /** Android 10+：MediaStore，零权限。行为与之前完全一致。 */
+    @RequiresApi(Build.VERSION_CODES.Q)
+    private fun exportToDownloadsMediaStore(
+        context: Context,
+        write: PackageWriter,
+        fileName: String,
+        subDir: String,
     ): ExportResult {
         val relative = buildString {
             append(Environment.DIRECTORY_DOWNLOADS)
@@ -133,7 +176,7 @@ object ConfigExporters {
              */
             val actualName = displayNameOf(context, uri) ?: fileName
 
-            if (!writePackageAt(context, config, uri)) {
+            if (!write(uri)) {
                 // 失败就把这个半成品删掉，别留一个 0 字节文件挡住下次导出
                 runCatching { context.contentResolver.delete(uri, null, null) }
                 return ExportResult.Failed("写入失败")
@@ -156,6 +199,119 @@ object ConfigExporters {
             ExportResult.Failed(e.message ?: e.javaClass.simpleName)
         }
     }
+
+    /**
+     * Android 9 及以下：直接往公共下载目录写 `File`。
+     *
+     * ============================================================
+     * ⚠️ 与 MediaStore 那条路的**行为差异**（有意为之）
+     * ============================================================
+     * | 项 | MediaStore（10+） | 这条路（9-） |
+     * |---|---|---|
+     * | 重名 | 系统自动改成 `x (1)` | **我们自己**用 [uniqueName] 做同样的事 |
+     * | 写完可见性 | 系统自己索引 | 主动 `scanFile` 一次，文件管理器才立刻能看到 |
+     * | 权限 | 无 | `WRITE_EXTERNAL_STORAGE`（见清单里的 `maxSdkVersion="28"`） |
+     *
+     * ⚠️ 重名策略必须"看起来一样":用户在两台机器上都点导出，
+     * 一台得到 `配置 (1).sthkey`、另一台被覆盖，那是数据丢失。
+     */
+    @Suppress("DEPRECATION")
+    private fun exportToDownloadsLegacy(
+        context: Context,
+        write: PackageWriter,
+        fileName: String,
+        subDir: String,
+    ): ExportResult {
+        /*
+         * ⚠️ 权限检查放在最前面:没权限时 `mkdirs()` 只会**静默返回 false**，
+         * 报出来的错会变成"无法创建目录"，把用户引到错误的方向。
+         */
+        val granted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.WRITE_EXTERNAL_STORAGE,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            AppLog.w(TAG, "Android 9 导出需要存储权限，当前未授予")
+            return ExportResult.Failed(NEED_STORAGE_PERMISSION)
+        }
+
+        return try {
+            val root = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            val dir = if (subDir.isBlank()) root else File(root, subDir.trim('/'))
+            if (!dir.exists() && !dir.mkdirs()) {
+                return ExportResult.Failed("无法创建目录 ${dir.absolutePath}")
+            }
+
+            val taken = dir.list()?.toSet().orEmpty()
+            val name = uniqueName(fileName, taken)
+            val file = File(dir, name)
+
+            if (!write(Uri.fromFile(file))) {
+                /*
+                 * ⚠️ 失败就把半成品删掉。这条路**直接写目标文件**（没有 pending 标记），
+                 * 留一个残缺 zip 的话，用户下次导出会在文件管理器里看到两个同名文件，
+                 * 而其中一个打不开。
+                 */
+                runCatching { file.delete() }
+                return ExportResult.Failed("写入失败")
+            }
+
+            /*
+             * 主动扫码一次。不扫的话，部分机型的"文件管理 → 下载"里
+             * 要等重启媒体库才出现，用户会以为导出失败。
+             */
+            runCatching {
+                MediaScannerConnection.scanFile(
+                    context,
+                    arrayOf(file.absolutePath),
+                    arrayOf(MIME_TYPE),
+                    null,
+                )
+            }
+
+            AppLog.i(TAG, "已导出到下载目录（API ${Build.VERSION.SDK_INT}）：${file.absolutePath}")
+            ExportResult.Ok(name)
+        } catch (e: Exception) {
+            AppLog.e(TAG, "导出到下载目录失败（老式路径）", e)
+            ExportResult.Failed(e.message ?: e.javaClass.simpleName)
+        }
+    }
+
+    /**
+     * 在一个已被占用的名字集合里，算出一个不冲突的文件名。
+     *
+     * 规则与 MediaStore 的重名处理保持一致（`x.sthkey` → `x (1).sthkey` → `x (2).sthkey`），
+     * 这样同一个配置在 Android 9 和 Android 10+ 上导出后，文件名长得一样。
+     *
+     * ⚠️ 抽成纯函数是为了能在 JVM 单测里覆盖 —— 它不碰文件系统，只认一个"名字集合"。
+     *
+     * @param taken 目录里已有的文件名（大小写敏感由调用方的文件系统决定）
+     */
+    internal fun uniqueName(desired: String, taken: Set<String>): String {
+        if (desired !in taken) return desired
+
+        /*
+         * 拆成 "主名" + "扩展名" 两组。
+         *
+         * ⚠️ 用 `lastIndexOf('.')` 而不是 `substringBefore('.')`:
+         * 名字里本身可能带点（`配置 1.2.sthkey`），从第一个点切会把扩展名判错。
+         * ⚠️ 点在最前面（`.sthkey`，隐藏文件）时视为**没有主名**，
+         * 否则会算出空基础和空扩展名，重名时拼出 " (1)" 这种怪名字。
+         */
+        val dot = desired.lastIndexOf('.')
+        val base = if (dot > 0) desired.substring(0, dot) else desired
+        val ext = if (dot > 0) desired.substring(dot) else ""
+
+        var index = 1
+        while (true) {
+            val candidate = "$base ($index)$ext"
+            if (candidate !in taken) return candidate
+            index++
+        }
+    }
+
+    /** [exportToDownloadsLegacy] 在没授权时返回的原因串，界面据此决定要不要去申请权限 */
+    const val NEED_STORAGE_PERMISSION = "需要存储权限"
 
     /**
      * 读一个 Uri 的显示名；查不到返回 null。
@@ -196,8 +352,9 @@ object ConfigExporters {
      */
     fun buildShareIntent(
         context: Context,
-        config: KeyStrokesConfig,
+        displayName: String,
         fileName: String,
+        write: PackageWriter,
     ): Intent? {
         /*
          * ⚠️ 用块体而不是 `= try { … }`：表达式体里**不能用 `return`**
@@ -220,7 +377,7 @@ object ConfigExporters {
             dir.listFiles()?.forEach { it.delete() }
 
             val file = File(dir, sanitizeFileName(fileName))
-            if (!writePackageToFile(context, config, file)) return null
+            if (!write(Uri.fromFile(file))) return null
 
             val uri = FileProvider.getUriForFile(context, authorityOf(context), file)
 
@@ -238,7 +395,7 @@ object ConfigExporters {
                  */
                 type = SHARE_MIME_TYPE
                 putExtra(Intent.EXTRA_STREAM, uri)
-                putExtra(Intent.EXTRA_SUBJECT, config.name)
+                putExtra(Intent.EXTRA_SUBJECT, displayName)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
         } catch (e: Exception) {
@@ -261,28 +418,12 @@ object ConfigExporters {
     const val MIME_TYPE = "application/octet-stream"
 
     /**
-     * **分享**时用的类型；与 [MIME_TYPE] 刻意不同，见 [buildShareIntent] 的说明。
+     * **分享**时用的类型；与 [MIME_TYPE] 刻意不同，见 `buildShareIntent` 的说明。
      */
     private const val SHARE_MIME_TYPE = "application/zip"
 
+    /** 分享前把包临时写到这个缓存子目录 */
     private const val SHARE_DIR = "share"
-
-    /**
-     * 把配置包写到目标 Uri。
-     *
-     * 与 `ConfigPackageManager.writePackage` 是同一件事 ——
-     * 那边是 private，这里通过包内可见的桥接调用，避免两份实现
-     * （两份的下场是"某一种导出方式少带了某个资源"）。
-     */
-    private fun writePackageAt(context: Context, config: KeyStrokesConfig, target: Uri): Boolean =
-        ConfigPackageManager.writeTo(context, config, target)
-
-    private fun writePackageToFile(
-        context: Context,
-        config: KeyStrokesConfig,
-        file: File,
-    ): Boolean = ConfigPackageManager.writeTo(context, config, Uri.fromFile(file))
-
     /** `FileProvider` 的 authority，与 manifest 里声明的一致 */
     private fun authorityOf(context: Context): String = "${context.packageName}.files"
 

@@ -161,12 +161,22 @@ fun ImportReportContent(report: ConfigPackageManager.ImportResult) {
 
         /* ---- 字段差异 ---- */
 
-        if (report.unknownKeys.isNotEmpty() || report.missingKeys.isNotEmpty()) {
+        /*
+         * ⚠️ 三类都算进"有没有差异" —— 但[别的样式的字段]是**提示**，
+         * 不是问题（见下面每一节自己的说明）。
+         */
+        val hasDiff = report.unknownKeys.isNotEmpty() ||
+            report.missingKeys.isNotEmpty() ||
+            report.otherStyleKeys.isNotEmpty()
+
+        if (hasDiff) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
             Text(
                 text = "字段差异 " +
-                    "（未识别 ${report.unknownKeys.size} · 默认值 ${report.missingKeys.size}）",
+                    "（未识别 ${report.unknownKeys.size} · " +
+                    "默认值 ${report.missingKeys.size} · " +
+                    "别的样式 ${report.otherStyleKeys.size}）",
                 style = MaterialTheme.typography.titleMedium,
             )
 
@@ -187,6 +197,20 @@ fun ImportReportContent(report: ConfigPackageManager.ImportResult) {
                         title = "配置中未定义的项（已用默认值）",
                         lines = report.missingKeys.map { JsonConfigCodec.labelOf(it) },
                         hint = "这些项在配置包里没有写，因此使用本版本的默认值",
+                    )
+                }
+                if (report.otherStyleKeys.isNotEmpty()) {
+                    /*
+                     * ⚠️ 措辞刻意**不叫"问题"** —— 这一类不影响这份配置:
+                     * 上一版导出时每种样式都把全部字段写进去，
+                     * 所以自定义 Key 的包里带着键盘、手柄的字段。
+                     * 导入时它们本来就不参与（不读它们），值会被忽略。
+                     */
+                    ReportSection(
+                        title = "属于别的样式的字段（已忽略）",
+                        lines = report.otherStyleKeys.map { JsonConfigCodec.labelOf(it) },
+                        hint = "这份配置用不到它们，忽略即可 —— " +
+                            "它们来自旧版本导出的包（那时每种样式都会写全部字段）",
                     )
                 }
             }

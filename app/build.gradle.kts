@@ -42,12 +42,12 @@ android {
 
     defaultConfig {
         applicationId = "com.something.sthkey"
-        minSdk = 30
+        minSdk = 28
         // targetSdk 保持 36：它决定运行时行为（是否受新版系统限制），
         // 与"用什么 SDK 编译"是两件事，没必要跟着一起升
         targetSdk = 36
-        versionCode = 262
-        versionName = "2.6.2"
+        versionCode = 272
+        versionName = "2.7.2"
 
         buildConfigField("String", "BUILD_TAG", "\"$buildTag\"")
 
@@ -210,6 +210,8 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
 
+
+    implementation(libs.material.color.utilities)
     implementation(libs.shizuku.api)
     implementation(libs.shizuku.provider)
 
@@ -218,6 +220,15 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
 
     testImplementation(libs.junit)
+
+    /*
+     * ⚠️ 单测里 `org.json` 默认是 **android.jar 的空壳**（调用即抛
+     * "not mocked"）。而 `GroupPackageCodec` / `GroupCodec` 这类
+     * 编解码必须真的解析 JSON 才有意义，所以这里引入官方实现覆盖掉空壳。
+     *
+     * ⚠️ 只影响单元测试的类路径，不进 APK。
+     */
+    testImplementation("org.json:json:20240303")
 
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

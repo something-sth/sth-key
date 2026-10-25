@@ -3,12 +3,16 @@ package com.something.sthkey.ui.feature.settings
 import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.material.icons.filled.Campaign
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Code
+import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -31,6 +35,8 @@ import com.something.sthkey.ui.component.SettingsCard
 import com.something.sthkey.ui.feature.announcement.AnnouncementDialog
 import com.something.sthkey.ui.feature.announcement.AppAnnouncement
 
+
+
 /**
  * 关于页。
  *
@@ -47,6 +53,9 @@ fun AboutScreen(
 
     /** 是否打开更新公告（**浏览模式**：可随时关闭，也不需要读满倒计时） */
     var showAnnouncement by remember { mutableStateOf(false) }
+
+    /** 是否打开「捐赠」弹窗 */
+    var showDonate by remember { mutableStateOf(false) }
 
     ScrollableScreen(
         title = "关于",
@@ -110,6 +119,28 @@ fun AboutScreen(
          * ============================================================
          */
 
+        /*
+         * ============================================================
+         * 支持项目
+         * ============================================================
+         * ⚠️ 单独一栏而不是塞进「项目链接」里:
+         * 上面那几行都是"出去看"（浏览器/QQ），这一行是"点开一个窗口"，
+         * 混在一起会让用户以为点捐赠也会跳走。
+         */
+
+        item { SectionHeader("支持项目") }
+
+        item {
+            SettingsCard {
+                SettingItem(
+                    title = "捐赠",
+                    subtitle = "向开发者捐赠表示支持",
+                    leadingIcon = Icons.Rounded.Favorite,
+                    onClick = { showDonate = true },
+                )
+            }
+        }
+
         item { SectionHeader("项目链接") }
 
         item {
@@ -125,6 +156,7 @@ fun AboutScreen(
 
                 SettingItem(
                     title = "GitHub 开源仓库",
+                    leadingIcon = Icons.Rounded.Code,
                     subtitle = "something-sth/sth-key",
                     onClick = { PermissionHelper.openUrl(context, AppLinks.GITHUB_REPO) },
                     trailing = { Chevron() },
@@ -134,6 +166,7 @@ fun AboutScreen(
 
                 SettingItem(
                     title = "MIT License",
+                    leadingIcon = Icons.Rounded.Description,
                     subtitle = "查看项目开源许可证",
                     onClick = { PermissionHelper.openUrl(context, AppLinks.LICENSE) },
                     trailing = { Chevron() },
@@ -143,7 +176,8 @@ fun AboutScreen(
 
                 SettingItem(
                     title = "QQ 交流反馈群",
-                    subtitle = "群号 ${AppLinks.QQ_GROUP_NUMBER} · 密码 ${AppLinks.QQ_GROUP_PASSWORD}",
+                    leadingIcon = Icons.Rounded.Groups,
+                    subtitle = "群号 ${AppLinks.QQ_GROUP_NUMBER}",
                     onClick = {
                         if (!PermissionHelper.openUrl(context, AppLinks.QQ_GROUP)) {
                             Toast.makeText(
@@ -198,6 +232,10 @@ fun AboutScreen(
      * 从「关于」页进来是回看历史，不是"必读公告"：
      * 所以随时可以关掉，也不需要读满倒计时。
      */
+    if (showDonate) {
+        DonateDialog(onDismiss = { showDonate = false })
+    }
+
     if (showAnnouncement) {
         AnnouncementDialog(
             initialVersion = AppAnnouncement.latest.version,

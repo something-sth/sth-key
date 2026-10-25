@@ -159,6 +159,33 @@ fun createComponent(
             source = JoystickSource.MOUSE,
             joystick = config.joystick,
         )
+
+        /*
+         * ============================================================
+         * ⚠️ 触屏摇杆:默认 `side = LEFT`（**移动摇杆**）
+         * ============================================================
+         * 用户的原话:
+         *
+         * > 应该**只新增一个触屏摇杆组件**，然后新建后在上面**自己选择**
+         * > 是移动摇杆组件还是视角摇杆组件
+         *
+         * ⚠️ 所以这里只给一个默认值，用户在属性面板里换成"视角"即可
+         * （那是 `side` 那个分段按钮，**不用新建组件**）。
+         *
+         * ⚠️ 默认给**移动**而不是视角:移动摇杆有触摸区域要配（是"要动手做"的那一个），
+         * 而视角摇杆开箱就能用（吃全屏）。默认落在"需要配置"的那个，
+         * 用户一新建就看到「编辑触摸区域」按钮，不会以为这组件没配好。
+         */
+        ComponentType.JOYSTICK_TOUCH -> JoystickComponent(
+            id = id,
+            x = baseX,
+            y = baseY,
+            width = CustomLayout.NEW_KEY_SIZE,
+            height = CustomLayout.NEW_KEY_SIZE,
+            source = JoystickSource.TOUCH,
+            side = StickSide.LEFT,
+            joystick = config.joystick,
+        )
     }
 }
 

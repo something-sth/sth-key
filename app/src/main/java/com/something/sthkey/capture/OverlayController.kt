@@ -2,6 +2,8 @@ package com.something.sthkey.capture
 
 import android.content.Context
 import com.something.sthkey.core.log.AppLog
+import com.something.sthkey.capture.accessibility.AccessibilityGrant
+import com.something.sthkey.capture.accessibility.SthKeyAccessibilityService
 import com.something.sthkey.core.prefs.AppPrefs
 import com.something.sthkey.domain.overlay.OverlayLayouts
 import com.something.sthkey.data.permission.PermissionHelper
@@ -53,14 +55,29 @@ object OverlayController {
         }
 
         /*
-         * ⚠️ 权限检查必须**在最前面**。
+         * ============================================================
+         * ⚠️⚠️ 这里有道**前置检查**，判据从"悬浮窗权限"换成了"无障碍服务"
+         * ============================================================
+         * 用户报的:
          *
-         * 放到后面的话会出现"偏好写了、服务起了，但窗口画不出来" ——
-         * 而那个状态很难诊断：界面显示开关是开的、服务也在跑，
-         * 就是屏幕上什么都没有。
+         * > 开启悬浮窗的按钮**点不动**，授权了也是
+         *
+         * ⚠️ 成因就是这一行:改用 `TYPE_ACCESSIBILITY_OVERLAY` 之后
+         * `SYSTEM_ALERT_WINDOW` 已经删了，`canDrawOverlays()` 于是**恒为 false**
+         * —— 每次点开关都从这里直接 return，开关**看起来点不动**。
+         *
+         * ⚠️ 换成"无障碍服务连上了吗"才是**现在**的正确前置条件:
+         * 窗口要靠它建（见 `OverlayWindowHost`）。
+         *
+         * ⚠️ 但**不能只是 return** —— 那样用户又遇到同一个问题:
+         * 点了没反应、不知道为什么。所以要**跳系统无障碍设置页**，
+         * 这是用户明确要求过的兜底:
+         *
+         * > 只需要开启悬浮窗的时候做个弥补，跳转系统的无障碍授权页
          */
-        if (!PermissionHelper.canDrawOverlays(context)) {
-            AppLog.w(TAG, "没有悬浮窗权限，取消开启（请先在引导页授权）")
+        if (!SthKeyAccessibilityService.isConnected()) {
+            AppLog.w(TAG, "无障碍服务未连接，取消开启（跳转系统无障碍设置页）")
+            AccessibilityGrant.openSettings(context)
             return false
         }
 

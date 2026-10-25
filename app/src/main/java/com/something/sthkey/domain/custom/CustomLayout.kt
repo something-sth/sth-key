@@ -543,16 +543,32 @@ object CustomLayout {
      * 而且只在多选时才出现，极难联想到是这里的问题。
      *
      * @param slotIdOf 键码 → 键位 id；调用方注入，保持本层是纯函数
+     * @param touchCpsAt **这个组件**因触摸区域而累计的 CPS；
+     *   `0` = 没有触摸贡献（编辑器、预览、没绑区域的组件都走这个）。
+     *
+     *   ⚠️ 按**组件**给值（不是按占位符）—— 一条绑定就是"某块区域 →
+     *   某个组件"，它不区分 `(cps)` 占位符（用户没要求那个粒度，
+     *   而旧模型试过 `placeholderIndex`，那正是被否掉的那套）。
      */
     fun cpsAt(
         component: CustomComponent,
         index: Int,
         cpsBySlot: Map<String, Int>,
         slotIdOf: (Int) -> String?,
-    ): Int = cpsKeyCodesAt(component, index)
-        .mapNotNull(slotIdOf)
-        .distinct()
-        .sumOf { cpsBySlot[it] ?: 0 }
+        touchCpsAt: (Int) -> Int = { 0 },
+    ): Int {
+        val byKey = cpsKeyCodesAt(component, index)
+            .mapNotNull(slotIdOf)
+            .distinct()
+            .sumOf { cpsBySlot[it] ?: 0 }
+
+        /*
+         * ⚠️ 触摸区域那一路**另外加**（相加而不是二选一）——
+         * 一个按键组件完全可能"既绑了物理键、又被一块区域绑着"，
+         * 那两边的点击都该算进去。
+         */
+        return byKey + touchCpsAt(index)
+    }
 
     /**
      * 这个组件全部占位符的 CPS 值，按出现顺序。
@@ -564,8 +580,15 @@ object CustomLayout {
         component: CustomComponent,
         cpsBySlot: Map<String, Int>,
         slotIdOf: (Int) -> String?,
+        /**
+         * ⚠️ 触摸区域那一路，见 [cpsAt] 的说明。
+         *
+         * ⚠️ 按**组件 id** 取值 —— "哪块区域绑了它"的翻换算在界面层
+         * （那里才拿得到配置里的区域列表），这一层是纯数据。
+         */
+        touchCpsOf: (String) -> Int = { 0 },
     ): List<Int> = cpsPlaceholders(primaryTextOf(component))
-        .map { cpsAt(component, it.index, cpsBySlot, slotIdOf) }
+        .map { cpsAt(component, it.index, cpsBySlot, slotIdOf) { touchCpsOf(component.id) } }
 
     /**
      * 把一个组件这一刻应该显示的文字算出来（**只有这一条路径**）。

@@ -4,10 +4,10 @@ import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -16,20 +16,26 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.something.sthkey.data.permission.PermissionHelper
 import com.something.sthkey.ui.AppLinks
 import kotlinx.coroutines.delay
+
 
 /** 阅读倒计时：这段时间内"确认"不可点 */
 private const val READ_SECONDS = 3
@@ -112,7 +118,7 @@ fun AnnouncementDialog(
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
                 Text(
-                    text = release.intro,
+                    text = markdown(release.intro),
                     style = MaterialTheme.typography.bodyMedium,
                 )
 
@@ -126,7 +132,7 @@ fun AnnouncementDialog(
 
                     section.lines.forEach { line ->
                         Text(
-                            text = "· $line",
+                            text = markdown("· $line"),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -247,4 +253,50 @@ private fun LinkLine(
             }
             .padding(vertical = 6.dp),
     )
+}
+
+/**
+ * **极简 markdown**：只认 `**粗体**`，其余一律按原文显示。
+ *
+ * ============================================================
+ * ⚠️ 为什么要这个
+ * ============================================================
+ * 用户的原话:
+ *
+ * > 更新公告是**纯 text 不支持 markdown**，如果你能支持 markdown 的话也好，不能也罢
+ *
+ * ⚠️ 不引入第三方 markdown 库（一个公告弹窗不值得多一个依赖，
+ * 而且那些库会把 `*`、`#`、`-` 都解释掉，中文文案里出现这些字符很容易被误伤）。
+ *
+ * ⚠️ 只支持 `**` 一种标记，理由:
+ *
+ * | 标记 | 要不要 | 原因 |
+ * |---|---|---|
+ * | `**粗体**` | ✅ | 公告里最需要强调的就是几句关键提示 |
+ * | `` `代码` `` | ❌ | 公告是给用户看的，等宽字体在这里没有意义 |
+ * | `#` 标题 / `-` 列表 | ❌ | 公告本来就有 `Section` 结构与 `·` 前缀，再加一层会乱 |
+ *
+ * ⚠️ 未配对的 `**`（写错时）**原样保留**，不会把后面的文字吞掉 ——
+ * 宁可显示成字面的星号，也不要整段消失。
+ */
+private fun markdown(text: String): AnnotatedString = buildAnnotatedString {
+    var index = 0
+    while (index < text.length) {
+        val open = text.indexOf("**", index)
+        if (open < 0) {
+            append(text.substring(index))
+            break
+        }
+        val close = text.indexOf("**", open + 2)
+        if (close < 0) {
+            /* ⚠️ 没有配对的收尾标记 → 剩下的原样输出 */
+            append(text.substring(index))
+            break
+        }
+        append(text.substring(index, open))
+        withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+            append(text.substring(open + 2, close))
+        }
+        index = close + 2
+    }
 }

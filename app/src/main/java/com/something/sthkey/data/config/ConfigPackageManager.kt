@@ -55,6 +55,7 @@ object ConfigPackageManager {
      * @param renamed 是否因为重名而改了名字
      * @param unknownKeys 配置里有、本版本不认识的字段
      * @param missingKeys 本版本认识、配置里没写的字段（用了默认值）
+     * @param otherStyleKeys 配置里有、但**属于别的样式**的字段（既非未知、也非缺失）
      * @param importedFonts 本次新加入字体库的字体名
      * @param reusedFonts 复用了本地已有字体的字体名
      * @param missingFonts 包里没带、本地也没有的字体名（引用它们的地方已回落为默认字体）
@@ -68,6 +69,19 @@ object ConfigPackageManager {
         val renamed: Boolean,
         val unknownKeys: List<String>,
         val missingKeys: List<String>,
+        /**
+         * **属于别的样式**的字段。
+         *
+         * ⚠️ 与 [unknownKeys] / [missingKeys] 都不同:
+         * 我们**认识**这些字段（所以不是"未知"），
+         * 而这份配置**本来就不该有它们**（所以不是"缺失"）。
+         *
+         * ⚠️ 典型来源:上一版导出的包 —— 那时每种样式都把全部字段写进去，
+         * 所以一份自定义 Key 的包里带着键盘、手柄的字段。
+         * 导入时这些值会被正常忽略（本来也不读它们），
+         * 但报告里说一句比闷着好。
+         */
+        val otherStyleKeys: List<String> = emptyList(),
         val importedFonts: List<String>,
         val reusedFonts: List<String>,
         /**
@@ -696,7 +710,10 @@ object ConfigPackageManager {
         AppLog.i(
             TAG,
             "已导入配置「${created.name}」（原名称「${manifest.name}」，" +
-                "跳过 ${diff.unknown.size} 个未知字段，默认值 ${diff.missing.size} 项）",
+                "样式=${created.styleId}，" +
+                "跳过 ${diff.unknown.size} 个未知字段，" +
+                "${diff.otherStyle.size} 个别的样式的字段，" +
+                "默认值 ${diff.missing.size} 项）",
         )
 
         return Result.success(
@@ -706,6 +723,7 @@ object ConfigPackageManager {
                 renamed = finalName != manifest.name,
                 unknownKeys = diff.unknown,
                 missingKeys = diff.missing,
+                otherStyleKeys = diff.otherStyle,
                 importedFonts = fontOutcome.imported,
                 reusedFonts = fontOutcome.reused,
                 missingFonts = fontOutcome.missing,

@@ -1,5 +1,7 @@
 package com.something.sthkey.ui.feature.config
 
+import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -7,32 +9,38 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import com.something.sthkey.domain.style.StyleCategory
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.DashboardCustomize
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Keyboard
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.SportsEsports
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.Icons
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -40,44 +48,45 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.ui.platform.LocalLifecycleOwner
-import com.something.sthkey.core.prefs.AppPrefs
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import com.something.sthkey.core.prefs.AppPrefs
 import com.something.sthkey.data.config.ConfigPackageCodec
-import android.net.Uri
-import android.widget.Toast
-import com.something.sthkey.data.config.ExportMethod
 import com.something.sthkey.data.config.ConfigPackageManager
+import com.something.sthkey.data.config.ExportMethod
+import com.something.sthkey.data.config.GroupPackageCodec
+import com.something.sthkey.data.config.GroupPackageManager
 import com.something.sthkey.data.config.JsonConfigCodec
+import com.something.sthkey.domain.config.ConfigGroup
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.style.OverlayStyleDescriptor
 import com.something.sthkey.domain.style.OverlayStyleRegistry
-import com.something.sthkey.ui.MainViewModel
+import com.something.sthkey.domain.style.StyleCategory
 import com.something.sthkey.ui.component.ScrollableScreen
 import com.something.sthkey.ui.component.SectionHint
+import com.something.sthkey.ui.MainViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+
 
 /**
  * 配置列表页（配置 Tab 的首页）。
@@ -102,6 +111,7 @@ import kotlinx.coroutines.withContext
 fun ConfigListScreen(
     viewModel: MainViewModel,
     onEditConfig: (String) -> Unit,
+    onEditGroup: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -110,8 +120,33 @@ fun ConfigListScreen(
     // 换来的是"增删/改名后列表一定是最新的"，不需要手动维护刷新令牌
     val configs = viewModel.allConfigs()
 
+    /*
+     * ============================================================
+     * ⚠️ 配置组合:成员从配置列表里**隐藏**，只留没被分组的配置
+     * ============================================================
+     * 用户的原话:
+     *
+     * > 创建后，如有选择添加的配置，则原有配置页选择的那几个配置会消失
+     *
+     * ⚠️ "消失"不是删除，只是**不在这一页显示** —— 解散组合后会回来。
+     * 判断依据是 `viewModel.groupedConfigIds()`（所有组合的成员并集），
+     * 而不是"当前组合"，因为一个配置最多属于一个组合，所以并集就够了。
+     */
+    val groups = viewModel.groups
+    val groupedIds = remember(groups) { groups.flatMap { it.memberIds }.toSet() }
+    val ungrouped = configs.filterNot { it.id in groupedIds }
+
+    /*
+     * ⚠️ 组合排在**前面**:它们是容器，先看到"有哪些组"，再看零散的配置，
+     * 比"零散配置里夹着几个组"更好找。组与组的顺序 = 创建顺序。
+     */
+    val items: List<ConfigListItem> = buildList {
+        groups.forEach { add(ConfigListItem.GroupItem(it)) }
+        ungrouped.forEach { add(ConfigListItem.ConfigItem(it)) }
+    }
+
     // 重命名不改变列表长度，靠版本号保证列表刷新
-    val listRevision = viewModel.configVersion
+    val listRevision = viewModel.configVersion + viewModel.groupsVersion
 
     /*
      * ============================================================
@@ -158,10 +193,25 @@ fun ConfigListScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    val rows = configs.chunked(columns)
+    val rows = items.chunked(columns)
 
     var deleting by remember { mutableStateOf<KeyStrokesConfig?>(null) }
+    var dissolving by remember { mutableStateOf<ConfigGroup?>(null) }
     var showCreateDialog by remember { mutableStateOf(false) }
+    var showCreateGroupDialog by remember { mutableStateOf(false) }
+
+    /** 正在导出哪个组合；非 null 时说明"选保存位置"已经发起过了 */
+    /** 待选择导出方式的组合；非 null 时说明弹窗开着 */
+    var choosingExportGroupFor by remember { mutableStateOf<ConfigGroup?>(null) }
+
+    /*
+     * FAB 展开状态。
+     *
+     * ⚠️ 用户否掉了"顶部放两个按钮"（太挤），选了 **FAB 展开**:
+     * 点 `+` 向上冒出两个**带文字的**扩展 FAB（新建配置 / 新建组合），
+     * 再点一次收起。带文字是为了不让两个入口被搞混。
+     */
+    var fabExpanded by remember { mutableStateOf(false) }
 
     /** 导入失败的原因，用于弹错误框 */
     var importError by remember { mutableStateOf<String?>(null) }
@@ -195,10 +245,46 @@ fun ConfigListScreen(
      * ⚠️ 每次点击都**重新读一次偏好**，而不是用组合期的快照：
      * 用户可能刚去设置页改了默认方式再回来。
      */
+    /*
+     * 把一份配置包装成"导出目标"。
+     *
+     * ⚠️ 这只是给 `ExportFlow` 一个统一的入参形状 —— 真正的写入仍然是
+     * 原来的 `ConfigPackageManager.export`，一行都没变。
+     */
+    fun pendingExportOf(config: KeyStrokesConfig): PendingExport = PendingExport(
+        displayName = config.name,
+        fileName = config.name + ConfigPackageCodec.EXTENSION,
+        write = { uri ->
+            ConfigPackageManager.export(
+                context = context,
+                config = config,
+                target = uri,
+                requestedName = config.name + ConfigPackageCodec.EXTENSION,
+            )
+        },
+    )
+
+    /**
+     * 导出**配置组合**。
+     *
+     * ⚠️ 走的是**和配置完全一样**的那条导出流程（默认方式 / 选择位置 / 分享），
+     * 区别只是 `ExportFlow` 里"往 Uri 里写什么"是 `GroupPackageManager.export`。
+     * 所以不会出现"组合只能用某一种方式导出"这种分叉。
+     */
+    fun exportGroup(group: ConfigGroup) {
+        val members = group.memberIds.mapNotNull { id ->
+            configs.firstOrNull { it.id == id }
+        }
+        when (val method = prefs.exportMethod) {
+            ExportMethod.ASK -> choosingExportGroupFor = group
+            else -> exportFlow.startGroup(group, members, method, false)
+        }
+    }
+
     fun startExport(config: KeyStrokesConfig) {
         when (val method = prefs.exportMethod) {
             ExportMethod.ASK -> choosingExportFor = config
-            else -> exportFlow.start(config, method, false)
+            else -> exportFlow.start(pendingExportOf(config), method, false)
         }
     }
 
@@ -224,6 +310,40 @@ fun ConfigListScreen(
         if (uri == null) return@rememberLauncherForActivityResult
 
         scope.launch {
+            /*
+             * ⚠️ 先嗅探包类型:同一个入口要能吃 `.sthkey` 与 `.sthgroup`。
+             * 判断依据是**包里的 manifest**，不是文件后缀（后缀会被系统/用户改名）。
+             */
+            val kind = withContext(Dispatchers.IO) {
+                GroupPackageManager.detectKind(context, uri)
+            }
+
+            if (kind == GroupPackageManager.PackageKind.GROUP) {
+                val groupResult = withContext(Dispatchers.IO) { GroupPackageManager.import(context, uri) }
+                groupResult
+                    .onSuccess { outcome ->
+                        viewModel.reloadConfigs()
+                        /*
+                         * ⚠️ 组合是 GroupStore 建的，ViewModel 不知道 ——
+                         * 必须让它重读一次，否则配置页看不到新组合。
+                         */
+                        viewModel.reloadGroups()
+                        val failureNote = if (outcome.failures.isEmpty()) {
+                            ""
+                        } else {
+                            "\n\n以下配置没能导入:\n" + outcome.failures.joinToString("\n") { "· $it" }
+                        }
+                        showToast(
+                            "已导入组合「${outcome.group.name}」" +
+                                "(${outcome.importedNames.size} 个配置)" + failureNote,
+                        )
+                    }
+                    .onFailure { error ->
+                        importError = error.message ?: error.javaClass.simpleName
+                    }
+                return@launch
+            }
+
             val result = withContext(Dispatchers.IO) { ConfigPackageManager.import(context, uri) }
             result
                 .onSuccess { report ->
@@ -273,13 +393,65 @@ fun ConfigListScreen(
             }
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { showCreateDialog = true }) {
-                Icon(Icons.Default.Add, contentDescription = "新建配置")
+            /*
+             * ⚠️ 展开后两个都是 `ExtendedFloatingActionButton`（带文字）:
+             * 两个圆形 `+` 图标用户分不清哪个是哪个。
+             */
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                if (fabExpanded) {
+                    ExtendedFloatingActionButton(
+                        onClick = {
+                            fabExpanded = false
+                            showCreateGroupDialog = true
+                        },
+                        icon = { Icon(Icons.Default.CreateNewFolder, contentDescription = null) },
+                        text = { Text("新建组合") },
+                    )
+                    ExtendedFloatingActionButton(
+                        onClick = {
+                            fabExpanded = false
+                            showCreateDialog = true
+                        },
+                        icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                        text = { Text("新建配置") },
+                    )
+                }
+
+                FloatingActionButton(onClick = { fabExpanded = !fabExpanded }) {
+                    Icon(
+                        imageVector = if (fabExpanded) Icons.Default.Close else Icons.Default.Add,
+                        contentDescription = if (fabExpanded) "收起" else "新建",
+                    )
+                }
             }
         },
     ) {
+        /*
+         * ⚠️ 空状态:所有配置都被装进组合时，`ungrouped` 会是空的。
+         * 不提示的话用户会以为"配置全丢了"。
+         */
+        if (items.isEmpty()) {
+            item {
+                SectionHint(
+                    text = "还没有配置。点右下角的「+」新建一个。",
+                )
+            }
+        }
+
         rows.forEachIndexed { rowIndex, rowItems ->
-            item(key = "row_${listRevision}_${columns}_${rowItems.firstOrNull()?.id ?: rowIndex}") {
+            /*
+             * ⚠️ key 里要同时兼容"配置"和"组合"两种项 ——
+             * 直接用 `firstOrNull()?.id` 不行（`ConfigListItem` 没有 id 字段）。
+             */
+            val firstKey = when (val first = rowItems.firstOrNull()) {
+                is ConfigListItem.ConfigItem -> first.config.id
+                is ConfigListItem.GroupItem -> "group_${first.group.id}"
+                null -> "row_$rowIndex"
+            }
+            item(key = "row_${listRevision}_${columns}_$firstKey") {
                 BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
                     /*
                      * 卡片宽度 = (可用宽 − 间隙总和) / 列数。
@@ -293,22 +465,41 @@ fun ConfigListScreen(
                     val cardWidth = (maxWidth - gaps) / columns.coerceAtLeast(1)
 
                     Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
-                        rowItems.forEach { config ->
-                            ConfigCard(
-                                config = config,
-                                width = cardWidth,
-                                showDescription = showDescription,
-                                compactActions = compactActions,
-                                // 点卡片即编辑：这是这一页最常用的动作。
-                                // 悬浮窗开关在主页，这里不重复放一份。
-                                onClick = { onEditConfig(config.id) },
-                                onExport = { startExport(config) },
-                                onDuplicate = {
-                                    val created = viewModel.duplicateConfig(config.id)
-                                    showToast("已复制为「${created.name}」")
-                                },
-                                onDelete = { deleting = config },
-                            )
+                        rowItems.forEach { item ->
+                            when (item) {
+                                is ConfigListItem.ConfigItem -> ConfigCard(
+                                    config = item.config,
+                                    width = cardWidth,
+                                    showDescription = showDescription,
+                                    compactActions = compactActions,
+                                    // 点卡片即编辑：这是这一页最常用的动作。
+                                    // 悬浮窗开关在主页，这里不重复放一份。
+                                    onClick = { onEditConfig(item.config.id) },
+                                    onExport = { startExport(item.config) },
+                                    onDuplicate = {
+                                        val created = viewModel.duplicateConfig(item.config.id)
+                                        showToast("已复制为「${created.name}」")
+                                    },
+                                    onDelete = { deleting = item.config },
+                                )
+
+                                /*
+                                 * ⚠️ 组合卡片:**点整张卡进详情页**（用户要求
+                                 * 「点击配置组合卡片会进入一个二级页面」）。
+                                 * 菜单里只有「解散」，没有删除 —— 解散更安全，
+                                 * 而且天然不用处理 `default` 的特殊情况。
+                                 */
+                                is ConfigListItem.GroupItem -> GroupCard(
+                                    group = item.group,
+                                    memberCount = item.group.memberIds.size,
+                                    showDescription = showDescription,
+                                    compactActions = compactActions,
+                                    width = cardWidth,
+                                    onClick = { onEditGroup(item.group.id) },
+                                    onDissolve = { dissolving = item.group },
+                                    onExport = { exportGroup(item.group) },
+                                )
+                            }
                         }
 
                         /*
@@ -363,6 +554,44 @@ fun ConfigListScreen(
 
     /*
      * ============================================================
+     * 新建配置组合
+     * ============================================================
+     * ⚠️ 与新建配置同一个"形状"（名称 + 描述 + 多选），只是把"样式"换成"配置"。
+     */
+    if (showCreateGroupDialog) {
+        CreateGroupDialog(
+            allConfigs = configs,
+            ownerOf = { viewModel.groupOf(it) },
+            onDismiss = { showCreateGroupDialog = false },
+            onConfirm = { name, description, memberIds ->
+                viewModel.createGroup(name, description, memberIds)
+                showCreateGroupDialog = false
+                showToast(
+                    if (memberIds.isEmpty()) {
+                        "已新建组合「$name」（还没有配置）"
+                    } else {
+                        "已新建组合「$name」，加入 ${memberIds.size} 个配置"
+                    },
+                )
+            },
+        )
+    }
+
+    /* ---------------- 解散组合 ---------------- */
+    dissolving?.let { target ->
+        DissolveGroupDialog(
+            group = target,
+            onDismiss = { dissolving = null },
+            onConfirm = {
+                viewModel.dissolveGroup(target.id)
+                dissolving = null
+                showToast("已解散「${target.name}」，配置已回到列表")
+            },
+        )
+    }
+
+    /*
+     * ============================================================
      * 导入结果
      *
      * 这两个弹窗必须真的渲染出来 —— 之前只给 importReport / importError
@@ -387,9 +616,24 @@ fun ConfigListScreen(
             configName = target.name,
             onPick = { method, remember ->
                 choosingExportFor = null
-                exportFlow.start(target, method, remember)
+                exportFlow.start(pendingExportOf(target), method, remember)
             },
             onDismiss = { choosingExportFor = null },
+        )
+    }
+
+    /* ⚠️ 组合的导出方式选择：同一个窗口，只是换成组合的名字 */
+    choosingExportGroupFor?.let { target ->
+        val members = target.memberIds.mapNotNull { id ->
+            configs.firstOrNull { it.id == id }
+        }
+        ExportMethodDialog(
+            configName = target.name,
+            onPick = { method, remember ->
+                choosingExportGroupFor = null
+                exportFlow.startGroup(target, members, method, remember)
+            },
+            onDismiss = { choosingExportGroupFor = null },
         )
     }
 
@@ -449,7 +693,7 @@ fun ConfigListScreen(
  * 点它们不会触发编辑（按钮自带点击处理，不会冒泡到卡片的 clickable）。
  */
 @Composable
-private fun ConfigCard(
+internal fun ConfigCard(
     config: KeyStrokesConfig,
     width: androidx.compose.ui.unit.Dp,
     modifier: Modifier = Modifier,
@@ -461,13 +705,26 @@ private fun ConfigCard(
     onExport: () -> Unit,
     onDuplicate: () -> Unit,
     onDelete: () -> Unit,
+    /**
+     * 是否渲染右下角的操作区（导出 / 复制 / 删除）。
+     *
+     * ⚠️ 组合详情页要传 `false`:那一页管的是"分组关系"，
+     * 删配置属于配置页的事。给了空实现的话菜单里会出现一堆点了没反应的项，
+     * 比"没有这些按钮"更糟。
+     */
+    actionsEnabled: Boolean = true,
 ) {
     Card(
         modifier = modifier
             .width(width)
             .clickable(onClick = onClick),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            /*
+             * ⚠️ 必须是 `surface`（白）而不是 `surfaceContainer`:
+             * 后者现在**就是页面底色**，卡片会和背景同色而「消失」
+             * （用户报的「配置卡片的背景没了，全糊背景上了」）。
+             */
+            containerColor = MaterialTheme.colorScheme.surface,
         ),
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
@@ -541,7 +798,9 @@ private fun ConfigCard(
              * 这里不画缩略预览：卡片太窄，按键文字会挤错位 ——
              * 预览只在编辑页里看（那里的尺寸足够）。
              */
-            if (compactActions) {
+            if (!actionsEnabled) {
+                /* ⚠️ 组合详情页不要操作区，见参数说明 */
+            } else if (compactActions) {
                 /*
                  * 紧凑模式：占满整行、内容靠右 —— 于是按钮落在**右下角**，
                  * 与平铺模式那把图标的右端对齐。
@@ -676,7 +935,7 @@ private fun ConfigActionsMenu(
  * 否则它会撑满整行、看着像一个长条热区而不是一个按钮。
  */
 @Composable
-private fun CompactIconButton(
+internal fun CompactIconButton(
     icon: ImageVector,
     description: String,
     onClick: () -> Unit,
@@ -716,7 +975,7 @@ private fun CompactIconButton(
  * 这样用户知道后面会有什么，而不是觉得功能缺失。
  */
 @Composable
-private fun CreateConfigDialog(
+internal fun CreateConfigDialog(
     onDismiss: () -> Unit,
     onConfirm: (name: String, description: String, styleId: String) -> Unit,
 ) {
@@ -725,7 +984,12 @@ private fun CreateConfigDialog(
     var styleId by remember { mutableStateOf(OverlayStyleRegistry.defaultStyleId) }
 
     val styles = remember { OverlayStyleRegistry.all() }
-    val valid = name.isNotBlank() && OverlayStyleRegistry.find(styleId)?.enabled == true
+    /*
+     * ⚠️ 名称**不再是必要条件**（用户要求）:留空时由 `ConfigStore.create`
+     * 兜底成「新建配置」并自动去重，所以这里只校验"样式可用"。
+     * 名称框也**不再爆红** —— 那个提示很突兀。
+     */
+    val valid = OverlayStyleRegistry.find(styleId)?.enabled == true
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -925,6 +1189,13 @@ private fun OverlayStyleDescriptor.icon(): ImageVector = when (iconKey) {
      * "这是两种不同的东西"。分组标题（"手柄"）已经说明了归属。
      */
     OverlayStyleRegistry.ICON_GAMEPAD -> Icons.Default.SportsEsports
+    /*
+     * 触屏样式。
+     *
+     * ⚠️ 用「触摸」概念的图标，**不与手柄共用** ——
+     * 见 `ICON_TOUCH` 的说明（两者运行原理不同，共图标会误导）。
+     */
+    OverlayStyleRegistry.ICON_TOUCH -> Icons.Default.TouchApp
     else -> Icons.Default.Tune
 }
 

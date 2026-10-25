@@ -79,6 +79,27 @@ fun KeyMappingEditor(
      * 用户的原话:"摇杆有些功能或许需要单独配置"。
      */
     hiddenSlotIds: Set<String> = emptySet(),
+    /**
+     * 要不要显示「绑定按键」那一行（默认显示）。
+     *
+     * ============================================================
+     * ⚠️ 触屏样式**只改显示文字、不绑按键**
+     * ============================================================
+     * 用户的原话:
+     *
+     * > 键位映射栏在触屏中**还是有用的**，键位映射栏原本即可以改显示文字
+     * > 也可以改读取按键，我们可以**保留键位文字，读取按键删掉**
+     *
+     * ⚠️ 他说得对 —— 我原以为触屏那一栏整个没用，其实**"显示什么字"
+     * 照样需要**（悬浮窗上那个位置写 LT 还是别的内容，是这一栏管的）。
+     *
+     * ⚠️ 而"绑定哪些物理键"对触屏**确实**没意义:触屏不产出键码，
+     * 输入来自坐标。留着它用户会去绑一个键、然后发现绑了没反应。
+     *
+     * ⚠️ 所以界面文案也要跟着换（见调用方）:
+     * 这里只剩"显示文字"，那一栏就叫**「键位文字」**。
+     */
+    showKeyBinding: Boolean = true,
 ) {
     /** 正在编辑绑定键的映射 id；null 表示没有打开对话框 */
     var editingId by remember { mutableStateOf<String?>(null) }
@@ -98,12 +119,18 @@ fun KeyMappingEditor(
                         mappings.map { if (it.id == mapping.id) it.copy(displayText = text) else it },
                     )
                 },
+                /*
+                 * ⚠️ 不显示绑定时**根本不打开那个对话框** ——
+                 * 只藏按钮、留着 `editingId` 的话，一个不该出现的对话框
+                 * 会挂在某个不可达的状态上（以后加别的入口时会莫名其妙地弹出来）。
+                 */
+                showKeyBinding = showKeyBinding,
             )
         }
     }
 
     val editing = visible.firstOrNull { it.id == editingId }
-    if (editing != null) {
+    if (editing != null && showKeyBinding) {
         KeyBindingDialog(
             mapping = editing,
             onDismiss = { editingId = null },
@@ -130,6 +157,8 @@ private fun KeyMappingRow(
     mapping: KeyMapping,
     onEditKeys: () -> Unit,
     onChangeDisplayText: (String) -> Unit,
+    /** 见 [KeyMappingEditor.showKeyBinding] 的说明 */
+    showKeyBinding: Boolean = true,
 ) {
     Column(
         modifier = Modifier
@@ -154,6 +183,12 @@ private fun KeyMappingRow(
             keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
             modifier = Modifier.fillMaxWidth(),
         )
+
+        /*
+         * ⚠️ 不显示绑定时**整段跳过**（连那个 `Spacer` 也不要）——
+         * 只藏里面的控件会留一段莫名的空白。
+         */
+        if (!showKeyBinding) return@Column
 
         Spacer(modifier = Modifier.height(10.dp))
 
@@ -362,9 +397,27 @@ fun MultiKeyPickerDialog(
  * 强制两步会让改键变得很烦。
  */
 @Composable
-private fun KeyGroupPickerDialog(
+internal fun KeyGroupPickerDialog(
     onDismiss: () -> Unit,
     onPicked: (KeyCodes.PickerGroup) -> Unit,
+    /**
+     * 要不要显示「**触屏**」那一项。
+     *
+     * ============================================================
+     * ⚠️ 默认 `true`，只有**文本组件**的「监听的键」传 `false`
+     * ============================================================
+     * 用户的原话:
+     *
+     * > 在**任意占位符**添加的触摸区域都会**加到其他触摸区域上**
+     *
+     * ⚠️ 根因是文本组件在这里加的区域**不知道算给哪一处** `(cps)` ——
+     * 于是只能每一处都算，看起来就是"混在一起"。
+     * 所以文本组件加区域要去「第 n 个 (cps) 统计的键」那个对话框。
+     *
+     * ⚠️ 默认 `true` 是刻意的:键位映射、摇杆方向那几处**行为完全不变**
+     * （它们本来也选不到触屏，但不该因为我们改文本组件而跟着少一项）。
+     */
+    allowTouch: Boolean = true,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -380,27 +433,30 @@ private fun KeyGroupPickerDialog(
 
                 Spacer(modifier = Modifier.height(4.dp))
 
-                KeyCodes.PickerGroup.entries.forEach { group ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onPicked(group) }
-                            .padding(vertical = 14.dp, horizontal = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = group.label,
-                                style = MaterialTheme.typography.bodyLarge,
-                            )
-                            Text(
-                                text = group.description,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                KeyCodes.PickerGroup.entries
+                    /* ⚠️ 文本组件不显示「触屏」（见参数说明） */
+                    .filter { allowTouch || it != KeyCodes.PickerGroup.TOUCH }
+                    .forEach { group ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onPicked(group) }
+                                .padding(vertical = 14.dp, horizontal = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = group.label,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                )
+                                Text(
+                                    text = group.description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                     }
-                }
             }
         },
         confirmButton = {

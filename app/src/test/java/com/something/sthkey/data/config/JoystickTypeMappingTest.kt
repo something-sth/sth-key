@@ -68,18 +68,36 @@ class JoystickTypeMappingTest {
     /**
      * ⚠️ 反向也要查:每个 `JOYSTICK*` 类型都必须能换回一个输入源，
      * 而且**不能全落进 GAMEPAD**（那正是"漏一个分支"的表现）。
+     *
+     * ⚠️ 现在是**四个**（多了「摇杆-触屏」）—— 用户的原话:
+     *
+     * > 应该**只新增一个触屏摇杆组件**，然后新建后在上面**自己选择**
+     * > 是移动摇杆组件还是视角摇杆组件
+     *
+     * ⚠️ 注意"移动 / 视角"**不是两个类型** —— 那是同一个类型里的 `side`。
+     * 所以这里仍然是"一个类型 ↔ 一个输入源"的一对一。
      */
     @Test
-    fun `三个摇杆类型各自映射到不同的输入源`() {
+    fun `每个摇杆类型各自映射到不同的输入源`() {
         val types = ComponentType.entries.filter { it.id.startsWith("joystick") }
-        assertEquals("摇杆类型应该正好三个", 3, types.size)
+        assertEquals("摇杆类型应该正好四个", 4, types.size)
 
         val sources = types.map { ComponentType.joystickSource(it) }
         assertEquals(
-            "三个摇杆类型不能映射到同一个输入源（漏分支就会这样）: $sources",
+            "摇杆类型不能映射到同一个输入源（漏分支就会这样）: $sources",
             sources.size,
             sources.distinct().size,
         )
+    }
+
+    /**
+     * ⚠️ 触屏摇杆在**「触屏」栏** —— 用户的原话:
+     *
+     * > 在现有的"选择按键分类"窗口中，**分出一个"触屏"选项**
+     */
+    @Test
+    fun `触屏摇杆在触屏栏`() {
+        assertEquals(ComponentCategory.TOUCH, ComponentType.JOYSTICK_TOUCH.category)
     }
 
     /**

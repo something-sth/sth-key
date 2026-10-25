@@ -11,6 +11,18 @@
     <!-- Android 14+ 要求为前台服务声明类型；本服务属于"其它特殊用途"（按键悬浮窗） -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!--
+        Android 9（API 28）及以下导出到公共下载目录需要这个权限。
+
+        ⚠️ `maxSdkVersion="28"` 是**必须**的:Android 10 起写 `Download/` 走
+        MediaStore，完全不需要权限。不加这个上限的话，29+ 会把它列进
+        "存储"权限组，用户看到一个"已经无用却还在要"的权限。
+        代码侧的对应判断见 `ConfigExporters` 的 `exportToDownloadsLegacy`
+        与 `ExportFlow.needsStoragePermission`。
+    -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
 
     <!--
         ⚠️ 这里**不要**写 android:extractNativeLibs。
@@ -83,19 +95,19 @@
                 ============================================================
                 外部导入配置包
                 ============================================================
-                「用本应用打开 .sthkey」与「把 .sthkey 分享到本应用」。
+                「用本应用打开 .sthkey / .sthgroup」与「把它分享到本应用」。
 
                 ⚠️ 这里**没有** `application/x-sthkey` 这种自定义 MIME，
                 因为它永远不会被匹配到 ——
                 Android 的 `MimeTypeMap` 只认内建表里的后缀，
-                `.sthkey` 不在其中，系统解析出来就是下面这些"大路货"之一。
+                这两种后缀都不在其中，系统解析出来就是下面这些"大路货"之一。
 
                 于是只能把它们**全部**列上，靠导入时的 manifest 校验兜底：
                 收下一个不是配置包的文件不会出事，只会明确报错。
 
                 ⚠️ `*/*` 是**故意不加**的（虽然能提高命中率）：
                 加了之后用户在任何文件上点"打开方式"都会看到我们这个
-                与文件无关的应用，非常烦人。下面这四种已经覆盖了
+                与文件无关的应用，非常烦人。下面这几种已经覆盖了
                 文件管理器、聊天软件、网盘的常见行为。
             -->
             <intent-filter>
@@ -109,6 +121,21 @@
                 <data android:mimeType="application/octet-stream" />
                 <data android:mimeType="application/zip" />
                 <data android:mimeType="application/x-zip-compressed" />
+
+                <!--
+                    字体文件的 MIME。⚠️ 各家报的不一样:
+                    正规的是 font/ttf / font/otf / font/collection，
+                    但大量文件管理器和聊天软件报的是老式的 application/x-font-*，
+                    所以几种都列上。真正的类型判断在导入时按**魔数**做，不靠 MIME。
+                -->
+                <data android:mimeType="font/ttf" />
+                <data android:mimeType="font/otf" />
+                <data android:mimeType="font/collection" />
+                <data android:mimeType="application/x-font-ttf" />
+                <data android:mimeType="application/x-font-otf" />
+                <data android:mimeType="application/x-font" />
+                <data android:mimeType="application/font-sfnt" />
+                <data android:mimeType="application/vnd.ms-opentype" />
             </intent-filter>
 
             <intent-filter>
@@ -119,6 +146,21 @@
                 <data android:mimeType="application/octet-stream" />
                 <data android:mimeType="application/zip" />
                 <data android:mimeType="application/x-zip-compressed" />
+
+                <!--
+                    字体文件的 MIME。⚠️ 各家报的不一样:
+                    正规的是 font/ttf / font/otf / font/collection，
+                    但大量文件管理器和聊天软件报的是老式的 application/x-font-*，
+                    所以几种都列上。真正的类型判断在导入时按**魔数**做，不靠 MIME。
+                -->
+                <data android:mimeType="font/ttf" />
+                <data android:mimeType="font/otf" />
+                <data android:mimeType="font/collection" />
+                <data android:mimeType="application/x-font-ttf" />
+                <data android:mimeType="application/x-font-otf" />
+                <data android:mimeType="application/x-font" />
+                <data android:mimeType="application/font-sfnt" />
+                <data android:mimeType="application/vnd.ms-opentype" />
             </intent-filter>
 
             <!--
@@ -135,54 +177,56 @@
                 <data android:mimeType="application/octet-stream" />
                 <data android:mimeType="application/zip" />
                 <data android:mimeType="application/x-zip-compressed" />
+
+                <!--
+                    字体文件的 MIME。⚠️ 各家报的不一样:
+                    正规的是 font/ttf / font/otf / font/collection，
+                    但大量文件管理器和聊天软件报的是老式的 application/x-font-*，
+                    所以几种都列上。真正的类型判断在导入时按**魔数**做，不靠 MIME。
+                -->
+                <data android:mimeType="font/ttf" />
+                <data android:mimeType="font/otf" />
+                <data android:mimeType="font/collection" />
+                <data android:mimeType="application/x-font-ttf" />
+                <data android:mimeType="application/x-font-otf" />
+                <data android:mimeType="application/x-font" />
+                <data android:mimeType="application/font-sfnt" />
+                <data android:mimeType="application/vnd.ms-opentype" />
             </intent-filter>
 
-            <!--
-                桌面快捷方式的**声明清单**。
-
-                ⚠️ 必须挂在**应用的主 Activity** 上，哪怕快捷方式实际指向
-                的是 ShortcutActivity —— 系统按"应用入口"来读取这份清单。
-                挂错地方的表现是 `requestPinShortcut` 静默失败
-                （弹不出"要添加到主屏幕吗"那个确认框）。
-
-                ⚠️ `android:name` 的取值是固定的
-                `android.app.shortcuts`，不是我们自己起的名字。
-            -->
-            <meta-data
-                android:name="android.app.shortcuts"
-                android:resource="@xml/shortcuts" />
         </activity>
 
         <!--
             ============================================================
-            桌面快捷方式的入口：**完全不进前台**
+            「纯无障碍」采集通道
             ============================================================
-            快捷方式指向这里。它在 onCreate 里把工作转交给悬浮窗服务与采集，
-            然后**同步** finish()，用户看到的始终是桌面。
+            无障碍服务由**系统**绑定并启动，所以:
+            ⚠️ `exported` 必须是 true:系统要能跨进程绑定它。设成 false 的话
+            服务永远不会被拉起，而且**不会报错**。
 
-            ⚠️ 主题必须是 NoDisplay（见 themes.xml 里的说明）：
-            它要求 Activity 在 onResume 之前结束，否则系统直接崩。
-            所以 onCreate 里不能有任何异步等待。
+            ⚠️ `android:permission` 必须是 BIND_ACCESSIBILITY_SERVICE:
+            少了这条，任何应用都能连上我们的服务并窥探按键。
 
-            ⚠️ **不要加 `android:noHistory="true"`**：那会让 Activity
-            一不可见就销毁，而那时前台服务可能还没真正起来 ——
-            进程被判成"没有前台组件"就有被杀的风险，进程一死
-            Shizuku 的回调接收器也跟着没了。
+            ⚠️ `<intent-filter>` 里那个 action 不能少:系统就是按它找
+            "哪些是无障碍服务"，漏了它「无障碍」列表里根本没有本应用。
 
-            ⚠️ 也**不要**加 `android:excludeFromRecents` 之外的花样：
-            它本来就不该出现在最近任务里，而 NoDisplay 已经保证了这点。
+            ⚠️ `meta-data` 指向 `accessibility_service_config`:
+            能不能读按键、要不要窗口内容，全在那份 XML 里声明。
 
-            ⚠️ `taskAffinity=""` + `noHistory` 都不加的情况下，
-            它仍可能与 MainActivity 同任务栈。用
-            `android:taskAffinity=""` 让它独立于应用主任务，
-            这样"从桌面点快捷方式"不会把应用的主界面也带到前台。
         -->
-        <activity
-            android:name=".shortcut.ShortcutActivity"
+        <service
+            android:name=".capture.accessibility.SthKeyAccessibilityService"
             android:exported="true"
-            android:theme="@style/Theme.SthKey.Invisible"
-            android:taskAffinity=""
-            android:excludeFromRecents="true" />
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
 
         <!--
             悬浮窗服务：在 WindowManager 上叠加按键显示。
@@ -199,10 +243,17 @@
         </service>
 
         <!--
-            输入采集（root / Shizuku）与 Shizuku UserService 将在下一步接入：
-              <service android:name=".capture.RootInputService" ... />
-              <service android:name=".capture.ShizukuInputService" ... />
+            触屏「区域编辑」的全屏编辑器（`TouchRegionEditorService.start` 里
+            用 `startForegroundService` 拉起，所以必须声明类型）。
         -->
+        <service
+            android:name=".capture.touch.TouchRegionEditorService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="触屏区域编辑：在编辑页显示可拖动的触摸区域方块" />
+        </service>
     </application>
 
 </manifest>

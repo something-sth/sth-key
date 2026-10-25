@@ -585,11 +585,30 @@ fun KeyStrokesConfig.canConvertToCustom(): Boolean {
  *
  * ⚠️ 这个操作**不可逆**：`styleId` 一改，编辑页就换成自定义 Key 那一套，
  * 「显示 Shift」这类专有开关连界面都没有了。所以界面上必须确认。
+ *
+ * ============================================================
+ * ⚠️⚠️ 按**样式**分派 —— 触屏那一支走的是另一个转换器
+ * ============================================================
+ * 用户的原话:
+ *
+ * > 可以开始做**触屏样式转自定义 key 样式**的功能了吧
+ *
+ * ⚠️ 触屏样式的行为**全在触摸区域里**（`config.touch.regions`），
+ * 而 [KeyToCustomConverter] 只搬运键位的外观与位置 ——
+ * 拿它转触屏会得到"一堆长得一样、但一块触摸区域都没有"的方块:
+ * 键不亮、轮盘不动。
+ *
+ * ⚠️ 所以触屏走 [TouchToCustomConverter]（它内部**先调用**这一支搬键位、
+ * 再叠上区域与触屏摇杆）—— 布局搬运仍然只有一份实现。
  */
 fun KeyStrokesConfig.toCustomKeyStyle(): Pair<KeyStrokesConfig, List<String>> {
-    val result = KeyToCustomConverter.convert(this)
-    return copy(
-        styleId = StyleId.CUSTOM_KEY,
-        custom = result.custom,
-    ) to result.notes
+    val (custom, notes) = if (styleId == StyleId.TOUCHING) {
+        val result = TouchToCustomConverter.convert(this)
+        result.custom to result.notes
+    } else {
+        val result = KeyToCustomConverter.convert(this)
+        result.custom to result.notes
+    }
+
+    return copy(styleId = StyleId.CUSTOM_KEY, custom = custom) to notes
 }

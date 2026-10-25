@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import com.something.sthkey.domain.config.JoystickStyle
 import com.something.sthkey.ui.feature.custom.JoystickWidthSlider
 import com.something.sthkey.domain.config.KeyStrokesConfig
+import com.something.sthkey.domain.style.StyleId
 import com.something.sthkey.domain.style.KeyLayout
 import com.something.sthkey.ui.component.collapsibleSection
 import com.something.sthkey.ui.component.setExpanded
@@ -595,46 +596,84 @@ internal fun hiddenMappingSlots(config: KeyStrokesConfig): Set<String> = buildSe
     val gamepad = KeyLayout.usesJoystickLayout(config)
 
     /*
-     * 两种样式里都**恒显示**、且没有对应开关的槽位现在只剩:
-     * 手柄样式的 `A_BUTTON`（它拿 A 当"空格位"）—— 见下面 `if (gamepad)` 那段。
+     * ============================================================
+     * ⚠️ `gamepad`（有摇杆）**不等于**「手柄样式」
+     * ============================================================
+     * 触屏样式的**槽位布局**与手柄一样（`usesJoystickLayout` 为 true），
+     * 但它**没有** A / LB / RB 这几个键 —— 用户明确要求:
+     *
+     * > LB 与 RB 是**手柄样式专属**的，触屏样式里不应该存在
+     *
+     * ⚠️ 所以下面那批手柄专属的判断要看 `isGamepad`，**不能**用 `gamepad`。
      */
+    val isGamepad = config.styleId == StyleId.GAMEPAD2
 
-    /* `showShiftKey` 两种样式都控制 SHIFT 槽位（键盘显示 Shift、手柄显示 B） */
+    /* `showShiftKey` 三种样式都控制 SHIFT 槽位（键盘/触屏显示 Shift、手柄显示 B） */
     if (!config.showShiftKey) add(KeyLayout.Id.SHIFT)
 
     if (gamepad) {
+        /* 摇杆槽位永远隐藏:它不绑键码，让人去绑只会得到"按了没反应" */
+        add(KeyLayout.Id.JOYSTICK_LEFT)
+        add(KeyLayout.Id.JOYSTICK_RIGHT)
+    }
+
+    if (isGamepad) {
         /*
          * 手柄专属开关 —— 它们**只**在手柄样式下有意义。
          *
-         * ⚠️ 键盘样式没有 LB/RB 这两个键，而 `showShoulderButtons` 默认 `false`、
-         * `showAButton` 默认 `true` —— 拿它们在键盘样式下做判断是**语义错位**
-         * （碰巧不出问题，但那是巧合，不是设计）。
+         * ⚠️ 键盘与触屏都没有 LB/RB 这两个键，而 `showShoulderButtons`
+         * 默认 `false`、`showAButton` 默认 `true` —— 拿它们在别的样式下
+         * 做判断是**语义错位**（碰巧不出问题，但那是巧合，不是设计）。
+         *
+         * ⚠️ `showAButton` 尤其要在这里判:**触屏压根不读它**
+         * （见 `KeyLayout.joystickLayoutBoxes` 里的 `usesAButton`）——
+         * 所以触屏的 `A_BUTTON` 必须靠**这里**从列表里去掉。
          */
         if (!config.showShoulderButtons) {
             add(KeyLayout.Id.SHOULDER_L)
             add(KeyLayout.Id.SHOULDER_R)
         }
         if (!config.showAButton) add(KeyLayout.Id.A_BUTTON)
-
-        /* 摇杆槽位永远隐藏:它不绑键码，让人去绑只会得到"按了没反应" */
-        add(KeyLayout.Id.JOYSTICK_LEFT)
-        add(KeyLayout.Id.JOYSTICK_RIGHT)
+        return@buildSet
     }
 
     /*
-     * ⚠️ `SPACE` 槽位**两种样式都看 `showSpaceKey`**（v2.6.0 起）。
+     * ⚠️ 非手柄样式:这两个槽位**压根不存在**（布局根本不生成它们），
+     * 所以直接从列表里去掉 —— 它们不该出现在键位文字栏，也不该出现在
+     * 触摸区域编辑里。
      *
-     * 以前键盘样式的空格是**恒定显示**的，所以那时这里**不能**隐藏它 ——
-     * 隐藏了就会出现"布局在画、映射列表里却没有"。用户为此报过两次:
-     *
-     * - "shift 键我是关闭了的，但为什么还是出现"（该隐藏的没隐藏）；
-     * - "键盘样式配置中，键位映射的 space 组件不见了"（不该隐藏的隐藏了）。
-     *
-     * ⚠️ 现在键盘样式有了「显示 SPACE 键」开关，空格**真的可以被关掉**，
-     * 于是它必须跟着开关一起隐藏 —— 否则又回到那个不一致:
-     * 悬浮窗上不画了、映射列表里还留着一行。
+     * ⚠️ 触屏尤其要:**`A_BUTTON` 留着就是第二个 Space**
+     * （横跨两列的长条），而触屏的 Space 走 `SPACE` 槽位。
      */
-    if (!config.showSpaceKey) add(KeyLayout.Id.SPACE)
+    add(KeyLayout.Id.A_BUTTON)
+    add(KeyLayout.Id.SHOULDER_L)
+    add(KeyLayout.Id.SHOULDER_R)
+
+    /*
+     * ============================================================
+     * ⚠️ `SPACE` 槽位:键盘与触屏看 `showSpaceKey`，手柄不看
+     * ============================================================
+     * ⚠️ 用户报过:
+     *
+     * > 触屏样式**已经默认带一个 Space 组件**了，但是行为栏里还有一个
+     * > 「开启 SPACE」是关闭的，**打开又会多一个 SPACE 组件**
+     *
+     * ⚠️ 根因是**当时触屏拿 `A_BUTTON` 当 Space**（显示文字是 "Space"），
+     * 而 `SPACE` 槽位是另一个多余的长条。
+     *
+     * ⚠️ 现在改过来了（见 `touchingKeyMappings`）:**触屏改用 `SPACE`
+     * 槽位**当 Space，而 `A_BUTTON` 行被 `showAButton = false` 关掉 ——
+     * 于是"显示 SPACE 键"与"SPACE 置顶"都作用在**同一个**组件上。
+     *
+     * ⚠️ 所以这里对触屏**要照常隐藏 SPACE**（关掉开关时它就不该在
+     * 键位文字栏与区域列表里出现），与键盘一致。
+     *
+     * ⚠️ 手柄不在其中:它的 `showSpaceKey` 默认 `false`、SPACE 槽位
+     * 压根不画，而它有自己的「显示 A 键」。
+     */
+    if (config.styleId != StyleId.GAMEPAD2 && !config.showSpaceKey) {
+        add(KeyLayout.Id.SPACE)
+    }
 
     /* `showMouseButtons` 两种样式都控制 LMB / RMB（手柄样式下它们是 LT / RT） */
     if (!config.showMouseButtons) {

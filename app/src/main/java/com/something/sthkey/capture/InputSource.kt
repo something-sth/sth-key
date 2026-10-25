@@ -112,14 +112,38 @@ enum class CaptureState(val label: String) {
 /**
  * 采集通道类型。
  *
- * 这一版只实现 [ROOT]；[SHIZUKU] 与 [GAMEPAD]、[TOUCH] 是预留位 ——
  * 新增通道 = 新增一个 [InputSource] 实现，上层不需要改。
+ *
+ * ============================================================
+ * ⚠️⚠️ [ACCESSIBILITY] 与其它几条**能力不一样**
+ * ============================================================
+ * | 通道 | 能读 |
+ * |---|---|
+ * | [ROOT] / [SHIZUKU] | 全部（键盘、鼠标、手柄、触摸） |
+ * | [GAMEPAD] | 只有手柄的轴与扳机 |
+ * | [TOUCH] | 只有触摸 |
+ * | **[ACCESSIBILITY]** | ⚠️ **只有物理键盘按键** |
+ *
+ * ⚠️ 无障碍读不到鼠标（包括左右中键）、手柄与触摸 —— 原因不是"没做",
+ * 是**做不到**（详见 `docs/accessibility-mode.md` §2.3）。
+ * 界面必须按这个能力边界如实展示，不能让用户以为"选它就能读全"。
  */
 enum class CaptureChannel(val label: String) {
     ROOT("Root"),
     SHIZUKU("Shizuku"),
     GAMEPAD("手柄"),
     TOUCH("触屏"),
+    ACCESSIBILITY("无障碍"),
+    ;
+
+    /**
+     * 这条通道是否**只能读键盘**。
+     *
+     * ⚠️ 提成属性给界面用:主页状态卡要据此显示"读不到鼠标/手柄/触摸"的红字，
+     * 而**不要**在界面里各处写 `channel == ACCESSIBILITY` ——
+     * 以后若再加一条受限通道，改这里一处就够。
+     */
+    val keyboardOnly: Boolean get() = this == ACCESSIBILITY
 }
 
 /**

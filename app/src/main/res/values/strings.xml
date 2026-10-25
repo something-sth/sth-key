@@ -1,18 +1,17 @@
 <resources>
     <string name="app_name">sth key</string>
 
+
     <!--
-        桌面快捷方式的名称。
+        无障碍服务在**系统设置 → 无障碍**里显示的那段说明。
 
-        ⚠️ 这里只是**声明用的兜底值**：真正钉到桌面时用的是
-        `ShortcutInfoCompat.Builder.setShortLabel()` 里给的名字
-        （见 ShortcutPublisher），那份才是用户看到的。
+        ⚠️ 这段文字是**给用户看的**，不是给开发者看的：
+        他要在这里判断"要不要把这么大的权限给这个应用"。
+        所以必须**诚实**写出能力边界 —— 只说能做什么、也说不能做什么，
+        比含糊其辞更能取信于人，也免得用户开完发现手柄不亮而觉得被骗。
 
-        两份都留着是因为 `shortcuts.xml` 缺少 label 会让资源校验失败，
-        而那个文件是给系统看"这个应用可能创建哪些快捷方式"的清单。
+        ⚠️ 不要在这里写"读取屏幕内容"之类的话 —— 我们真的不读
+        （见 accessibility_service_config.xml 里 canRetrieveWindowContent=false）。
     -->
-    <string name="shortcut_launch_short">启动悬浮窗</string>
-    <string name="shortcut_launch_long">启动这组配置的悬浮窗</string>
-    <string name="shortcut_disable_short">关闭悬浮窗</string>
-    <string name="shortcut_disable_long">关闭所有悬浮窗</string>
+    <string name="accessibility_service_description">不用 root 也不用电脑，直接读取物理键盘的按键状态，用来在屏幕上显示按键。\n本模式只支持键盘按键：鼠标、手柄摇杆与触摸读不到，那些需要 root 或 Shizuku。\n本服务不读取屏幕内容，也不记录任何输入的文字。</string>
 </resources>

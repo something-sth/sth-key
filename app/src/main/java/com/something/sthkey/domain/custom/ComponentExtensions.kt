@@ -211,6 +211,14 @@ fun CustomComponent.typeLabel(): String = when (this) {
         JoystickSource.GAMEPAD -> "手柄摇杆"
         JoystickSource.KEYBOARD -> "键盘摇杆"
         JoystickSource.MOUSE -> "鼠标摇杆"
+        /*
+         * ⚠️ 触屏摇杆的**移动/视角靠 `side` 区分**（见 `JoystickSource.TOUCH`），
+         * 所以这里就该按 `side` 给出两种名字 —— 用户在列表里靠它分辨。
+         */
+        JoystickSource.TOUCH -> when (side) {
+            StickSide.LEFT -> "触屏移动摇杆"
+            StickSide.RIGHT -> "触屏视角摇杆"
+        }
     }
 }
 
@@ -241,6 +249,19 @@ fun CustomComponent.summary(): String = when (this) {
         JoystickSource.GAMEPAD -> "手柄${side.label}"
         JoystickSource.KEYBOARD -> "WASD"
         JoystickSource.MOUSE -> "鼠标位移"
+        /*
+         * ⚠️ 触屏摇杆的摘要要写清**它在吃什么** ——
+         * 这正是用户区分"移动 / 视角"的唯一地方（画布上它们长得一样）:
+         *
+         * | 摇杆 | 吃什么 |
+         * |---|---|
+         * | 移动 | **触摸区域**里的触摸 |
+         * | 视角 | **全屏**滑动（没有区域） |
+         */
+        JoystickSource.TOUCH -> when (side) {
+            StickSide.LEFT -> "触屏移动（吃触摸区域）"
+            StickSide.RIGHT -> "触屏视角（吃全屏滑动）"
+        }
     }
 }
 
@@ -347,3 +368,4 @@ fun CustomComponent.withInputKeyCodes(keyCodes: List<Int>): CustomComponent =
         /* 摇杆上报的是**轴**，不是键码 —— 绑键码没有意义（同键位映射那边） */
         is JoystickComponent -> this
     }
+

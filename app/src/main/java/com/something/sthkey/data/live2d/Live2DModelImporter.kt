@@ -88,7 +88,18 @@ object Live2DModelImporter {
      *
      * 整个过程是磁盘与解压操作，调用方要放在 IO 线程。
      */
-    fun importZip(context: Context, uri: Uri): Result<Outcome> {
+    /**
+     * @param displayNameHint 已知的显示名（外部导入时由调用方给）。
+     *   ⚠️ 外部「打开方式」这条路传进来的是**我们自己的缓存文件**，
+     *   `queryDisplayName` 查不到 `DISPLAY_NAME`，于是会落到兜底的
+     *   `live2d-model` —— 用户在库里看到的是一堆同名模型。
+     *   所以调用方必须把原文件名传进来。
+     */
+    fun importZip(
+        context: Context,
+        uri: Uri,
+        displayNameHint: String? = null,
+    ): Result<Outcome> {
         val dirId = UUID.randomUUID().toString().replace("-", "")
         // 目录名只在模型库里定义一处，这里不自己拼路径
         val dir = File(Live2DModels.importRoot(context), dirId)
@@ -96,8 +107,12 @@ object Live2DModelImporter {
         return try {
             dir.mkdirs()
             extract(context, uri, dir)
-            // 显示名取 SAF 给的文件名（去掉 .zip 后缀）
-            val displayName = queryDisplayName(context, uri)
+            /*
+             * 显示名：优先用调用方给的（外部导入），否则取 SAF 给的文件名。
+             * 两者都取到 .zip 后缀，统一去掉。
+             */
+            val displayName = (displayNameHint?.takeIf { it.isNotBlank() }
+                ?: queryDisplayName(context, uri))
                 .substringBeforeLast('.')
                 .ifBlank { "导入的模型" }
             finishImport(dir, dirId, displayName)

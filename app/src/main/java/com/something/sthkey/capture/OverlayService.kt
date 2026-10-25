@@ -33,12 +33,18 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import com.something.sthkey.capture.accessibility.AccessibilityGrant
+import com.something.sthkey.capture.accessibility.OverlayWindowHost
 import com.something.sthkey.MainActivity
 import com.something.sthkey.R
 import com.something.sthkey.core.log.AppLog
 import com.something.sthkey.core.prefs.AppPrefs
 import com.something.sthkey.data.config.ConfigStore
 import com.something.sthkey.domain.style.OverlayStyleRegistry
+import com.something.sthkey.domain.custom.JoystickComponent
+import com.something.sthkey.domain.custom.JoystickSource
+import com.something.sthkey.domain.custom.KeyComponent
+import com.something.sthkey.domain.custom.TextComponent
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.live2d.Live2DModels
 import com.something.sthkey.domain.overlay.OverlayLayout
@@ -161,6 +167,17 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     private val windows = LinkedHashMap<String, OverlayWindow>()
 
     /**
+     * 已经弹过「没配触摸区域」提示的配置 id。
+     *
+     * ⚠️ 必须记:**悬浮窗会因为配置改动、屏幕旋转、尺寸重算而反复重组**，
+     * 每次都弹就变成了骚扰（而骚扰的后果是用户以后对真提示也免疫）。
+     *
+     * ⚠️ 在 [removeWindow] 里清掉:用户关掉再打开时应当**再提示一次** ——
+     * 那说明他可能正想配区域，而上次的提示已经飘走了。
+     */
+    private val regionHintShown = mutableSetOf<String>()
+
+    /**
      * 上一次已知的屏幕尺寸；与当前不一致就说明发生了旋转 / 折叠 / 分屏变化。
      *
      * 用**屏幕尺寸本身**判断而不是 `orientation`：分屏、折叠屏、显示尺寸设置
@@ -235,7 +252,57 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
             savedStateRegistryController.performRestore(null)
             lifecycleRegistry.currentState = Lifecycle.State.CREATED
-            windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+
+            /*
+             * ============================================================
+             * ⚠️⚠️ WindowManager 改从**无障碍服务**借（不再用自己的）
+             * ============================================================
+             * 用户拍板"走 Axon 那条路":所有悬浮窗都用
+             * `TYPE_ACCESSIBILITY_OVERLAY`，于是**不需要悬浮窗权限**了。
+             *
+             * ⚠️ 但那个窗口类型**只能由 `AccessibilityService` 的 context 建** ——
+             * 用本服务自己的 context 会抛:
+             *
+             * ```
+             * WindowManager$BadTokenException: token null is not for an application
+             * ```
+             *
+             * ⚠️ 所以这里**借**无障碍服务的 WindowManager。
+             * 拿不到就说明无障碍没开 —— 明确失败，而不是硬建然后崩。
+             */
+            val hostWindowManager = OverlayWindowHost.windowManagerOrNull()
+            if (hostWindowManager == null) {
+                AppLog.w(TAG, "无障碍服务未连接，悬浮窗无法创建")
+                CaptureSession.updateState(
+                    CaptureState.FAILED,
+                    "需要开启无障碍服务才能显示悬浮窗",
+                )
+                /*
+                 * ⚠️⚠️ **必须把开关清掉**，否则界面与屏幕不一致
+                 * ============================================================
+                 * 开关是在 [OverlayController.enableConfigs] 里**先写偏好、
+                 * 再起服务**的。若这里失败却不清偏好:
+                 *
+                 * | 界面 | 屏幕 |
+                 * |---|---|
+                 * | 开关显示"开" | ⚠️ **什么都没有** |
+                 *
+                 * ⚠️ 那正是下面这段老注释警告过的状态
+                 * （"界面显示开关是开的、服务也在跑，就是屏幕上什么都没有"）
+                 * —— 极难诊断，用户只会以为软件坏了。
+                 *
+                 * ⚠️ 清空之后开关会跟着回到"关"，用户立刻知道没开成。
+                 */
+                OverlayLayouts.setEnabledIds(this, emptySet())
+                /*
+                 * ⚠️ 用户明确要求:这时**跳系统无障碍设置页**做弥补
+                 * （"只需要开启悬浮窗的时候做个弥补，跳转系统的无障碍授权页"）。
+                 */
+                AccessibilityGrant.openSettings(this)
+                shutdownSelf()
+                return
+            }
+            windowManager = hostWindowManager
 
             // 前台服务与加窗口的失败原因完全不同，分开捕获便于定位
             if (!startAsForegroundSafely()) {
@@ -419,7 +486,23 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
          * 那一瞬间的按键会丢；现在采集早就在跑了。
          *
          * ⚠️ 所以这里**只**管窗口与服务自身，不再碰 CaptureController。
+         *
+         * ============================================================
+         * ⚠️ 唯一的例外:触屏样式要告诉采集层"需不需要触摸采集"
+         * ============================================================
+         * 上面说的是"采集**本身**不跟着窗口走"（键鼠的监听常驻是对的）。
+         * 而**触摸采集**不同:它只在有触屏样式的窗口时才有意义 ——
+         * 没有那种窗口时它读到的触点**没有任何消费者**，
+         * 白占一个 helper 进程和一条 `/dev/input` 读取线程。
+         *
+         * ⚠️ 这里只**说要不要**，"走哪条通道"由 `CaptureController` 决定
+         * （它才有 root / Shizuku 的探测结果）。让这里自己判通道是错的，
+         * 那样会出现"采集走 Shizuku、触屏走 root"这种用户解释不了的状态。
          */
+        CaptureController.setTouchNeeded(
+            windows.values.any { usesTouchCapture(it.config) },
+        )
+
         if (windows.isEmpty()) {
             AppLog.i(TAG, "已没有悬浮窗，结束服务（采集保持运行）")
             stopSelf()
@@ -506,7 +589,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         val params = WindowManager.LayoutParams(
             size.first,
             size.second,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            OverlayWindowHost.windowType(),
             windowFlags(
                 touchable = OverlayLayouts.of(this, config.id).touchable,
                 movableOffScreen = OverlayLayouts.of(this, config.id).movableOffScreen,
@@ -607,6 +690,41 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                         "尺寸=${params.width}×${params.height}，位置=(${params.x},${params.y})，" +
                         "可触摸=${OverlayLayouts.of(this, config.id).touchable}",
                 )
+
+                /*
+                 * ⚠️ 触屏样式**一块区域都没配**时提示一句。
+                 *
+                 * 用户提的:"如果新建的触屏配置没有调整触摸区域，但用户仍然
+                 * 直接开启触屏悬浮窗时，弹一条 toast"。他说得对 ——
+                 * 不提示的话用户看到的是"悬浮窗画出来了，但碰哪里都没反应"，
+                 * 而那与"功能坏了"完全分不出来。
+                 *
+                 * ⚠️ 措辞比用户原话更具体一点，因为**视角摇杆其实是有输出的**
+                 * （它吃"所有没落在区域里的触摸"）。只说"没有任何输出"会让人
+                 * 以为整个组件都是死的，进而去查一个没坏的东西。
+                 *
+                 * ⚠️ 每个窗口**只弹一次**（见 [regionHintShown]）:
+                 * 悬浮窗会因配置改动、旋转、尺寸重算而反复重组，
+                 * 每次都弹就变成了骚扰。
+                 */
+                if (config.styleId == StyleId.TOUCHING &&
+                    /*
+                     * ⚠️ 判据用 `activeRegions`（用户真配过的那些），不是 `regions` ——
+                     * 后者可能含有编辑器画出来的占位条目。
+                     *
+                     * ⚠️ 用错的话后果很具体:用户"打开过编辑器但没配任何区域"时，
+                     * `regions` 非空 → **这句提示再也不弹**，而他确实一个区域都没有。
+                     */
+                    config.touch.activeRegions.isEmpty() &&
+                    regionHintShown.add(config.id)
+                ) {
+                    android.widget.Toast.makeText(
+                        applicationContext,
+                        "「${config.name}」还没有配置触摸区域：" +
+                            "移动轮盘和按键都不会有输出，整屏滑动都会进视角摇杆",
+                        android.widget.Toast.LENGTH_LONG,
+                    ).show()
+                }
             }
             true
         } catch (e: Throwable) {
@@ -638,7 +756,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         val params = WindowManager.LayoutParams(
             size.first,
             size.second,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            OverlayWindowHost.windowType(),
             windowFlags(
                 touchable = OverlayLayouts.of(this, configId).touchable,
                 movableOffScreen = OverlayLayouts.of(this, configId).movableOffScreen,
@@ -684,6 +802,11 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     private fun removeWindow(configId: String) {
         val window = windows.remove(configId) ?: return
+        /*
+         * ⚠️ 顺手清掉"已提示过"的标记 —— 关掉再打开时应当**再提示一次**。
+         * 用户反复开关往往说明他正想配区域，而上次的提示早就飘走了。
+         */
+        regionHintShown.remove(configId)
         try {
             // Live2D 的 WebView 必须显式销毁，否则会连同它的渲染线程一起泄漏
             (window.view as? Live2DOverlayView)?.release()
@@ -1571,6 +1694,15 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
             val (displayWidth, displayHeight) = OverlayBounds.screenSize(service)
             val windowBounds = runCatching {
+                /*
+                 * ⚠️ `getMaximumWindowMetrics` 是 API 30 才有的。
+                 * 本应用最低支持 Android 9（API 28），所以必须先判版本 ——
+                 * 直接调在 28/29 上会抛 `NoSuchMethodError`。
+                 *
+                 * ⚠️ 外面那层 `runCatching` 还要留着:个别 ROM 会在这上面抛别的异常，
+                 * 而这段只是给调试页**显示**用，取不到就显示"取不到"，绝不能影响悬浮窗。
+                 */
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return@runCatching null
                 val wm = service.getSystemService(Context.WINDOW_SERVICE) as WindowManager
                 wm.maximumWindowMetrics.bounds
             }.getOrNull()
@@ -1606,6 +1738,26 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
          *
          * 每个提前返回的分支都写日志 —— 否则"没反应"时完全查不出是卡在哪一步：
          * 服务没在跑、还是 startService 抛了异常、还是配置读出来不对。
+         *
+         * ============================================================
+         * ⚠️⚠️ 这里原来用 `startService` —— 那是"删了配置窗口不消失"的根因
+         * ============================================================
+         * 用户报的:
+         *
+         * > 主页开启一个悬浮窗，再去配置页删掉那个配置，
+         * > 这个已经开启的悬浮窗**有时候不消失**
+         *
+         * ⚠️ `startService()` 在 **Android 8+ 从后台调用会抛
+         * `IllegalStateException`**（后台执行限制）。而"删配置"正好是
+         * 应用在后台的典型场景 —— 用户切走之后悬浮窗**还留在屏幕上**，
+         * 那时去删配置就是一次后台起点。
+         *
+         * ⚠️ 抛出来的异常被下面那句 `catch` 兜住、只记一条日志，
+         * 于是**窗口永远留在屏幕上**，而日志里那条"请求刷新失败"
+         * 谁也想不到与"删配置"有关。
+         *
+         * ⚠️ 修法与 [start] 保持一致:服务本来就是前台的，
+         * `startForegroundService()` 从后台调用是**合法**的。
          */
         fun refresh(context: Context) {
             if (!isRunning()) {
@@ -1615,11 +1767,28 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
             try {
                 val intent = Intent(context, OverlayService::class.java)
-                context.startService(intent)
+                /*
+                 * ⚠️ 与 [start] 同一个方法 —— 见上面那段说明。
+                 * 服务已经在跑时 `startForegroundService` 只是再送一次
+                 * `onStartCommand`，不会重建服务、也不会重复起通知。
+                 */
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
                 AppLog.d(TAG, "已请求悬浮窗刷新")
             } catch (e: Throwable) {
-                // 后台启动限制等情况下系统会直接抛异常，这里兜住，别让调用方把应用搞崩
-                AppLog.e(TAG, "请求悬浮窗刷新失败", e as? Exception ?: Exception(e))
+                /*
+                 * ⚠️ 兜住之后**不能只是记日志就算了** ——
+                 * 刷新失败意味着"删掉的配置窗口可能还留在屏幕上"。
+                 * 所以这条日志要写清后果，方便与用户报的现象对上。
+                 */
+                AppLog.e(
+                    TAG,
+                    "请求悬浮窗刷新失败（删掉的配置窗口可能仍留在屏幕上）",
+                    e as? Exception ?: Exception(e),
+                )
             }
         }
 
@@ -1682,3 +1851,55 @@ data class LiveWindow(
     val viewWidthPx: Int,
     val viewHeightPx: Int,
 )
+
+/**
+ * 这个配置**要不要触屏采集**。
+ *
+ * ============================================================
+ * ⚠️⚠️ 两种样式都要，我第一版只认了触屏样式
+ * ============================================================
+ * 用户报的:
+ *
+ * > 自定义 key 里面包含触屏区域时，**仍然不会启动触屏监听逻辑**，
+ * > 调试页那里的触屏采集显示的都是**未启动**
+ *
+ * ⚠️ 我原来的判据是 `styleId == StyleId.TOUCHING` —— 而**自定义布局
+ * 里也能放触摸区域**（按键 / 文本组件的 `touchBindings`、
+ * 移动摇杆的 `touchRegion`），那些区域同样需要采集在跑。
+ *
+ * ⚠️ 症状之所以难查:采集没跑 → 触摸帧永远是空的 →
+ * **组件不亮、摇杆不动**，而"编辑器里能把方框拖出来"（那是另一条路，
+ * 不依赖采集）—— 于是看起来像"区域配好了但没效果"。
+ *
+ * ============================================================
+ * ⚠️ 自定义布局的判据是"**有没有用触摸区域**"，不是"是不是自定义样式"
+ * ============================================================
+ * 一个纯键盘的自定义布局**不该**白起一条 `/dev/input` 读取线程。
+ */
+internal fun usesTouchCapture(config: KeyStrokesConfig): Boolean = when (config.styleId) {
+    /* ⚠️ 触屏样式:整屏滑动都进视角摇杆，永远需要采集 */
+    StyleId.TOUCHING -> true
+
+    /*
+     * ⚠️⚠️ 自定义布局:**只有配过触摸区域才需要采集**。
+     *
+     * 用户的原话:
+     *
+     * > 注意，**不要在自定义 key 中默认加触摸区域**，默认应该是空的，
+     * > 否则会出现有用户用的键盘，手柄之类的**还启动触屏监听**，
+     * > 不符合直觉与逻辑
+     *
+     * ⚠️ 新模型（区域是**配置级的独立实体**）让这条判据变成一行:
+     * **这个配置的区域列表非空吗**。
+     *
+     * ⚠️ 它比旧模型（"组件上有没有 `touchBindings`"）**更简单也更可靠** ——
+     * 旧模型下"用户拖过但没存下来"会静默失效，而新模型下
+     * 区域一旦新建就在配置里（与用户有没有碰过无关）。
+     *
+     * ⚠️ 顺带:纯键盘/手柄的自定义布局**不会**白起一条 `/dev/input` 读取线程。
+     */
+    StyleId.CUSTOM_KEY -> config.custom.touchRegions.isNotEmpty()
+
+    /* ⚠️ 其余样式（键盘 / 手柄 / Live2D）没有触摸区域 */
+    else -> false
+}

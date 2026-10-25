@@ -115,7 +115,23 @@ class AppPrefs private constructor(context: Context) {
      * ============================================================
      */
 
-    /** 用户是否已完整走过一次引导；用于"权限齐全直接进主页"的判断之一 */
+    /**
+     * 用户是否**真的把引导走完了**（权限齐全，点了「进入应用」）。
+     *
+     * ============================================================
+     * ⚠️⚠️ 它**不表示**"用户点过「暂不授权」"
+     * ============================================================
+     * 用户的原话:
+     *
+     * > 我建议不要用户进入一次之后就一直放行，**跳过授权只是本次的跳过授权**，
+     * > **下次进入应该仍然再次校验**
+     *
+     * ⚠️ 所以「跳过」**不写这个标记** —— 它只让用户**这一次**进主界面，
+     * 下次启动仍然会走一遍校验（见 `SetupScreen` 里两个按钮的注释）。
+     *
+     * ⚠️ 只有一个地方写 `true`:`SetupScreen` 的「进入应用」按钮
+     * （那个按钮只在 `allReady` 时可点）。
+     */
     var setupCompleted: Boolean
         get() = prefs.getBoolean(KEY_SETUP_COMPLETED, false)
         set(value) {
@@ -593,17 +609,61 @@ class AppPrefs private constructor(context: Context) {
             prefs.edit().putString(KEY_EXPORT_METHOD, value.name).apply()
         }
 
-    /**
-     * 桌面快捷方式要启动的配置 id 清单（换行分隔）。
+    /*
+     * ============================================================
+     * 外观（Miuix 主题 + 底栏样式）
+     * ============================================================
+     * 用户的原话:
      *
-     * 存在这里而不是塞进快捷方式的 Intent：Intent 一经钉到桌面就被系统
-     * **冻结**了，改它必须重新创建快捷方式。存偏好里就能"改了下次直接生效"。
-     * 详见 `ShortcutSettings`。
+     * > Q3 主题设置就放在设置页，跟 sukisu 相同排版
+     *
+     * ⚠️ 三个值都存**字符串 id**，不存 ordinal —— 枚举以后加成员时
+     * ordinal 会整体错位，用户的设置会莫名其妙变成别的选项。
      */
-    var shortcutConfigIds: String
-        get() = prefs.getString(KEY_SHORTCUT_CONFIG_IDS, "").orEmpty()
+
+    /** 明暗模式 id，见 `domain/ui/Appearance` 的 `AppearanceColorMode` */
+    var appearanceColorMode: String
+        get() = prefs.getString(KEY_APPEARANCE_COLOR_MODE, null).orEmpty()
         set(value) {
-            prefs.edit().putString(KEY_SHORTCUT_CONFIG_IDS, value).apply()
+            prefs.edit().putString(KEY_APPEARANCE_COLOR_MODE, value).apply()
+        }
+
+    /**
+     * 取色种子（ARGB）。**0 表示没设过**（＝跟随壁纸或固定配色）。
+     *
+     * ⚠️ 存 Int 而不是字符串:颜色就是一个 32 位整数，
+     * 转来转去只会多一处出错的机会。
+     */
+    var seedColor: Int
+        get() = prefs.getInt(KEY_SEED_COLOR, 0)
+        set(value) {
+            prefs.edit().putInt(KEY_SEED_COLOR, value).apply()
+        }
+
+    /** 色彩风格 id，见 `domain/ui/AppearancePalette`。⚠️ 只有设了主色时它才生效 */
+    var appearancePalette: String
+        get() = prefs.getString(KEY_APPEARANCE_PALETTE, null).orEmpty()
+        set(value) {
+            prefs.edit().putString(KEY_APPEARANCE_PALETTE, value).apply()
+        }
+
+    /**
+     * 配置组合的 JSON（见 `data/config/GroupCodec`）。
+     *
+     * ⚠️ 存成**一个字符串**而不是拆成多个键:组合是"一组有序的成员"，
+     * 拆开存会让"更新到一半进程被杀"变成可能的数据不一致。
+     */
+    var configGroupsJson: String?
+        get() = prefs.getString(KEY_CONFIG_GROUPS, null)
+        set(value) {
+            prefs.edit().putString(KEY_CONFIG_GROUPS, value).apply()
+        }
+
+    /** 底栏样式 id，见 `domain/ui/BottomBarStyle` */
+    var bottomBarStyle: String
+        get() = prefs.getString(KEY_BOTTOM_BAR_STYLE, null).orEmpty()
+        set(value) {
+            prefs.edit().putString(KEY_BOTTOM_BAR_STYLE, value).apply()
         }
 
     companion object {
@@ -660,7 +720,13 @@ class AppPrefs private constructor(context: Context) {
         private const val KEY_CONFIG_LIST_COMPACT_ACTIONS = "config_list_compact_actions"
         private const val KEY_CONFIG_LIST_COLUMNS = "config_list_columns"
         private const val KEY_EXPORT_METHOD = "export_method"
-        private const val KEY_SHORTCUT_CONFIG_IDS = "shortcut_config_ids"
+
+        /* 外观（Miuix 主题与底栏样式）—— 见 `appearance` 的说明 */
+        private const val KEY_APPEARANCE_COLOR_MODE = "appearance_color_mode"
+    private const val KEY_BOTTOM_BAR_STYLE = "bottom_bar_style"
+    private const val KEY_CONFIG_GROUPS = "config_groups"
+    private const val KEY_SEED_COLOR = "seed_color"
+    private const val KEY_APPEARANCE_PALETTE = "appearance_palette"
 
         /**
          * 悬浮窗尚未被拖动过的位置标记。

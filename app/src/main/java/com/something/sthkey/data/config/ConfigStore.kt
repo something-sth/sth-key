@@ -9,6 +9,7 @@ import com.something.sthkey.domain.config.defaultConfig
 import com.something.sthkey.domain.config.defaultShowSpaceKey
 import com.something.sthkey.domain.config.duplicate
 import com.something.sthkey.domain.config.resetParamsToDefault
+import com.something.sthkey.domain.config.touchingKeyMappings
 import com.something.sthkey.domain.config.gamepad2KeyMappings
 import com.something.sthkey.domain.config.defaultKeyMappings
 import com.something.sthkey.domain.style.StyleId
@@ -163,7 +164,7 @@ class ConfigStore private constructor(context: Context) {
         /*
          * ⚠️ 键位映射要按样式给**不同的默认值**
          * ============================================================
-         * 「手柄（标准）」（gamepad2）的槽位显示的是键鼠的名字，
+         * 「手柄」（gamepad2）的槽位显示的是键鼠的名字，
          * 但实际该绑**手柄**的键（基岩版:RT=攻击、LT=挖掘、A=跳跃）。
          *
          * 用键盘那套默认值（`BTN_LEFT` / `BTN_RIGHT` / `KEY_SPACE`）的话，
@@ -171,16 +172,37 @@ class ConfigStore private constructor(context: Context) {
          *
          * ⚠️ 必须**在创建时**换，不能只改 `defaultKeyMappings()` ——
          * 那个是键盘样式的默认值，改了会连累键盘用户。
+         *
+         * ============================================================
+         * ⚠️ 触屏也要换（我第一版漏了，用户一眼看出来）
+         * ============================================================
+         * 漏掉的后果:触屏的「键位文字」栏列出的是 `W` / `A` / `S` / `D` /
+         * `SPACE` / `SHIFT` / `LMB` / `RMB`（键盘那套）——
+         * 而触屏的布局与手柄**完全一样**，根本没有 WASD 那些槽位。
+         *
+         * ⚠️ 所以三个样式**三种默认值**，一个都不能落到键盘那套上。
          */
-        val mappings = if (resolvedStyle == StyleId.GAMEPAD2) {
-            gamepad2KeyMappings()
-        } else {
-            defaultKeyMappings()
+        val mappings = when (resolvedStyle) {
+            StyleId.GAMEPAD2 -> gamepad2KeyMappings()
+            StyleId.TOUCHING -> touchingKeyMappings()
+            else -> defaultKeyMappings()
         }
 
         val created = defaultConfig().copy(
             id = UUID.randomUUID().toString(),
-            name = name.trim().ifEmpty { "新配置" },
+            /*
+             * ⚠️ 名称**允许留空**（用户要求）:
+             *
+             * > 名称默认还是不带，不过，不带名称时创建，配置名称/配置组合名称
+             * > 会变为新建配置/新建配置组合，如果重名了就带数字后缀
+             *
+             * ⚠️ 所以界面上**不再**给名称框做"空白爆红"处理 ——
+             * 那个提示很突兀，而"留空也能建"是一种正当用法。
+             *
+             * ⚠️ 去重交给 `nextAvailableName`:它会给重名加 " (2)" 后缀，
+             * 导入时也是同一套逻辑，不会出现两套命名规则。
+             */
+            name = nextAvailableName(name.trim().ifEmpty { "新建配置" }),
             description = description.trim(),
             builtIn = false,
             styleId = resolvedStyle,
@@ -199,6 +221,48 @@ class ConfigStore private constructor(context: Context) {
              * 直接给手柄用）—— 所以两者放在一起改，别再漏第三个。
              */
             showSpaceKey = defaultShowSpaceKey(resolvedStyle),
+
+            /*
+             * ============================================================
+             * ⚠️ 触屏:「显示 SPACE 键」**默认打开**，同时关掉 A 键那一行
+             * ============================================================
+             * 用户的原话:
+             *
+             * > 把现在的「显示 SPACE 键」**改为绑定在现在触屏样式已经默认
+             * > 有的这个 Space 组件上**，并让他**默认打开**，而不是删去
+             *
+             * ⚠️ 而"绑定在同一个组件上"要求触屏**只有一个 Space**:
+             *
+             * | 槽位 | 触屏 | 为什么 |
+             * |---|---|---|
+             * | `SPACE` | ✅ **默认打开**（它是触屏的 Space） | 开关与置顶都作用在它身上 |
+             * | `A_BUTTON` | — | ⚠️ **触屏压根不生成它**（见下） |
+             *
+             * ⚠️ 另:触屏默认显示 Shift 是为了让「触摸区域编辑」里
+             * **有一块 Shift 可以配**（用户要求），见下面那行。
+             *
+             * ============================================================
+             * ⚠️⚠️ 这里**不再设 `showAButton`**
+             * ============================================================
+             * 用户的原话:
+             *
+             * > 你应该**直接在触屏样式的配置字段直接去掉 showAButton** 吧。。。
+             * > 不然不是字段冗余了吗
+             *
+             * ⚠️ 他说得对。我原来的做法是"创建时把触屏的 `showAButton`
+             * 设成 `false`"，而那个字段**被门控掉、不写进存档** ——
+             * 于是重新解码时又变回 `true`，**A 键行自己冒出来**
+             * （用户报的"划了下后台多了个 A_BUTTON"）。
+             *
+             * ⚠️ 而我接着的修法是"给解码加一条按样式取缺省" ——
+             * **那是在给一个触屏压根不该有的字段写特殊逻辑**。
+             *
+             * ⚠️ 根治的做法:**让布局不读它**
+             * （`KeyLayout.joystickLayoutBoxes` 里的 `usesAButton`，
+             * 只有手柄读）—— 于是触屏的 `showAButton` 是个**谁也不读的字段**，
+             * 存什么都不影响，这里也就**不需要设它**。
+             */
+            showShiftKey = resolvedStyle == StyleId.TOUCHING,
         )
         configs.add(created)
         persist()

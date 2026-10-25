@@ -203,6 +203,90 @@ fun BitmapFontPickerDialog(
 }
 
 /**
+ * **字体库**（设置 → 库 → 字体库）。
+ *
+ * ============================================================
+ * ⚠️ 与两个"选择字体"对话框的区别：**这里不做选择**
+ * ============================================================
+ * 用户的原话:
+ *
+ * > 设置页加一个「库」栏……里面放字体库，live2d库，在这里就可以导入字体
+ * > （包括字体文件和图片位图）……窗口应该可以用已有的那一块的吧，
+ * > 只不过不做「选择」，因为是「库」，不是在编辑配置
+ *
+ * ⚠️ 所以它复用同一个外壳 [FontListDialog]（列表 + 导入 + 改名 + 删除），
+ * 区别只有两点:
+ *
+ * | 项 | 选择对话框 | 字体库 |
+ * |---|---|---|
+ * | 行点击 | 选中并回传 | **什么都不做**（`onSelect` 是空实现） |
+ * | 列表范围 | 常规字体 / 图片字体**分开** | **全部列在一起**（这就是"库"） |
+ * | 导入入口 | 一个 | **两个**（字体文件 + 图片字体） |
+ *
+ * ⚠️ 改名与删除在库里**照样可用** —— 那才是"管理库"该做的事。
+ */
+@Composable
+fun FontLibraryDialog(
+    onDismiss: () -> Unit,
+    onImportVector: () -> Unit,
+    onImportBitmap: () -> Unit,
+    refreshKey: Int = 0,
+) {
+    FontListDialog(
+        title = "字体库",
+        importLabel = "导入字体文件",
+        importHint = "支持 .ttf / .otf / .ttc；内置字体与系统字体不可删除。\n" +
+            "图片字体只显示 ASCII（中文仍用常规字体）。",
+        onDismiss = onDismiss,
+        onImport = onImportVector,
+        extraImportLabel = "导入图片字体",
+        onExtraImport = onImportBitmap,
+        refreshKey = refreshKey,
+    ) { actions ->
+        /*
+         * ⚠️ 用 `FontRegistry.all()`（而不是 `vectorFonts()`）:
+         * 库里要把**图片字体**也列出来，否则用户在库里看不到自己导入的图片字体。
+         */
+        val fonts = FontRegistry.all()
+
+        if (fonts.isEmpty()) {
+            Text(
+                text = "还没有可用的字体。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 12.dp),
+            )
+        }
+
+        listOf(FontKind.SYSTEM, FontKind.BUILTIN, FontKind.IMPORTED, FontKind.BITMAP)
+            .forEachIndexed { index, kind ->
+                val group = fonts.filter { it.kind == kind }
+                if (group.isEmpty()) return@forEachIndexed
+
+                if (index > 0) {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 8.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant,
+                    )
+                }
+                FontGroupHeader(kind.label)
+                group.forEach { font ->
+                    /*
+                     * ⚠️ `selectedId = ""` + `onSelect = {}`:
+                     * 库里没有"当前选中的字体"这回事，点行也不该有任何反应。
+                     */
+                    FontListRow(
+                        entry = font,
+                        selectedId = "",
+                        onSelect = {},
+                        actions = actions,
+                    )
+                }
+            }
+    }
+}
+
+/**
  * 行上的"改名 / 删除"回调。
  *
  * 这样列表内容由调用方画，而**状态仍集中在 [FontListDialog] 里** ——
@@ -237,6 +321,14 @@ internal fun FontListDialog(
     onDismiss: () -> Unit,
     onImport: () -> Unit,
     refreshKey: Int,
+    /**
+     * 第二个导入按钮（可选）。
+     *
+     * ⚠️ 只有「字体库」用它:库里要同时能导入**字体文件**与**图片字体**，
+     * 而两个"选择"对话框各自只需要一个导入入口。
+     */
+    extraImportLabel: String? = null,
+    onExtraImport: (() -> Unit)? = null,
     list: @Composable (actions: FontRowActions) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -276,6 +368,19 @@ internal fun FontListDialog(
                         Icon(Icons.Default.Add, contentDescription = null)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(importLabel)
+                    }
+
+                    /* ⚠️ 「字体库」的第二个导入入口（图片字体），见参数说明 */
+                    if (extraImportLabel != null && onExtraImport != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = onExtraImport,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(extraImportLabel)
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(4.dp))

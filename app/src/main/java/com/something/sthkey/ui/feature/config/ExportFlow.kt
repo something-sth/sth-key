@@ -3,6 +3,9 @@ package com.something.sthkey.ui.feature.config
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.Manifest
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
@@ -12,16 +15,21 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import com.something.sthkey.core.log.AppLog
 import com.something.sthkey.core.prefs.AppPrefs
 import com.something.sthkey.data.config.ConfigExporters
 import com.something.sthkey.data.config.ConfigPackageCodec
 import com.something.sthkey.data.config.ConfigPackageManager
 import com.something.sthkey.data.config.ExportMethod
+import com.something.sthkey.data.config.GroupPackageCodec
+import com.something.sthkey.data.config.GroupPackageManager
+import com.something.sthkey.domain.config.ConfigGroup
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
 
 /**
  * 配置导出的整套流程。
@@ -50,6 +58,26 @@ import kotlinx.coroutines.withContext
  *
  * @param onMessage 一次性的结果提示（由调用方用 Toast 显示）
  */
+/**
+ * 一次导出的目标（配置 **或** 配置组合）。
+ *
+ * ⚠️ 为什么要这个抽象:导出有**三种方式**（手动选位置 / 静默存下载 / 分享），
+ * 而配置与配置组合的差别只有"往 Uri 里写什么"。
+ * 把差别收成 [write] 一个函数，三种方式就只需要维护一份。
+ *
+ * ⚠️ [fileName] 必须**带扩展名**（`.sthkey` / `.sthgroup`）:
+ * 它同时被用作 SAF 的默认文件名和下载目录里的落盘名。
+ */
+class PendingExport(
+    /** 给用户看的名字（提示语里用） */
+    val displayName: String,
+    /** 落盘文件名，**含扩展名** */
+    val fileName: String,
+    /** 把包写进目标 Uri；返回是否成功 */
+    val write: (android.net.Uri) -> Boolean,
+)
+
+
 @Composable
 fun rememberExportFlow(onMessage: (String) -> Unit): ExportFlow {
     val context = LocalContext.current
@@ -57,7 +85,7 @@ fun rememberExportFlow(onMessage: (String) -> Unit): ExportFlow {
     val prefs = remember { AppPrefs.get(context) }
 
     /** 当前正在导出的配置；系统回调回来时靠它知道要写什么 */
-    var pending by remember { mutableStateOf<KeyStrokesConfig?>(null) }
+    var pending by remember { mutableStateOf<PendingExport?>(null) }
 
     /**
      * 用户在这次导出里勾了"设为默认"。导出**成功之后**才写进偏好 ——
@@ -65,6 +93,15 @@ fun rememberExportFlow(onMessage: (String) -> Unit): ExportFlow {
      * 而且再也没机会看到那个窗口。
      */
     var rememberChoice by remember { mutableStateOf(false) }
+
+    /**
+     * 等存储权限回来时要继续导出的配置（**仅 Android 9 及以下会用到**）。
+     *
+     * ⚠️ 单独存一份、而不是复用 [pending]：那个是给"手动选位置"用的，
+     * 两者会在"权限被拒 → 退回手动"时**同时存在**，混用会丢配置。
+     */
+    var pendingDownload by remember { mutableStateOf<PendingExport?>(null) }
+    var pendingDownloadAsDefault by remember { mutableStateOf(false) }
 
     /*
      * 手动导出（SAF 建文档）。
@@ -81,50 +118,126 @@ fun rememberExportFlow(onMessage: (String) -> Unit): ExportFlow {
         if (uri == null || target == null) return@rememberLauncherForActivityResult
 
         scope.launch {
-            val ok = withContext(Dispatchers.IO) {
-                ConfigPackageManager.export(
-                    context = context,
-                    config = target,
-                    target = uri,
-                    requestedName = target.name + ConfigPackageCodec.EXTENSION,
-                )
-            }
+            val ok = withContext(Dispatchers.IO) { target.write(uri) }
             if (ok) {
                 commitDefaultIfAsked(prefs, ExportMethod.MANUAL, rememberChoice)
                 rememberChoice = false
-                onMessage("已导出「${target.name}」")
+                onMessage("已导出「${target.displayName}」")
             } else {
                 onMessage("导出失败，请重试（若目录里出现了 0 字节的同名文件，可以删掉它再试）")
             }
         }
     }
 
-    return remember(manualLauncher) {
-        ExportFlow(
-            start = { config, method, asDefault ->
-                rememberChoice = asDefault
-                when (method) {
-                    ExportMethod.MANUAL, ExportMethod.ASK -> {
-                        /*
-                         * ASK 不该走到这里 —— 调用方看到 ASK 会先弹选择窗口。
-                         * 真走到了就退回手动导出，至少不会什么都不发生。
-                         */
-                        pending = config
-                        manualLauncher.launch(config.name + ConfigPackageCodec.EXTENSION)
-                    }
+    /*
+     * Android 9（API 28）及以下：写公共下载目录需要 `WRITE_EXTERNAL_STORAGE`。
+     *
+     * ⚠️ 29+ 完全不需要 —— 清单里那条权限带了 `maxSdkVersion="28"`，
+     * 所以这里用 [needsStoragePermission] 提前判掉，不会在 29+ 上白弹一次窗口。
+     *
+     * ⚠️ 必须声明在 [manualLauncher] **之后**：被拒时要退回手动导出，
+     * 用到 `manualLauncher`。Kotlin 的局部变量不能前向引用。
+     */
+    val storagePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        val target = pendingDownload
+        pendingDownload = null
+        if (target == null) return@rememberLauncherForActivityResult
 
-                    ExportMethod.DOWNLOAD -> scope.launch {
-                        exportToDownloads(context, prefs, config, asDefault, onMessage) {
-                            rememberChoice = false
-                        }
-                    }
+        if (granted) {
+            val asDefault = pendingDownloadAsDefault
+            scope.launch {
+                exportToDownloads(context, prefs, target, asDefault, onMessage) {
+                    rememberChoice = false
+                }
+            }
+        } else {
+            /*
+             * ⚠️ 被拒**不能就到此为止** —— 用户点了"导出"却什么都没发生，
+             * 那是最糟的一种体验。直接退回到"手动选择保存位置"（SAF 免权限），
+             * 配置照样能导出去。
+             */
+            AppLog.i("Export", "存储权限被拒，退回手动选择保存位置")
+            rememberChoice = pendingDownloadAsDefault
+            pending = target
+            manualLauncher.launch(target.fileName)
+            onMessage("未授予存储权限，已改为手动选择保存位置")
+        }
+    }
 
-                    ExportMethod.SHARE -> scope.launch {
-                        shareConfig(context, config, prefs, asDefault, onMessage) {
-                            rememberChoice = false
+    /*
+     * 三种导出方式的**唯一分派点**。
+     *
+     * ⚠️ 配置与配置组合共用它:两者的区别只在 [PendingExport.write] 里"写什么进去"，
+     * 分派逻辑必须只有一份，否则迟早出现"组合没有分享方式""组合导出到下载会崩"这类分叉。
+     */
+    val startInternal: (PendingExport, ExportMethod, Boolean) -> Unit =
+        { target, method, asDefault ->
+            rememberChoice = asDefault
+            when (method) {
+                ExportMethod.MANUAL, ExportMethod.ASK -> {
+                    /*
+                     * ASK 不该走到这里 —— 调用方看到 ASK 会先弹选择窗口。
+                     * 真走到了就退回手动导出，至少不会什么都不发生。
+                     *
+                     * ⚠️ MIME 用通配符（见 `manualLauncher` 的说明）：
+                     * 给具体类型会让系统按 MIME 补后缀（`.sthgroup` → `.sthgroup.bin`）。
+                     */
+                    pending = target
+                    manualLauncher.launch(target.fileName)
+                }
+
+                ExportMethod.DOWNLOAD -> {
+                    /*
+                     * ⚠️ Android 9 及以下先要存储权限（29+ 这一步直接跳过）。
+                     * 拿到权限后在 launcher 的回调里继续导出。
+                     */
+                    if (needsStoragePermission(context)) {
+                        pendingDownload = target
+                        pendingDownloadAsDefault = asDefault
+                        storagePermissionLauncher.launch(
+                            android.Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                        )
+                    } else {
+                        scope.launch {
+                            exportToDownloads(context, prefs, target, asDefault, onMessage) {
+                                rememberChoice = false
+                            }
                         }
                     }
                 }
+
+                ExportMethod.SHARE -> scope.launch {
+                    sharePackage(context, target, prefs, asDefault, onMessage) {
+                        rememberChoice = false
+                    }
+                }
+            }
+        }
+
+    return remember(manualLauncher, storagePermissionLauncher) {
+        ExportFlow(
+            start = { target, method, asDefault ->
+                startInternal(target, method, asDefault)
+            },
+            startGroup = { group, configs, method, asDefault ->
+                startInternal(
+                    PendingExport(
+                        displayName = group.name,
+                        fileName = group.name + GroupPackageCodec.EXTENSION,
+                        write = { uri ->
+                            GroupPackageManager.export(
+                                context = context,
+                                group = group,
+                                configs = configs,
+                                target = uri,
+                            ) is GroupPackageManager.ExportOutcome.Ok
+                        },
+                    ),
+                    method,
+                    asDefault,
+                )
             },
         )
     }
@@ -137,7 +250,15 @@ fun rememberExportFlow(onMessage: (String) -> Unit): ExportFlow {
  */
 class ExportFlow(
     /** @param asDefault 弹窗里勾了"设为默认导出方式" */
-    val start: (config: KeyStrokesConfig, method: ExportMethod, asDefault: Boolean) -> Unit,
+    val start: (target: PendingExport, method: ExportMethod, asDefault: Boolean) -> Unit,
+
+    /**
+     * 导出一个**配置组合**。
+     *
+     * ⚠️ 与 [start] 走同一套方式（手动选择位置 / 下载目录 / 分享），
+     * 区别只在"写进 Uri 的是什么"。
+     */
+    val startGroup: (group: ConfigGroup, configs: List<KeyStrokesConfig>, method: ExportMethod, asDefault: Boolean) -> Unit,
 )
 
 /* ============================================================
@@ -150,15 +271,15 @@ class ExportFlow(
 private suspend fun exportToDownloads(
     context: Context,
     prefs: AppPrefs,
-    config: KeyStrokesConfig,
+    target: PendingExport,
     asDefault: Boolean,
     onMessage: (String) -> Unit,
     clearRemember: () -> Unit,
 ) {
-    val fileName = config.name + ConfigPackageCodec.EXTENSION
+    val fileName = target.fileName
 
     val result = withContext(Dispatchers.IO) {
-        ConfigExporters.exportToDownloads(context, config, fileName)
+        ConfigExporters.exportToDownloads(context, target.write, fileName, ConfigExporters.SUBDIR)
     }
 
     clearRemember()
@@ -180,18 +301,18 @@ private suspend fun exportToDownloads(
 }
 
 /** 生成分享 Intent 并交给系统面板 */
-private suspend fun shareConfig(
+private suspend fun sharePackage(
     context: Context,
-    config: KeyStrokesConfig,
+    target: PendingExport,
     prefs: AppPrefs,
     asDefault: Boolean,
     onMessage: (String) -> Unit,
     clearRemember: () -> Unit,
 ) {
-    val fileName = config.name + ConfigPackageCodec.EXTENSION
+    val fileName = target.fileName
 
     val intent = withContext(Dispatchers.IO) {
-        ConfigExporters.buildShareIntent(context, config, fileName)
+        ConfigExporters.buildShareIntent(context, target.displayName, fileName, target.write)
     }
 
     clearRemember()
@@ -232,3 +353,24 @@ private fun commitDefaultIfAsked(prefs: AppPrefs, method: ExportMethod, asked: B
 }
 
 private const val TAG = "Export"
+
+/**
+ * 这台机器导出到下载目录前，是否需要先申请存储权限。
+ *
+ * ============================================================
+ * ⚠️ 只有 Android 9（API 28）及以下才需要
+ * ============================================================
+ * Android 10 起写 `Download/` 走 MediaStore，**不要任何权限**。
+ * 清单里那条 `WRITE_EXTERNAL_STORAGE` 带了 `maxSdkVersion="28"`，
+ * 所以在 29+ 上系统根本不会把它列出来 —— 这里也必须同步判掉，
+ * 否则会在不该弹窗的机器上弹一个"系统直接拒绝"的空窗。
+ *
+ * ⚠️ 已授权时返回 false（直接导出），没授权才返回 true（去申请）。
+ */
+private fun needsStoragePermission(context: Context): Boolean {
+    if (Build.VERSION.SDK_INT > Build.VERSION_CODES.P) return false
+    return ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.WRITE_EXTERNAL_STORAGE,
+    ) != PackageManager.PERMISSION_GRANTED
+}

@@ -5,17 +5,33 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DashboardCustomize
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material.icons.filled.TouchApp
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.BorderStyle
+import androidx.compose.material.icons.rounded.FontDownload
+import androidx.compose.material.icons.rounded.FormatColorText
+import androidx.compose.material.icons.rounded.Gamepad
+import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.Keyboard
+import androidx.compose.material.icons.rounded.RoundedCorner
+import androidx.compose.material.icons.rounded.SpaceBar
+import androidx.compose.material.icons.rounded.Speed
+import androidx.compose.material.icons.rounded.SportsEsports
+import androidx.compose.material.icons.rounded.SwapHoriz
+import androidx.compose.material.icons.rounded.ViewInAr
+import androidx.compose.material.icons.rounded.TouchApp
+import androidx.compose.material.icons.rounded.Transform
+import androidx.compose.material.icons.rounded.VerticalAlignTop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -30,8 +46,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,54 +56,61 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.something.sthkey.capture.accessibility.AccessibilityGrant
+import com.something.sthkey.capture.accessibility.SthKeyAccessibilityService
+import com.something.sthkey.capture.touch.TouchRegionEditorService
+import com.something.sthkey.core.log.AppLog
+import com.something.sthkey.data.permission.PermissionHelper
 import com.something.sthkey.domain.config.ANIMATION_DURATION_MAX
 import com.something.sthkey.domain.config.ANIMATION_DURATION_MIN
 import com.something.sthkey.domain.config.AnimationMode
 import com.something.sthkey.domain.config.DEFAULT_CPS_TEMPLATE
 import com.something.sthkey.domain.config.DEFAULT_CPS_TEMPLATE_MODE1
 import com.something.sthkey.domain.config.KeyStrokesConfig
+import com.something.sthkey.domain.config.resetParamsToDefault
 import com.something.sthkey.domain.config.ShadowMode
 import com.something.sthkey.domain.config.TextShadow
-import androidx.compose.ui.text.font.FontWeight
-import com.something.sthkey.core.log.AppLog
+import com.something.sthkey.domain.custom.canConvertToCustom
+import com.something.sthkey.domain.custom.CustomTouchRegion
 import com.something.sthkey.domain.custom.KeyComponent
 import com.something.sthkey.domain.custom.TextComponent
-import com.something.sthkey.domain.custom.canConvertToCustom
 import com.something.sthkey.domain.custom.toCustomKeyStyle
-import kotlinx.coroutines.delay
-import com.something.sthkey.domain.config.resetParamsToDefault
-import com.something.sthkey.domain.font.FontRegistry
-import com.something.sthkey.domain.style.KeyLayout
-import kotlin.math.roundToInt
-import com.something.sthkey.domain.style.StyleId
-import com.something.sthkey.domain.live2d.Live2DModels
-import com.something.sthkey.ui.component.Live2DModelPickerDialog
-import com.something.sthkey.ui.EditMode
-import com.something.sthkey.ui.MainViewModel
-import com.something.sthkey.ui.component.CardDivider
 import com.something.sthkey.domain.font.bitmap.BitmapFontImporter
+import com.something.sthkey.domain.font.FontRegistry
+import com.something.sthkey.domain.live2d.Live2DModels
+import com.something.sthkey.domain.style.KeyLayout
+import com.something.sthkey.domain.style.StyleId
 import com.something.sthkey.ui.component.BitmapFontPickerDialog
-import com.something.sthkey.ui.component.PendingBitmapImportDialog
+import com.something.sthkey.ui.component.CardDivider
+import com.something.sthkey.ui.component.collapsibleSection
+import com.something.sthkey.ui.component.EditableSliderRow
 import com.something.sthkey.ui.component.FontPickerDialog
 import com.something.sthkey.ui.component.HexColorRow
 import com.something.sthkey.ui.component.KeyMappingEditor
+import com.something.sthkey.ui.component.Live2DModelPickerDialog
+import com.something.sthkey.ui.component.PendingBitmapImportDialog
 import com.something.sthkey.ui.component.ScrollableScreen
-import com.something.sthkey.ui.component.EditableSliderRow
-import com.something.sthkey.ui.component.collapsibleSection
-import com.something.sthkey.ui.component.setExpanded
 import com.something.sthkey.ui.component.SectionHeader
-import com.something.sthkey.ui.feature.custom.stepOf
 import com.something.sthkey.ui.component.SectionHint
+import com.something.sthkey.ui.component.setExpanded
 import com.something.sthkey.ui.component.SettingItem
 import com.something.sthkey.ui.component.SettingsCard
 import com.something.sthkey.ui.component.SlotTextOffsetDialog
 import com.something.sthkey.ui.component.SlotTextSpacingDialog
 import com.something.sthkey.ui.component.SwitchItem
+import com.something.sthkey.ui.EditMode
+import com.something.sthkey.ui.feature.custom.stepOf
+import com.something.sthkey.ui.MainViewModel
 import com.something.sthkey.ui.preview.ConfigPreview
+import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+
 
 /**
  * 预览框的固定尺寸（dp）。
@@ -150,6 +173,89 @@ fun ConfigEditorScreen(
 
     /** 是不是自定义 Key 样式；它的编辑页只放通用项，中间交给独立的编辑器页面 */
     val isCustomKey = editable.styleId == StyleId.CUSTOM_KEY
+
+    /**
+     * 是不是**触屏**样式。
+     *
+     * ⚠️ 目前只用来**隐藏「键位映射」栏** —— 触屏不产出键码，
+     * 它的输入来源由"触摸区域"回答（见那一栏的注释）。
+     *
+     * ⚠️ 它不是 `isCustomKey` / `isLive2D` 那种"整页都不一样"的分支:
+     * 触屏的编辑页与手柄**几乎相同**（它俩的可见部分就是同一套布局），
+     * 所以这里**只在个别分栏上打补丁**，不另开一个 `xxxStyleSections`。
+     */
+    val isTouching = editable.styleId == StyleId.TOUCHING
+
+    /**
+     * 打开**触摸区域编辑悬浮窗**（触屏样式与自定义 Key **共用同一套判断**）。
+     *
+     * ============================================================
+     * ⚠️⚠️ 提成一个 lambda 而不是在两处各写一遍
+     * ============================================================
+     * 用户的原话:
+     *
+     * > 在**自定义 key 的编辑配置页**（不是自定义编辑页），加一个"触屏设置"栏，
+     * > 这里面加一个 button"触摸区域编辑"，**是的，就跟触屏样式是一样的**
+     *
+     * ⚠️ "是一样的"指的是**行为**，所以判断逻辑**只有一份**。
+     * 两处各写一遍的话，以后改了一处（比如加了"配置还没保存"那种情况）
+     * 另一处就是老行为 —— 而那种不一致极难发现（两个入口长得一样）。
+     *
+     * ⚠️ 顺序要紧（三条都不能省）:
+     *
+     * | 检查 | 不检查会怎样 |
+     * |---|---|
+     * | 配置有 id | 悬浮窗不知道该把区域写进哪份配置 |
+     * | 有**悬浮窗权限** | `addView` 抛 `BadTokenException`，看着像"编辑器打不开" |
+     * | 没有**别的配置**在编辑 | 两套方块同时开着，屏幕上全是框 |
+     *
+     * ⚠️ 第三条的判断在 [TouchRegionEditorService.refuseReason] 里
+     * **只有一份**（"谁的悬浮窗在开着"这个状态只有服务知道），
+     * 这里只是把结果翻译成界面动作。
+     */
+    fun openTouchRegionEditor() {
+        if (editable.id.isBlank()) {
+            Toast.makeText(context, "请先保存这份配置，再配置触摸区域", Toast.LENGTH_LONG).show()
+            return
+        }
+        /*
+         * ⚠️⚠️ 前置条件从"悬浮窗权限"换成了"**无障碍服务**"
+         * ============================================================
+         * 改用 `TYPE_ACCESSIBILITY_OVERLAY` 之后 `SYSTEM_ALERT_WINDOW` 已经删了，
+         * `canDrawOverlays()` 恒为 false —— 那会让这个入口**永远点不动**
+         * （与"开启悬浮窗按钮点不动"是同一个 bug，用户已经报过一次）。
+         *
+         * ⚠️ 现在真正的条件是"无障碍服务连上了吗"，因为编辑器的窗口
+         * （那些可拖动的方块）也要靠它建（见 `OverlayWindowHost`）。
+         *
+         * ⚠️ 没连上时**跳系统设置页**，而不是只弹一句 toast ——
+         * 用户明确要求过这种兜底。
+         */
+        if (!SthKeyAccessibilityService.isConnected()) {
+            Toast.makeText(
+                context,
+                "需要开启无障碍服务才能编辑触摸区域",
+                Toast.LENGTH_LONG,
+            ).show()
+            AccessibilityGrant.openSettings(context)
+            return
+        }
+
+        when (val reason = TouchRegionEditorService.refuseReason(editable.id)) {
+            null -> TouchRegionEditorService.start(context, editable.id)
+
+            /*
+             * ⚠️ 同一个配置再按一次 = **不保存关闭**。
+             *
+             * ⚠️ 用户给过"双击关闭"这个备选，我选了"再按一次" ——
+             * 那个按钮是普通按钮，双击是隐藏手势，而单击已经
+             * 能表达"收起"（面板里也有「不保存退出」那条明路）。
+             */
+            TouchRegionEditorService.ALREADY_OPEN -> TouchRegionEditorService.stop(context)
+
+            else -> Toast.makeText(context, reason, Toast.LENGTH_LONG).show()
+        }
+    }
 
     /*
      * ============================================================
@@ -247,6 +353,18 @@ fun ConfigEditorScreen(
     var showResetDialog by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showDiscardDialog by remember { mutableStateOf(false) }
+
+    /**
+     * 触摸区域编辑器开着没有。
+     *
+     * ⚠️ 只有**触屏样式**会把「触摸区域编辑」按钮的点击接到它上面
+     * （见 `TouchSections.kt`），别的样式永远读不到它。
+     *
+     * ⚠️ 它在这里只是一个**开关**:真正的编辑界面是几块独立的悬浮窗
+     * （见 `TouchRegionEditor`），不画在这个页面里 ——
+     * 因为触摸区域是**整块屏幕**上的东西，而这里是应用自己的窗口。
+     */
+    var showTouchRegionEditor by remember { mutableStateOf(false) }
     var showConvertDialog by remember { mutableStateOf(false) }
     var showFontPicker by remember { mutableStateOf(false) }
 
@@ -527,8 +645,34 @@ fun ConfigEditorScreen(
                 // 传 editable.id 而不是 configId：草稿模式下用户可能正在改别的字段，
                 // 但"要编辑的是哪一份配置"始终以当前正在编辑的这份为准
                 onOpenEditor = { onOpenCustomEditor(editable.id) },
+                onOpenRegionEditor = { openTouchRegionEditor() },
             ) { transform -> applyChange(transform) }
         } else {
+
+        /*
+         * ============================================================
+         * 触屏设置（**只有触屏样式有**）
+         * ============================================================
+         * ⚠️ 位置在「外观」**之前**（用户明确指定）:
+         *
+         * > 在触屏样式的「外观」栏**上方**添加「触屏设置」栏
+         *
+         * ⚠️ 与手柄那三个摇杆分区（在「行为」之后）位置不同是有道理的:
+         * 触屏设置里第一个东西是**触摸区域入口**，那是"能不能用"的事 ——
+         * 用户先要能用，才谈得上调外观。
+         *
+         * ⚠️ 内容在 `TouchSections.kt`（本文件已经 2200 多行）。
+         */
+        if (isTouching) {
+            touchStyleSections(
+                editable = editable,
+                /*
+                 * ⚠️ 判断逻辑在 [openTouchRegionEditor] 里**只有一份** ——
+                 * 自定义 Key 那边用的是**同一个** lambda（见上面那段说明）。
+                 */
+                onOpenRegionEditor = { openTouchRegionEditor() },
+            )
+        }
 
         /*
          * ============================================================
@@ -633,6 +777,7 @@ fun ConfigEditorScreen(
 
                 SwitchItem(
                     title = "圆角",
+                    leadingIcon = Icons.Rounded.RoundedCorner,
                     subtitle = "开启后可调整键帽圆角大小",
                     checked = editable.cornerRadiusEnabled,
                     onCheckedChange = { enabled ->
@@ -657,6 +802,7 @@ fun ConfigEditorScreen(
 
                 SwitchItem(
                     title = "描边",
+                    leadingIcon = Icons.Rounded.BorderStyle,
                     subtitle = "在键帽外圈绘制一层轮廓，浅色背景下更清晰",
                     checked = editable.outline.enabled,
                     onCheckedChange = { enabled ->
@@ -683,6 +829,7 @@ fun ConfigEditorScreen(
 
                 SwitchItem(
                     title = "文字阴影",
+                    leadingIcon = Icons.Rounded.FormatColorText,
                     subtitle = "给文字加一层影子，在花哨的背景上更易读",
                     checked = editable.shadow.enabled,
                     onCheckedChange = { enabled ->
@@ -760,6 +907,7 @@ fun ConfigEditorScreen(
             SettingsCard {
                 SettingItem(
                     title = "自定义字体",
+                    leadingIcon = Icons.Rounded.FontDownload,
                     subtitle = FontRegistry.displayNameOf(editable.fontId),
                     onClick = { showFontPicker = true },
                 )
@@ -780,6 +928,7 @@ fun ConfigEditorScreen(
                 CardDivider()
                 SettingItem(
                     title = "图片字体",
+                    leadingIcon = Icons.Rounded.Image,
                     subtitle = if (editable.bitmapFontId.isBlank()) {
                         "不使用（只有 ASCII 会用到它）"
                     } else {
@@ -1099,25 +1248,65 @@ fun ConfigEditorScreen(
 
                 SwitchItem(
                     /*
-                     * ⚠️ 手柄样式下这个槽位是 **B 键**（`BTN_EAST`），不是 Shift ——
-                     * 布局用的是键盘布局，但键位映射换过了（见 `GamepadBindings`）。
+                     * ⚠️ 标题按**样式**走，三种情况:
                      *
-                     * 标题不跟着变的话，手柄用户会看到一个"显示 Shift 键"的开关，
-                     * 而悬浮窗上那个位置明明写着 B —— 没人能猜到那是一回事。
+                     * | 样式 | 这个槽位是 | 标题 |
+                     * |---|---|---|
+                     * | 手柄 | **B 键**（`BTN_EAST`） | 「显示 B 键」 |
+                     * | 触屏 | **Shift**（与键盘一样） | 「显示 Shift 键」 |
+                     * | 键盘 | Shift | 「显示 Shift 键」 |
+                     *
+                     * ⚠️ 手柄的布局用的是键盘布局，但键位映射换过了
+                     * （见 `gamepad2KeyMappings`）—— 标题不跟着变的话，
+                     * 手柄用户会看到一个"显示 Shift 键"的开关，
+                     * 而悬浮窗上那个位置明明写着 B，没人能猜到那是一回事。
+                     *
+                     * ⚠️ 触屏**不跟着变** —— 用户明确要求"触屏样式的行为栏
+                     * 跟键盘样式做一样，符合审美"，而触屏里这个槽位就是 Shift。
                      */
-                    title = if (KeyLayout.usesJoystickLayout(editable)) {
+                    title = if (editable.styleId == StyleId.GAMEPAD2) {
                         "显示 B 键"
                     } else {
                         "显示 Shift 键"
                     },
                     checked = editable.showShiftKey,
+                    leadingIcon = Icons.Rounded.Keyboard,
                     onCheckedChange = { enabled -> applyChange { it.copy(showShiftKey = enabled) } },
                 )
 
                 CardDivider()
 
                 SwitchItem(
-                    title = "显示鼠标按键",
+                    /*
+                     * ⚠️ **只有手柄样式**叫「显示扳机键」。
+                     *
+                     * 手柄那边 `LMB` / `RMB` 这两个槽位在**屏幕上就是
+                     * LT / RT**（见 `gamepad2KeyMappings`:"左边是 LT、右边是 RT"）——
+                     * 所以标题该叫「显示扳机键」。用户的原话:
+                     *
+                     * > **手柄样式**的行为栏，应该把「显示鼠标按键」改为
+                     * > 「显示扳机键」，这个没问题吧，**手柄样式就是这样讲的**
+                     *
+                     * ⚠️⚠️ **触屏仍然是「显示鼠标按键」**（我改错过一次）
+                     * ============================================================
+                     * 用户的反馈:
+                     *
+                     * > 而且触屏样式的显示鼠标键**怎么又变成显示扳机键**了
+                     *
+                     * ⚠️ 我当时的理由是"触屏的 LMB/RMB 也显示成 LMB/RMB" ——
+                     * 但那是**结果**不是理由:触屏的默认键位文字按用户的要求
+                     * 就是 **LMB / RMB**（见 `touchingKeyMappings`），
+                     * 它压根不叫 LT/RT，所以也不该叫「扳机键」。
+                     *
+                     * ⚠️ 判据从 `usesJoystickLayout`（触屏也算）改成
+                     * **`styleId == StyleId.GAMEPAD2`** —— 与「显示 B 键」
+                     * 那个判据一致（它也只给手柄）。
+                     */
+                    title = if (editable.styleId == StyleId.GAMEPAD2) {
+                        "显示扳机键"
+                    } else {
+                        "显示鼠标按键"
+                    },
                     checked = editable.showMouseButtons,
                     onCheckedChange = { enabled -> applyChange { it.copy(showMouseButtons = enabled) } },
                 )
@@ -1140,24 +1329,38 @@ fun ConfigEditorScreen(
                  */
                 /*
                  * ============================================================
-                 * 键盘样式专属:空格的两个开关
+                 * 「显示 SPACE 键」与「SPACE 键置顶」—— **键盘与触屏都有**
                  * ============================================================
                  * 用户的原话:"key 样式，需要添加'显示 SPACE 键开关'（默认开启），
                  * 以及'SPACE 键置顶'开关，默认关闭，原理跟手柄的标准样式的
                  * 'A 键置顶'是一样的，你自己翻一下代码避免踩坑"。
                  *
-                 * ⚠️ **只在键盘样式显示** —— 手柄样式（`usesJoystickLayout`）
-                 * 那边没有 WASD，"置顶"无从谈起；而且它的 `showSpaceKey`
-                 * 是"显示 SPACE 槽位"（与 [showAButton] 同一个屏幕位置），
-                 * 已经在上面的手柄专属块里有对应开关，**不能重复显示**。
+                 * ⚠️⚠️ **触屏也要有这两个开关**（我在这一处反复错过，记下来）
+                 * ============================================================
+                 * 用户的原话:
                  *
-                 * ⚠️ 判断用 `!usesJoystickLayout(editable)` —— 与那边
-                 * `if (usesJoystickLayout(...))` **互补且互斥**，
-                 * 加第三种样式时不会两边都命中或都不命中。
+                 * > 把现在的「显示 SPACE 键」**改为绑定在现在触屏样式已经默认
+                 * > 有的这个 Space 组件上**，并让他**默认打开**，而不是删去，
+                 * > **Space 置顶也用得到啊**
+                 *
+                 * ⚠️ 我犯过两个相反方向的错:
+                 *
+                 * | 版本 | 错在哪 |
+                 * |---|---|
+                 * | 第一版 | 判据 `!= GAMEPAD2` —— 触屏有了开关，但它绑在**多余**的 SPACE 槽位上（触屏当时拿 A 当 Space） |
+                 * | 第二版 | 判据 `== KEYSTROKES` —— ⚠️ **把触屏直接排除了**，开关**消失**（用户当场发现） |
+                 *
+                 * ⚠️ 现在的前提已经修好:触屏**改用 `SPACE` 槽位**当 Space
+                 * （见 `touchingKeyMappings`），`A_BUTTON` 行关掉 ——
+                 * 于是这两个开关**正好绑在唯一的那个 Space 上**。
+                 *
+                 * ⚠️ 手柄仍然没有这两个开关:它拿 `A_BUTTON` 当空格位、
+                 * 显示 "A"，那个槽位有自己的「显示 A 键」/「A 键置顶」。
                  */
-                if (!KeyLayout.usesJoystickLayout(editable)) {
+                if (editable.styleId != StyleId.GAMEPAD2) {
                     SwitchItem(
                         title = "显示 SPACE 键",
+                    leadingIcon = Icons.Rounded.SpaceBar,
                         subtitle = "独占一行，横跨两列",
                         checked = editable.showSpaceKey,
                         onCheckedChange = { enabled ->
@@ -1169,6 +1372,7 @@ fun ConfigEditorScreen(
 
                     SwitchItem(
                         title = "SPACE 键置顶",
+                    leadingIcon = Icons.Rounded.VerticalAlignTop,
                         subtitle = "把空格挪到 WASD 上方，其余键整体下移一行",
                         checked = editable.spaceKeyOnTop,
                         /* 不显示空格时"置顶"没有意义（与 A 键置顶同一个道理） */
@@ -1181,9 +1385,20 @@ fun ConfigEditorScreen(
                     CardDivider()
                 }
 
-                if (KeyLayout.usesJoystickLayout(editable)) {
+                /*
+                 * ⚠️ 手柄专属的键（肩键 / A 键）—— **只有手柄样式有**。
+                 *
+                 * ⚠️ 用户明确要求:"LB 与 RB 是**手柄样式专属**的，
+                 * 触屏样式里不应该存在"。
+                 *
+                 * ⚠️ 所以判据从 `usesJoystickLayout` 改成
+                 * **`styleId == StyleId.GAMEPAD2`** —— 触屏虽然槽位布局
+                 * 与手柄一样，但它**没有** A / LB / RB 这几个键。
+                 */
+                if (editable.styleId == StyleId.GAMEPAD2) {
                     SwitchItem(
                         title = "显示肩键",
+                    leadingIcon = Icons.Rounded.SportsEsports,
                         subtitle = "LB / RB，显示在 LT / RT 那一行下面",
                         checked = editable.showShoulderButtons,
                         onCheckedChange = { enabled ->
@@ -1195,6 +1410,7 @@ fun ConfigEditorScreen(
 
                     SwitchItem(
                         title = "显示 A 键",
+                    leadingIcon = Icons.Rounded.TouchApp,
                         subtitle = "独占一行，横跨两列",
                         checked = editable.showAButton,
                         onCheckedChange = { enabled ->
@@ -1206,6 +1422,7 @@ fun ConfigEditorScreen(
 
                     SwitchItem(
                         title = "A 键置顶",
+                    leadingIcon = Icons.Rounded.VerticalAlignTop,
                         subtitle = "把 A 键那一行提到摇杆正下方（LT / RT 之上）",
                         checked = editable.aButtonOnTop,
                         /* 不显示 A 键时"置顶"没有意义 */
@@ -1216,9 +1433,25 @@ fun ConfigEditorScreen(
                     )
 
                     CardDivider()
+                }
 
+                /*
+                 * ============================================================
+                 * 摇杆互换（**手柄与触屏共用**，键盘没有）
+                 * ============================================================
+                 * ⚠️ 它原来在手柄专属块里，用户明确要求触屏也保留:
+                 *
+                 * > 现在触屏样式内，行为栏的功能外显都做成与键盘样式一样的
+                 * > （**保留摇杆互换**，不过现在触屏样式的摇杆互换还没接上，
+                 * > 一会记得补上）
+                 *
+                 * ⚠️ 判据用 `usesJoystickLayout` —— 那正是"有没有两个摇杆"，
+                 * 键盘样式没有摇杆，显示这个开关点了也没反应。
+                 */
+                if (KeyLayout.usesJoystickLayout(editable)) {
                     SwitchItem(
                         title = "摇杆互换",
+                    leadingIcon = Icons.Rounded.SwapHoriz,
                         subtitle = "左右两个摇杆对调显示的数据",
                         checked = editable.swapSticks,
                         onCheckedChange = { enabled ->
@@ -1231,7 +1464,23 @@ fun ConfigEditorScreen(
 
                 SwitchItem(
                     title = "显示 CPS",
-                    subtitle = if (KeyLayout.usesJoystickLayout(editable)) {
+                    leadingIcon = Icons.Rounded.Speed,
+                    /*
+                     * ⚠️ **只有手柄样式**说「在 LT / RT 上……扳机次数」。
+                     *
+                     * ⚠️ 手柄那边 `LMB` / `RMB` 两个槽位在屏幕上就是
+                     * LT / RT，所以说"扳机"才对。
+                     *
+                     * ⚠️⚠️ **触屏仍然是「在鼠标键位旁显示每秒点击次数」**
+                     * （用户指出来的）—— 它的默认键位文字按用户的要求
+                     * 就是 **LMB / RMB**（见 `touchingKeyMappings`），
+                     * 压根不叫 LT/RT，所以也不该说"扳机"。
+                     *
+                     * ⚠️ 判据从 `usesJoystickLayout`（触屏也算）改成
+                     * **`styleId == StyleId.GAMEPAD2`** —— 与上面
+                     * 「显示扳机键」那一处**同一个判据**，两处必须一致。
+                     */
+                    subtitle = if (editable.styleId == StyleId.GAMEPAD2) {
                         "在 LT / RT 上显示每秒扳机次数"
                     } else {
                         "在鼠标键位旁显示每秒点击次数"
@@ -1348,17 +1597,22 @@ fun ConfigEditorScreen(
 
         /*
          * ============================================================
-         * 摇杆的专属分区（**只有手柄样式有**）
+         * 摇杆的专属分区（**手柄与触屏都有**）
          * ============================================================
-         * 用户的原话:"摇杆相关配置可以单独拉出来，不跟其他按键共同配置"，
-         * 位置指定为**「行为」与「键位映射」之间**。
+         * 用户的原话:"摇杆相关配置可以单独拉出来，不跟其他按键共同配置"。
          *
-         * ⚠️ 放在 `} else {` **内部**:它属于"按键样式"这一套分区的一部分
-         * （手柄样式本来就是按键布局改了 WASD 那两块），
-         * 因此与"外观/颜色/行为"是并列的分区，顺序就按用户指定的位置。
+         * ⚠️ 两者**共用同一个 `joystickStyleSections`** —— 用户明确要求
+         * "触屏样式的摇杆相关设置……跟手柄样式一样的处理"，
+         * 而且"UI 层面跟手柄基本相同，只有读取逻辑和具体手感之类的要单独设计"。
          *
-         * ⚠️ 内容在 `JoystickSections.kt`（本文件已经 1800 多行，
-         * 不再往里塞新东西）。
+         * ⚠️ 所以触屏**没有**自己的一套摇杆外观界面:颜色、圆角、描边、
+         * 摇杆帽、手感全在这里调，存的是**同一份** `config.joystick`
+         * （`JoystickStyle`）—— 只有一份真源。
+         *
+         * ⚠️ 我中途曾把它对触屏**关掉过**（误以为触屏该有自己的摇杆 UI），
+         * 那是错的:那会让触屏的摇杆外观**没地方调**。
+         *
+         * ⚠️ 放在 `} else {` **内部**:它属于"按键样式"这一套分区的一部分。
          */
         if (KeyLayout.usesJoystickLayout(editable)) {
             joystickStyleSections(
@@ -1515,9 +1769,63 @@ fun ConfigEditorScreen(
 
         /*
          * ============================================================
-         * 键位映射
+         * 键位映射 / 键位文字
          * ============================================================
+         * ⚠️ 触屏样式**保留这一栏，但只留"显示文字"**（用户要求）。
+         *
+         * 用户的原话:
+         *
+         * > 键位映射栏在触屏中**还是有用的**，键位映射栏原本即可以改显示文字
+         * > 也可以改读取按键，我们可以**保留键位文字，读取按键删掉**，
+         * > 这样子的，所以可以加回来一个「**键位文字**」栏
+         *
+         * ⚠️ 我第一版把整栏对触屏**隐藏**了 —— 那是错的:
+         * "悬浮窗上那个位置写什么字"照样需要（LT 显示成"扳机"、
+         * A 显示成"跳"，都是这一栏管的）。
+         *
+         * ⚠️ 而"绑定哪些物理键"对触屏**确实**没意义:触屏不产出键码、
+         * 只产出坐标，输入从哪来由**触摸区域**回答。留着它用户会去绑一个键、
+         * 然后发现绑了没反应 —— 那比"没有这个入口"更糟。
+         *
+         * ⚠️ 所以栏名也跟着换:触屏下叫**「键位文字」**，
+         * 名字准确说明它现在只剩这一件事。
          */
+
+        if (isTouching) {
+
+        collapsibleSection(
+            expanded = "键位文字" in expandedSections,
+            onExpandChange = { on -> expandedSections = setExpanded(expandedSections, "键位文字", on) },
+            key = "键位文字",
+            title = "键位文字",
+        ) {
+
+        item {
+            SettingsCard {
+                KeyMappingEditor(
+                    mappings = editable.keyMappings,
+                    onChange = { mappings -> applyChange { it.copy(keyMappings = mappings) } },
+                    hiddenSlotIds = hiddenMappingSlots(editable),
+                    /*
+                     * ⚠️ 触屏**不显示**「绑定按键」那一行 —— 见上面那段说明。
+                     */
+                    showKeyBinding = false,
+                )
+            }
+        }
+
+        item {
+            SectionHint(
+                text = "这里只改每个位置**显示什么文字** —— " +
+                    "悬浮窗上显示哪些位置是固定的。" +
+                    "触屏不读物理按键，所以没有「绑定按键」这一项；" +
+                    "手指按哪里算操作轮盘由「触屏设置」里的**触摸区域**决定。",
+            )
+        }
+
+        } // ← 折叠结束：键位文字
+
+        } else {
 
         collapsibleSection(
             expanded = "键位映射" in expandedSections,
@@ -1546,6 +1854,8 @@ fun ConfigEditorScreen(
 
         } // ← 折叠结束：键位映射
 
+        } // ← 结束「非触屏」那一支（触屏用上面的「键位文字」）
+
         } // ← 结束"按键样式"分区；见上面按样式分流的注释
 
         /*
@@ -1572,6 +1882,7 @@ fun ConfigEditorScreen(
                 if (editable.canConvertToCustom() || editable.builtIn) {
                     SettingItem(
                         title = "转为自定义 Key",
+                        leadingIcon = Icons.Rounded.Transform,
                         subtitle = if (editable.builtIn) {
                             "内置配置不可转换（它是恢复用的兜底，且转换不可逆）"
                         } else {
@@ -1901,6 +2212,7 @@ private fun LazyListScope.live2DStyleSections(
              */
             SettingItem(
                 title = "模型",
+                leadingIcon = Icons.Rounded.ViewInAr,
                 subtitle = modelName,
                 onClick = onPickModel,
             )
@@ -1956,6 +2268,7 @@ private fun CpsTemplateField(
 private fun LazyListScope.customKeyStyleSections(
     editable: KeyStrokesConfig,
     onOpenEditor: () -> Unit,
+    onOpenRegionEditor: () -> Unit,
     applyChange: ((KeyStrokesConfig) -> KeyStrokesConfig) -> Unit,
 ) {
     item { SectionHeader("外观") }
@@ -2046,6 +2359,80 @@ private fun LazyListScope.customKeyStyleSections(
         SectionHint(
             text = "在编辑器里摆放按键与文本组件：用 X / Y 滑块定位、逐个调外观与尺寸。" +
                 "编辑过程中不会改动配置，点保存才写入。",
+        )
+    }
+
+    /*
+     * ============================================================
+     * 触屏设置（自定义 Key）
+     * ============================================================
+     * 用户的原话:
+     *
+     * > 在**自定义 key 的编辑配置页**（不是自定义编辑页），加一个"触屏设置"栏，
+     * > 这里面加一个 button"触摸区域编辑"，**是的，就跟触屏样式是一样的**，
+     * > 但是**实际操作并不一样**
+     *
+     * ⚠️ "实际操作不一样"具体不一样在哪:
+     *
+     * | | 触屏样式 | 自定义 Key |
+     * |---|---|---|
+     * | 区域从哪来 | ⚠️ 由**槽位**决定（LMB/SPACE…一个不多一个不少） | ✅ 用户**自己加**（轮盘/按键两类） |
+     * | 能不能删 | ❌ 不能 | ✅ 每块旁边有 ✕ |
+     * | 绑定 | 天然对应那个槽位 | ✅ 要**手动选**绑哪些组件 |
+     *
+     * ⚠️ 而**面板本身是同一个**（服务里按样式分流，见 `buildCustomStyleSlots`）。
+     *
+     * ⚠️ 位置在自定义编辑**下面** —— 用户的原话是"加一个触屏设置栏"，
+     * 而"先摆组件、再配触屏"才是自然的顺序（区域绑的就是那些组件）。
+     */
+    item { SectionHeader("触屏设置") }
+
+    item {
+        SettingsCard {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    /*
+                     * ⚠️ 把"区域数"摆出来 —— 用户最需要知道的一件事是
+                     * **这个配置到底吃不吃触摸**。
+                     *
+                     * ⚠️ 0 块时要说清后果:触摸采集**根本不会启动**
+                     * （见 `usesTouchCapture`），所以纯键盘/手柄用户
+                     * 不会被白白挂上一条采集线程。
+                     */
+                    text = if (editable.custom.touchRegions.isEmpty()) {
+                        "触摸区域：还没有（这个配置不会监听触摸 —— " +
+                            "用键盘/手柄的话正好，不会多占一份采集）"
+                    } else {
+                        val move = editable.custom.touchRegions
+                            .count { it.kind == CustomTouchRegion.Kind.MOVE_STICK }
+                        val button = editable.custom.touchRegions.size - move
+                        "触摸区域：${editable.custom.touchRegions.size} 块" +
+                            "（轮盘 $move · 按键 $button）· " +
+                            "已绑定 ${editable.custom.touchRegions.count { it.bindings.isNotEmpty() }} 块"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Button(
+                    onClick = onOpenRegionEditor,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Default.TouchApp, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("触摸区域编辑")
+                }
+            }
+        }
+    }
+
+    item {
+        SectionHint(
+            text = "打开后是一个悬浮在所有应用之上的编辑面板：点左下角「＋ 添加触摸区域」" +
+                "加一块（轮盘或按键），每块旁边可以「绑定」组件、也可以删掉。" +
+                "拖动方块调位置、下面的滑块调边长，点「保存并退出」才写回配置。",
         )
     }
 }

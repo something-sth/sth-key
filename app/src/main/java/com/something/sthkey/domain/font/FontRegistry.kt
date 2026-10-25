@@ -342,11 +342,34 @@ object FontRegistry {
      *
      * @return 新导入的条目；失败返回 null
      */
-    fun import(uri: Uri): FontEntry? {
+    /**
+     * 导入结果。
+     *
+     * ⚠️ [reused] 用来区分"新导入"和"库里已经有同一份文件":
+     * 外部导入时用户看不出区别，但提示语必须说清，
+     * 否则他会以为导入失败（因为列表里没有多出一条）。
+     */
+    data class ImportOutcome(
+        val entry: FontEntry,
+        val reused: Boolean,
+    )
+
+    /** 兼容旧调用：只要条目，不关心是否复用 */
+    fun import(uri: Uri): FontEntry? = importDetailed(uri)?.entry
+
+    /**
+     * 导入字体（**带内容去重**）。
+     *
+     * @param displayNameHint 已知的文件名（外部导入时由嗅探层合成）。
+     *   ⚠️ 给这个 hint 是因为外部打开的 Uri **经常没有名字**:
+     *   而下面 `isSupportedFont()` 是按后缀判断的，没名字就直接失败了。
+     */
+    fun importDetailed(uri: Uri, displayNameHint: String? = null): ImportOutcome? {
         val context = requireContext() ?: return null
 
         return try {
-            val sourceName = queryDisplayName(context, uri)
+            val sourceName = displayNameHint?.takeIf { it.isNotBlank() }
+                ?: queryDisplayName(context, uri)
                 ?: uri.lastPathSegment?.substringAfterLast('/')
                 ?: "font.ttf"
 
@@ -372,6 +395,22 @@ object FontRegistry {
                 return null
             }
 
+            /*
+             * ⚠️ **内容去重**（外部导入才需要，但它对两条路都对）:
+             *
+             * 同一份字体被导入两次时，旧行为是**再加一条**（名字变成「字体 (2)」），
+             * 用户看到的是一堆一模一样的东西，还占两份存储。
+             *
+             * ⚠️ 必须在**复制之后**判断（要先有文件才能算哈希），
+             * 命中时把刚复制的临时文件删掉，不能留下孤儿文件。
+             */
+            val hash = sha256Of(target)
+            findBySha256(hash)?.let { existing ->
+                target.delete()
+                AppLog.i(TAG, "字体内容与库中已有的一致，直接复用：${existing.displayName}")
+                return ImportOutcome(entry = existing, reused = true)
+            }
+
             // 显示名取原文件名（去掉扩展名），同名时加序号
             val baseName = sourceName.substringBeforeLast('.')
             val displayName = nextAvailableName(baseName)
@@ -381,12 +420,15 @@ object FontRegistry {
                 displayName = displayName,
                 fileName = targetName,
                 // 记下内容哈希，之后导入配置包时能判断"本地已有同款"
-                sha256 = sha256Of(target),
+                sha256 = hash,
             )
             writeImported(readImported() + imported)
 
             AppLog.i(TAG, "已导入字体：$displayName（$sourceName）")
-            importedFonts().first { it.id == IMPORTED_PREFIX + imported.id }
+            ImportOutcome(
+                entry = importedFonts().first { it.id == IMPORTED_PREFIX + imported.id },
+                reused = false,
+            )
         } catch (e: Exception) {
             AppLog.e(TAG, "导入字体失败", e)
             null

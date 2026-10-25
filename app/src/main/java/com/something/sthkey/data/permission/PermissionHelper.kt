@@ -19,17 +19,39 @@ object PermissionHelper {
 
     /*
      * ============================================================
-     * 悬浮窗
+     * ⚠️⚠️ 悬浮窗权限:已经**不再需要**了
      * ============================================================
+     * 以前悬浮窗用 `TYPE_APPLICATION_OVERLAY`，需要
+     * `SYSTEM_ALERT_WINDOW`（「显示在其他应用上层」）那张授权卡。
+     *
+     * ⚠️ 现在全部改用 `TYPE_ACCESSIBILITY_OVERLAY`（用户拍板走 Axon 那条路），
+     * **不需要任何额外权限** —— 只要无障碍服务被启用。
+     *
+     * ⚠️ 所以下面两个函数**保留但标了 deprecated**，而不是直接删:
+     * 调用点散布在 `HomeScreen` / `SetupScreen` / `ConfigEditorScreen` /
+     * `OverlayController` 四处，一次全改完风险大。**新代码不要再用它们。**
+     *
+     * ⚠️ 它们的替代品是:
+     * | 原来想干什么 | 现在该用 |
+     * |---|---|
+     * | 判断能不能显示悬浮窗 | `SthKeyAccessibilityService.isConnected()` |
+     * | 引导用户去授权 | `AccessibilityGrant.openSettings(context)` |
      */
 
     /** 是否已获得悬浮窗权限（显示在其他应用上层） */
+    @Deprecated(
+        message = "改用 TYPE_ACCESSIBILITY_OVERLAY 后不再需要悬浮窗权限；" +
+            "请用 SthKeyAccessibilityService.isConnected()",
+    )
     fun canDrawOverlays(context: Context): Boolean =
         Settings.canDrawOverlays(context)
 
     /** 跳转到系统的悬浮窗授权页 */
+    @Deprecated(
+        message = "请改用 AccessibilityGrant.openSettings(context)",
+    )
     fun openOverlaySettings(context: Context) {
-        AppLog.i(TAG, "跳转悬浮窗权限设置")
+        AppLog.i(TAG, "跳转悬浮窗权限设置（已弃用）")
         startSafely(
             context,
             Intent(

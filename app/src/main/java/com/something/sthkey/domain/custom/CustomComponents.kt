@@ -3,6 +3,8 @@ package com.something.sthkey.domain.custom
 import com.something.sthkey.domain.config.AnimationMode
 import com.something.sthkey.domain.config.JoystickStyle
 import com.something.sthkey.domain.config.ShadowMode
+import com.something.sthkey.domain.config.TouchRegion
+import com.something.sthkey.domain.config.TouchStickFeel
 import com.something.sthkey.domain.keys.KeyCodes
 
 /**
@@ -364,6 +366,37 @@ val DEFAULT_CPS_KEY_CODES: List<Int> = listOf(KeyCodes.BTN_LEFT)
 const val DEFAULT_COMPONENT_FONT_ID = "system:sans-serif"
 
 /**
+ * **轮盘区域**里的方向。
+ *
+ * ============================================================
+ * ⚠️ 只对"轮盘区域"有意义
+ * ============================================================
+ * 普通按键区域**没有方向**（点一下就亮）。
+ *
+ * ⚠️ 而轮盘区域带方向，是为了让"绑定的组件在摇杆朝某个方向时生效" ——
+ * 用户的原话:
+ *
+ * > 轮盘触摸区域绑定按键组件/文本组件时，需要额外选择绑定后触发是
+ * > **前/后/左/右**
+ *
+ * ⚠️ **斜向时两个方向各自成立**（八段式）—— 用户确认过:
+ *
+ * > 摇杆斜向时候是**两个都算**，这样才有八段式，没问题
+ */
+enum class TouchDirection(val id: String, val label: String) {
+    FRONT("front", "前"),
+    BACK("back", "后"),
+    LEFT("left", "左"),
+    RIGHT("right", "右"),
+    ;
+
+    companion object {
+        /** 不认识的值当作**没有方向**（返回 null）—— 老配置或手改的 JSON 不该崩 */
+        fun fromId(id: String?): TouchDirection? = entries.firstOrNull { it.id == id }
+    }
+}
+
+/**
  * 早期格式里的"CPS 槽位"取值。
  *
  * ⚠️ 这是**读旧数据专用**的墓碑：早期文本组件只能选左键/右键，
@@ -437,6 +470,46 @@ data class JoystickComponent(
 
     /** 鼠标摇杆的手感 */
     val mouseFeel: MouseJoystickFeel = MouseJoystickFeel(),
+
+    /**
+     * **触屏摇杆的手感**。
+     *
+     * ⚠️ 第四份，与前三份**并列且不共用** —— 理由见 [keyboardFeel] 那段注释:
+     * 三种摇杆的手感含义完全不同（八段式阈值 / 回中延迟 / 死区），
+     * 共用一个字段的话切换输入源时数值会莫名其妙地"继承"过来。
+     *
+     * ⚠️ 这里**复用触屏样式那一套** [TouchStickFeel]（死区 / 灵敏度 / 平滑），
+     * 于是两个样式的触屏摇杆手感**同一套参数、同一套范围**，不会漂。
+     *
+     * ⚠️ 用不上时**照样存**（与前三份同一个约定）——
+     * 这样用户切过去又切回来，原来调好的手感还在。
+     */
+    val touchFeel: TouchStickFeel = TouchStickFeel(),
+
+    /**
+     * ⚠️⚠️ 这里**原来有一个 `touchRegion` 字段，已经删掉**。
+     *
+     * ============================================================
+     * 为什么删（一次返工）
+     * ============================================================
+     * 我第一版把"触摸区域"**挂在组件上**（`JoystickComponent.touchRegion`、
+     * `KeyComponent.touchBindings`）。用户否掉了那个方案:
+     *
+     * > 算了，我感觉这样**打补丁太难受了**，刚刚的方案漏洞百出，
+     * > 我们撤掉吧我重新想一个方案
+     *
+     * ⚠️ 挂组件上的毛病很具体（都真实发生过）:
+     *
+     * | 毛病 | 现象 |
+     * |---|---|
+     * | "谁配过区域"要靠**组件自己的字段**判断 | 用户拖过没存下来 → 静默丢失 |
+     * | 一块区域算给哪一个 CPS 占位符说不清 | 加了 `placeholderIndex` 还是错 |
+     * | 触屏样式与自定义布局**两套数据形状** | 面板要分两套写 |
+     *
+     * ⚠️ 新方案:**区域是配置级的独立实体**，绑定是区域上的一个列表 ——
+     * 见 [com.something.sthkey.domain.config.CustomTouchRegion]。
+     * 于是"新建的区域"天然能被存下来，与用户有没有碰过无关。
+     */
 
     /**
      * 「摇杆-键盘」四个方向各自监听的**一组键**，顺序是 `上 / 左 / 下 / 右`。
@@ -542,6 +615,25 @@ enum class JoystickSource(val id: String, val label: String) {
 
     /** 鼠标位移，**停止移动 N 毫秒后自动回中** */
     MOUSE("mouse", "鼠标"),
+
+    /**
+     * **屏幕触摸**。
+     *
+     * ============================================================
+     * ⚠️ 移动 / 视角靠 [JoystickComponent.side] 区分，不在这里分
+     * ============================================================
+     * | `side` | 吃什么 |
+     * |---|---|
+     * | [StickSide.LEFT] | **移动摇杆** —— 只吃**触摸区域**里的触摸，松手回中 |
+     * | [StickSide.RIGHT] | **视角摇杆** —— 吃**所有没落在任何区域里**的滑动，**不回中** |
+     *
+     * ⚠️ 这与触屏样式里那两个摇杆**完全同一套语义**（见 `TouchFrameTracker`），
+     * 只是这里由**用户自己摆的组件**来呈现。
+     *
+     * ⚠️ 视角摇杆**没有触摸区域**（用户明确说过:"视角摇杆组件就不需要
+     * 触摸区域配置了"）—— 它天然吃全屏。
+     */
+    TOUCH("touch", "触屏"),
     ;
 
     companion object {
@@ -860,6 +952,18 @@ enum class ComponentCategory(val label: String) {
 
     /** 手柄专属 */
     GAMEPAD("手柄"),
+
+    /**
+     * **触屏专属**。
+     *
+     * ⚠️ 用户要求的"选择按键分类"窗口里新增的那一栏:
+     *
+     * > 在现有的"选择按键分类"窗口中，**分出一个"触屏"选项**
+     *
+     * ⚠️ 现在的顺序是 通用 → 键盘 → 手柄 → **触屏** ——
+     * 那个顺序就是界面上分类标签的顺序（见 `ComponentCategory` 的遍历处）。
+     */
+    TOUCH("触屏"),
 }
 
 enum class ComponentType(
@@ -916,6 +1020,36 @@ enum class ComponentType(
         description = "跟着鼠标移动动：停下后会自动回中",
         category = ComponentCategory.KEYBOARD,
     ),
+
+    /*
+     * ============================================================
+     * ⚠️ 触屏摇杆 —— **移动 / 视角靠 `side` 区分**，不另立类型
+     * ============================================================
+     * 用户的原话:
+     *
+     * > 2 的话确实我没考虑清楚，应该**只新增一个触屏摇杆组件**，然后新建后
+     * > 在上面**自己选择是移动摇杆组件还是视角摇杆组件**
+     *
+     * ⚠️ 而 [JoystickComponent.side]（`LEFT` / `RIGHT`）**本来就是
+     * "哪一个摇杆"的意思** —— 触屏下它天然对应:
+     *
+     * | `side` | 触屏下是 |
+     * |---|---|
+     * | `LEFT` | **移动摇杆**（有触摸区域） |
+     * | `RIGHT` | **视角摇杆**（吃全屏，**没有**区域） |
+     *
+     * ⚠️ 所以**不新增"视角摇杆"类型** —— 那会让"切移动/视角"变成
+     * "删了重建"，而用户要的是"在上面自己选择"。
+     *
+     * ⚠️ `side` 的原有注释说它"只对 GAMEPAD 有意义" ——
+     * 现在触屏**也用上它了**，那句注释已跟着更新。
+     */
+    JOYSTICK_TOUCH(
+        id = "joystick_touch",
+        label = "摇杆-触屏（实验性）",
+        description = "跟着屏幕触摸动：移动摇杆吃触摸区域，视角摇杆吃全屏滑动",
+        category = ComponentCategory.TOUCH,
+    ),
     ;
     /*
      * 注意:上面那三个摇杆类型与 [JoystickSource] 是**同一个东西的两种表达**
@@ -958,6 +1092,7 @@ enum class ComponentType(
             JoystickSource.GAMEPAD -> JOYSTICK
             JoystickSource.KEYBOARD -> JOYSTICK_KEYBOARD
             JoystickSource.MOUSE -> JOYSTICK_MOUSE
+            JoystickSource.TOUCH -> JOYSTICK_TOUCH
         }
 
         /**
@@ -973,6 +1108,7 @@ enum class ComponentType(
             JOYSTICK -> JoystickSource.GAMEPAD
             JOYSTICK_KEYBOARD -> JoystickSource.KEYBOARD
             JOYSTICK_MOUSE -> JoystickSource.MOUSE
+            JOYSTICK_TOUCH -> JoystickSource.TOUCH
             KEY, TEXT -> error("不是摇杆类型：$type")
         }
     }
@@ -996,9 +1132,115 @@ enum class ComponentType(
  * 编解码是宽容的，老配置里缺这两个字段只会用默认值。
  *
  * @param components 画布上的全部组件，按摆放顺序；**渲染顺序就是列表顺序**（后画的在上）
+ * @param touchRegions 这个配置的**触摸区域**（见 [CustomTouchRegion]）。
+ *   ⚠️ **默认空列表** —— 用户的原话:
+ *
+ *   > 注意，**不要在自定义 key 中默认加触摸区域**，默认应该是空的，
+ *   > 否则会出现有用户用的键盘，手柄之类的**还启动触屏监听**，
+ *   > 不符合直觉与逻辑
  */
 data class CustomLayoutSettings(
     val components: List<CustomComponent> = defaultCustomComponents(),
+    val touchRegions: List<CustomTouchRegion> = emptyList(),
+)
+
+/**
+ * **一块触摸区域** —— 自定义 Key 样式里"手指按屏幕的哪一块"。
+ *
+ * ============================================================
+ * ⚠️⚠️ 它是**配置级的一等数据**，不挂在任何组件上
+ * ============================================================
+ * 我第一版把区域挂在**组件**上（`KeyComponent.touchBindings`、
+ * `JoystickComponent.touchRegion`）。用户否掉了那个模型:
+ *
+ * > 算了，我感觉这样**打补丁太难受了**，刚刚的方案漏洞百出，
+ * > 我们撤掉吧我重新想一个方案
+ *
+ * ⚠️ 挂组件上的毛病很具体（全都真实发生过）:
+ *
+ * | 毛病 | 现象 |
+ * |---|---|
+ * | "谁配过区域"要靠组件自己的字段判断 | 用户拖过但没存下来 → **静默丢失** |
+ * | 一块区域算给哪一个 CPS 占位符说不清 | 加了 `placeholderIndex` 还是错 |
+ * | 触屏样式与自定义布局**两套数据形状** | 编辑面板要分两套写 |
+ *
+ * ⚠️ 新模型下:区域**独立存在**，靠 [bindings] 连到组件 ——
+ * 于是"新建即存在"（不需要用户碰过），两侧的形状也统一了。
+ *
+ * ============================================================
+ * ⚠️ 怎么用（用户的方案）
+ * ============================================================
+ * > 打开 touching 面板后，左下角可以**添加触摸区域**（触摸区域也有分类:
+ * > **轮盘触摸区域 / 按键触摸区域**），添加出的触摸区域也可以**删除**……
+ * > 然后，**每个触摸区域旁都要加一个绑定按钮**，绑定列出的组件，
+ * > 就是自定义编辑页里的组件列表
+ *
+ * | 区域类型 | 可绑 |
+ * |---|---|
+ * | [Kind.BUTTON] | 按键 / 文本组件 |
+ * | [Kind.MOVE_STICK] | 按键 / 文本组件（**还要选前/后/左/右**）/ **触屏摇杆组件** |
+ *
+ * @param id **稳定标识** —— 删除与绑定时靠它定位。⚠️ 不随几何变化，
+ *   也不复用（删掉一块再加一块会拿到新的 id）。
+ * @param kind 轮盘区域还是按键区域
+ * @param region 几何（位置与边长）—— 与触屏样式**同一套归一化规则**
+ * @param bindings **绑定了哪些组件**（多选，用户确认过"能绑多个"）。
+ *   ⚠️ 空列表 = 还没绑 —— 那块区域**不产生任何效果**，但**照样存下来**
+ *   （用户的原话:"要能保证下次进触摸区域编辑依然能看到上次新建与绑定的触摸区域"）。
+ */
+data class CustomTouchRegion(
+    val id: String,
+    val kind: Kind = Kind.BUTTON,
+    val region: TouchRegion,
+    val bindings: List<CustomTouchRegionBinding> = emptyList(),
+) {
+    /**
+     * 区域的类型。
+     *
+     * ⚠️ 两者对"组件"的语义完全不同:
+     *
+     * | 类型 | 对按键/文本组件 | 对触屏摇杆组件 |
+     * |---|---|---|
+     * | [MOVE_STICK] | 按到**且摇杆朝指定方向**才算 | ✅ 推这个摇杆 |
+     * | [BUTTON] | 按到就算 | ⚠️ 不适配（摇杆没有"按下"这回事） |
+     */
+    enum class Kind(val id: String, val label: String) {
+        /** 轮盘区域 —— 推摇杆（也可以当作"带方向的按键区域"） */
+        MOVE_STICK("move_stick", "轮盘区域"),
+
+        /** 按键区域 —— 按到就算（点一下就亮 / CPS 加一次） */
+        BUTTON("button", "按键区域"),
+        ;
+
+        companion object {
+            /** 不认识的值回退到**按键区域**（最保守的那种） */
+            fun fromId(id: String?): Kind = entries.firstOrNull { it.id == id } ?: BUTTON
+        }
+    }
+}
+
+/**
+ * **一条绑定** —— 这块区域绑到了哪个组件、以及（轮盘区域 + 按键/文本组件时）
+ * 它在摇杆朝哪个方向时才算。
+ *
+ * ============================================================
+ * ⚠️ 名字里的 `Custom` 是为了与配置层那个 `TouchRegionBinding` 区分
+ * ============================================================
+ * `com.something.sthkey.domain.config.TouchRegionBinding` 是**触屏样式**的
+ * 槽位绑定（`slotId` + 几何，区域几何**就在它自己身上**）。
+ *
+ * ⚠️ 而这个只是"**指向一个组件 + 一个方向**" —— 几何在
+ * [CustomTouchRegion.region] 上。两者的字段几乎不重叠，
+ * 同名会让人以为可以互换（那是很贵的误会）。
+ *
+ * @param componentId 绑到哪个组件（[CustomComponent.id]）
+ * @param direction 方向；`null` = 按到就算。
+ *   ⚠️ **只在"轮盘区域 + 按键/文本组件"时才有值** ——
+ *   绑摇杆组件时没有方向可言（它上报的是**轴**）。
+ */
+data class CustomTouchRegionBinding(
+    val componentId: String,
+    val direction: TouchDirection? = null,
 )
 
 /*
