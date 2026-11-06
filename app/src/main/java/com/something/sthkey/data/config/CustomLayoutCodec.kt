@@ -6,36 +6,40 @@ import com.something.sthkey.domain.config.ANIMATION_DURATION_MIN
 import com.something.sthkey.domain.config.AnimationMode
 import com.something.sthkey.domain.config.DEFAULT_FONT_ID
 import com.something.sthkey.domain.config.ShadowMode
-import com.something.sthkey.domain.custom.ComponentStyle
-import com.something.sthkey.domain.custom.ComponentType
-import com.something.sthkey.domain.custom.CustomComponent
-import com.something.sthkey.domain.custom.CustomTouchRegion
-import com.something.sthkey.domain.custom.CustomTouchRegionBinding
-import com.something.sthkey.domain.custom.TouchDirection
-import com.something.sthkey.domain.custom.CustomLayout
-import com.something.sthkey.domain.custom.CustomLayoutSettings
-import com.something.sthkey.domain.custom.DEFAULT_CPS_KEY_CODES
-import com.something.sthkey.domain.custom.KeyComponent
-import com.something.sthkey.domain.custom.JOYSTICK_THRESHOLD_MIN
-import com.something.sthkey.domain.custom.JOYSTICK_SENSITIVITY_MIN
-import com.something.sthkey.domain.custom.JOYSTICK_SENSITIVITY_MAX
-import com.something.sthkey.domain.custom.JOYSTICK_SMOOTHING_MAX_MS
-import com.something.sthkey.domain.custom.JoystickFollowMode
-import com.something.sthkey.domain.custom.DEFAULT_KEYBOARD_JOYSTICK_KEYS
-import com.something.sthkey.domain.custom.JOYSTICK_FOLLOW_DURATION_MIN
-import com.something.sthkey.domain.custom.JOYSTICK_FOLLOW_DURATION_MAX
-import com.something.sthkey.domain.custom.JoystickComponent
-import com.something.sthkey.domain.custom.JoystickSource
-import com.something.sthkey.domain.custom.KeyboardJoystickFeel
-import com.something.sthkey.domain.custom.MouseJoystickFeel
-import com.something.sthkey.domain.custom.StickSide
-import com.something.sthkey.domain.custom.TextComponent
+import com.something.sthkey.domain.config.TouchFeelSpec
 import com.something.sthkey.domain.config.TouchRegion
 import com.something.sthkey.domain.config.TouchRegionSpec
 import com.something.sthkey.domain.config.TouchStickFeel
-import com.something.sthkey.domain.config.TouchFeelSpec
+import com.something.sthkey.domain.custom.ComponentStyle
+import com.something.sthkey.domain.custom.ComponentType
+import com.something.sthkey.domain.custom.CustomComponent
+import com.something.sthkey.domain.custom.CustomLayout
+import com.something.sthkey.domain.custom.CustomLayoutSettings
+import com.something.sthkey.domain.custom.CustomTouchRegion
+import com.something.sthkey.domain.custom.CustomTouchRegionBinding
+import com.something.sthkey.domain.custom.DEFAULT_CPS_KEY_CODES
+import com.something.sthkey.domain.custom.DEFAULT_KEYBOARD_JOYSTICK_KEYS
+import com.something.sthkey.domain.custom.JOYSTICK_FOLLOW_DURATION_MAX
+import com.something.sthkey.domain.custom.JOYSTICK_FOLLOW_DURATION_MIN
+import com.something.sthkey.domain.custom.JOYSTICK_SENSITIVITY_MAX
+import com.something.sthkey.domain.custom.JOYSTICK_SENSITIVITY_MIN
+import com.something.sthkey.domain.custom.JOYSTICK_SMOOTHING_MAX_MS
+import com.something.sthkey.domain.custom.JOYSTICK_THRESHOLD_MIN
+import com.something.sthkey.domain.custom.JoystickComponent
+import com.something.sthkey.domain.custom.JoystickFollowMode
+import com.something.sthkey.domain.custom.JoystickSource
+import com.something.sthkey.domain.custom.KeyboardJoystickFeel
+import com.something.sthkey.domain.custom.KeyComponent
+import com.something.sthkey.domain.custom.MediaComponent
+import com.something.sthkey.domain.custom.MediaFit
+import com.something.sthkey.domain.custom.MediaKind
+import com.something.sthkey.domain.custom.MouseJoystickFeel
+import com.something.sthkey.domain.custom.StickSide
+import com.something.sthkey.domain.custom.TextComponent
+import com.something.sthkey.domain.custom.TouchDirection
 import org.json.JSONArray
 import org.json.JSONObject
+
 
 /**
  * 自定义 Key 布局的 JSON 编解码。
@@ -270,6 +274,21 @@ object CustomLayoutCodec {
                 put("mouseFeel", encodeMouseFeel(component.mouseFeel))
                 put("touchFeel", encodeTouchFeel(component.touchFeel))
             }
+
+            is MediaComponent -> {
+                /*
+                 * ⚠️ 三种媒体组件共用 [MediaComponent]，**必须写 kind** ——
+                 * 与摇杆的 `joystickSource` 同一个道理:不写的话读回来全变成
+                 * 图片（[MediaKind] 的默认值），用户会看到"我加的视频变成了图片"。
+                 */
+                put("mediaKind", component.kind.id)
+                /* ⚠️ 只存资源 id，不存路径 —— 路径随机器变，存了就导不出去 */
+                put("assetId", component.assetId)
+                put("fit", component.fit.id)
+                put("opacityPercent", component.opacityPercent)
+                put("cornerRadiusPercent", component.cornerRadiusPercent)
+                /* 静音只对视频有意义，但照样写（与 stickSide 同理:切来切去不丢） */
+            }
         }
     }
 
@@ -420,6 +439,12 @@ object CustomLayoutCodec {
          * **这里自动跟上**，而写死的话会静默把新类型存成手柄摇杆。
          */
         is JoystickComponent -> ComponentType.of(component.source).id
+        /* ⚠️ 媒体组件按 kind 反查，别写死三个字符串 */
+        is MediaComponent -> when (component.kind) {
+            MediaKind.IMAGE -> ComponentType.IMAGE.id
+            MediaKind.GIF -> ComponentType.GIF.id
+            MediaKind.VIDEO -> ComponentType.VIDEO.id
+        }
     }
 
     /*
@@ -744,6 +769,35 @@ object CustomLayoutCodec {
                             ),
                         ),
                     )
+
+                    /*
+                     * ⚠️ 三种媒体类型共用这一个分支，`kind` **从 `type` 反推** ——
+                     * 与摇杆的 `source` 完全相同:**类型是真源**，JSON 里的
+                     * `mediaKind` 只是给人看的冗余字段。
+                     */
+                    ComponentType.IMAGE,
+                    ComponentType.GIF,
+                    ComponentType.VIDEO,
+                    -> add(
+                        MediaComponent(
+                            id = id,
+                            x = geometry.x,
+                            y = geometry.y,
+                            width = geometry.width,
+                            height = geometry.height,
+                            kind = when (type) {
+                                ComponentType.IMAGE -> MediaKind.IMAGE
+                                ComponentType.GIF -> MediaKind.GIF
+                                else -> MediaKind.VIDEO
+                            },
+                            assetId = item.optString("assetId"),
+                            /* ⚠️ 用 fromId:手改过的 JSON 可能是空串，valueOf 会抛 */
+                            fit = MediaFit.fromId(item.optString("fit")) ?: MediaFit.COVER,
+                            opacityPercent = item.optInt("opacityPercent", 100).coerceIn(0, 100),
+                            cornerRadiusPercent = item.optInt("cornerRadiusPercent", 0)
+                                .coerceIn(0, 50),
+                        ),
+                    )
                 }
             }
         }
@@ -812,7 +866,8 @@ object CustomLayoutCodec {
             for (index in 0 until array.length()) {
                 // 负数码不是合法键码，直接丢掉
                 val code = array.optInt(index, -1)
-                if (code >= 0) add(code)
+                        /* ⚠️ 迁移旧伪键码:768/769 → 312/313（见 KeyCodes.migrateLegacyCode） */
+                        if (code >= 0) add(com.something.sthkey.domain.keys.KeyCodes.migrateLegacyCode(code))
             }
         }
     }

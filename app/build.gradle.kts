@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -46,8 +48,8 @@ android {
         // targetSdk 保持 36：它决定运行时行为（是否受新版系统限制），
         // 与"用什么 SDK 编译"是两件事，没必要跟着一起升
         targetSdk = 36
-        versionCode = 272
-        versionName = "2.7.2"
+        versionCode = 280
+        versionName = "2.8.0"
 
         buildConfigField("String", "BUILD_TAG", "\"$buildTag\"")
 
@@ -58,9 +60,43 @@ android {
         }
     }
 
+    /*
+     * ============================================================
+     * release 签名
+     * ============================================================
+     * ⚠️ 密钥文件与口令**只放在 local.properties**（已被 .gitignore 忽略），
+     *    密钥本体放在**仓库外面**（D:/Project/_signing/）——
+     *    这样即使 `git add -A` 也不会把私钥提交上去。
+     *
+     * ⚠️ 缺配置时**不报错、也不退回 debug 签名**:
+     *    退回 debug 签名会让"release 包"看起来构建成功，
+     *    但装上去和之前那个签名不一致（覆盖安装失败），很难查。
+     */
+    val signingProps = Properties().apply {
+        val file = rootProject.file("local.properties")
+        if (file.exists()) file.inputStream().use { load(it) }
+    }
+    val storePath = signingProps.getProperty("STHKEY_STORE_FILE")
+
+    if (storePath != null && rootProject.file(storePath).exists()) {
+        signingConfigs {
+            create("release") {
+                storeFile = rootProject.file(storePath)
+                storePassword = signingProps.getProperty("STHKEY_STORE_PASSWORD")
+                keyAlias = signingProps.getProperty("STHKEY_KEY_ALIAS")
+                keyPassword = signingProps.getProperty("STHKEY_KEY_PASSWORD")
+                /* ⚠️ 两个都要，缺一不可（v1 给老系统，v2 给 API 30+ 的校验） */
+                enableV1Signing = true
+                enableV2Signing = true
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
+            /* ⚠️ 有签名配置就挂上；没有就保持未签名（见上面那段说明） */
+            signingConfigs.findByName("release")?.let { signingConfig = it }
             isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

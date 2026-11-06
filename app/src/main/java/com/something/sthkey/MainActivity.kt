@@ -15,10 +15,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -92,6 +94,8 @@ import com.something.sthkey.ui.SubRoutes
 import com.something.sthkey.ui.theme.SthKeyTheme
 import com.something.sthkey.ui.TopDestination
 import kotlinx.coroutines.launch
+
+
 
 
 
@@ -207,6 +211,77 @@ class MainActivity : ComponentActivity() {
                 seedColor = appViewModel.seedColor,
                 palette = appViewModel.appearancePalette,
             ) {
+                /*
+                 * ⚠️ **全局**的导出/导入进度对话框。
+                 *
+                 * 挂在应用根上，而不是某个页面:导出/导入有多个入口
+                 * （配置列表 / 配置组合 / 编辑页），挂在单页里时
+                 * 用户从别的入口进来就"啥提示都没有"（实测踩过）。
+                 */
+                /*
+                 * ⚠️ **全局**的导出/导入进度对话框（挂在应用根，任何入口都能看到）。
+                 *
+                 * ============================================================
+                 * 为什么进度条是"假装"的
+                 * ============================================================
+                 * 用户的原话:
+                 * > 可以做个"大概"的吗，就像是某些浏览器那样……就算没有连网络，
+                 * > 还是会假装把进度条慢慢拉，到接近完成时减速，一直不成功才会卡住
+                 *
+                 * 真实进度拿不到:写入走 SAF 的 OutputStream，没有字节级回调。
+                 * 所以这里按**浏览器式**做法:每次阶段变化跳一小步，然后
+                 * 逐帧逼近 92% 并越接近越慢；真正完成时对话框直接消失。
+                 * 卡住不动 = 真的卡住了（这正是这个视觉的用处）。
+                 */
+                com.something.sthkey.ui.feature.config.ExportProgress.text?.let { text ->
+                    /*
+                     * ⚠️ 用 `tick` 而不是 `text` 做动画 key:
+                     * 同一个阶段文案可能连续上报多次（例如"正在导入媒体"），
+                     * 按文案做 key 的话进度条不会跳。
+                     */
+                    val tick = com.something.sthkey.ui.feature.config.ExportProgress.tick
+                    var progress by androidx.compose.runtime.remember(tick) {
+                        androidx.compose.runtime.mutableFloatStateOf(0.06f)
+                    }
+                    androidx.compose.runtime.LaunchedEffect(tick) {
+                        progress = (progress + 0.07f).coerceAtMost(0.92f)
+                        while (true) {
+                            androidx.compose.runtime.withFrameMillis {
+                                /* 越接近 92% 越慢（`0.92 - p` 自然衰减） */
+                                progress += (0.92f - progress) * 0.012f
+                            }
+                        }
+                    }
+
+                    androidx.compose.material3.AlertDialog(
+                        onDismissRequest = { },
+                        title = {
+                            androidx.compose.material3.Text(
+                                text = text,
+                                style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
+                            )
+                        },
+                        text = {
+                            androidx.compose.foundation.layout.Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
+                            ) {
+                                androidx.compose.material3.CircularProgressIndicator(
+                                    modifier = Modifier.width(28.dp).height(28.dp),
+                                    strokeWidth = 3.dp,
+                                )
+                                androidx.compose.foundation.layout.Spacer(
+                                    modifier = Modifier.height(12.dp),
+                                )
+                            androidx.compose.material3.LinearProgressIndicator(
+                                progress = { progress },
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                        },
+                        confirmButton = { },
+                    )
+                }
                 /*
                  * ⚠️⚠️ 根背景用 **surfaceContainer**（灰），不是 `surface`（白）
                  * ============================================================

@@ -115,6 +115,11 @@ fun OverlayContent(
     val mouseMotion = mouseMotionFlow?.collectAsState()?.value ?: MouseMotion()
 
     val factor = KeyLayout.pxToDpFactor(density)
+    /*
+     * ⚠️ 帧率每秒更新一次，正好驱动 `(fps)` 刷新，而不会每帧拖慢主线程。
+     */
+    val fpsReading by com.something.sthkey.data.fps.FpsMonitor.reading.collectAsState()
+
     val current = config.value
 
     /**
@@ -520,6 +525,12 @@ fun OverlayContent(
              * 窗口尺寸（样式注册表那边）与这里用的是**同一个** `bounds` ——
              * 同一个纯函数，必然同一个结果。
              */
+            /*
+             * ⚠️ 帧率用 `collectAsState`:**每秒一次**的状态更新，正好驱动 `(fps)` 刷新，
+             * 而不会像每帧刷新那样拖慢主线程。
+             */
+            val fpsReading by com.something.sthkey.data.fps.FpsMonitor.reading.collectAsState()
+
             val windowed = CustomLayout.toWindow(current.custom.components)
 
             CustomKeyCanvas(
@@ -527,10 +538,14 @@ fun OverlayContent(
                 pressedCodes = pressedKeys,
                 scale = factor * KeyLayout.uiScale(current),
                 cpsBySlot = cps,
+                /* ⚠️ 实时帧率;读不到时 FpsText 渲染成 N/A */
+                fps = fpsReading.value,
                 slotIdOf = { code -> KeyLayout.codeToSlotMap(current)[code] },
                 baseWidth = windowed.bounds.width,
                 baseHeight = windowed.bounds.height,
                 overallAlpha = current.customOpacityPercent.coerceIn(0, 100) / 100f,
+                /* ⚠️ 整体字符缩放（与每个组件自己的文字缩放相乘） */
+                overallTextScalePercent = current.customTextScalePercent,
                 /*
                  * ⚠️ 自定义画布上的摇杆也要跟着手柄动 —— 传真实数据进去。
                  *

@@ -354,3 +354,50 @@ when (kind) {
 ⚠️ 该测试**不需要 Android 环境** —— 为此特意把 `namedForImport` 的入参
 从 `SniffedItem`（带 `Uri`）改成 `(String, FileKind)`:
 `Uri.EMPTY` 在本地单测里会直接抛 "EMPTY must not be null"。
+---
+
+## 12. 大文件被拒（"读不到这个文件"）—— 已修
+
+用户反馈:
+
+> 我用我上面发你那个 live2d 文件，外部导入显示「读不到这个文件」，
+> 在软件里 SAF 却可以正常导入，别的 live2d 也可以正常外部导入
+
+### 12.1 原因：我自己写的 64 MB 上限
+
+`FileSniffer` 第一版是「先整份复制到缓存，再用 `ZipFile` 随机访问」，
+并且带了一个 `MAX_BYTES = 64 MB` 的保护:
+
+```kotlin
+if (copied > MAX_BYTES) { output.close(); target.delete(); return null }
+```
+
+用户那个模型包是 **110 MB** → 复制到一半主动放弃 → `sniff()` 返回
+「读不到这个文件」。而 SAF 导入走的是 `Live2DModelImporter`，**没有这个上限**，
+所以同一条路能成功 —— 现象完全对得上。
+
+### 12.2 修法：改成**流式嗅探**，不再整份复制
+
+| 项 | 旧 | 新 |
+|---|---|---|
+| 判断魔数 | 复制之后读缓存文件头 | **直接读原 Uri 的前 16 字节** |
+| 判断 zip 内容 | `ZipFile`（要随机访问 → 必须先落盘） | **`ZipInputStream` 流式扫条目名**（不落盘） |
+| 临时文件 | 每个文件复制一份（110 MB → 占 110 MB） | **一个都不产生** |
+| 大小限制 | 64 MB（就是这次的 bug） | 无（只限制扫描条目数 4000） |
+| 交给导入器的东西 | `file://` 缓存副本 | **原 Uri** |
+
+⚠️ 为什么现在可以「把原 Uri 交给导入器」:
+每个导入器（`ConfigPackageManager` / `Live2DModelImporter` /
+`FontRegistry` / `BitmapFontImporter`）内部都是**顺序读一次**，
+而嗅探现在也只是顺序读两次（一次读头、一次扫 zip）。SAF 的 `content://`
+在同一会话里重复 `openInputStream` 是支持的。
+
+⚠️ 顺带解决的另一个隐患:之前 110 MB 的包要占 110 MB 缓存 + 121 MB 解压，
+低存储设备会在"还什么都没做"的时候失败。
+
+### 12.3 验证
+
+- [ ] 那个 110 MB 的模型包:外部「打开方式」→ 能识别成 Live2D 模型 → 能导入
+- [ ] 别的 live2d 包:行为不变
+- [ ] 字体 / 配置包 / 组合包:行为不变
+- [ ] 导入完成后 `cacheDir` 里**没有**残留的 `incoming_*.bin`

@@ -251,16 +251,38 @@ fun ConfigListScreen(
      * ⚠️ 这只是给 `ExportFlow` 一个统一的入参形状 —— 真正的写入仍然是
      * 原来的 `ConfigPackageManager.export`，一行都没变。
      */
+    /*
+     * 导出/导入的**进度文案**（null = 没在忙）。
+     *
+     * ⚠️ 用户实测:导出带 100+MB 资源的配置要等十来秒才有反馈，
+     * 中途没有任何提示。这里在**阶段边界**更新一句文案，
+     * 弹一个不可关闭的进度框（写盘是阻塞的，中途关掉会留半份文件）。
+     */
+    var progressText by remember { mutableStateOf<String?>(null) }
+    val mainHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
+    fun reportProgress(text: String) {
+        mainHandler.post { ExportProgress.update(text) }
+    }
+    fun clearProgress() {
+        mainHandler.post { ExportProgress.clear() }
+    }
+
     fun pendingExportOf(config: KeyStrokesConfig): PendingExport = PendingExport(
         displayName = config.name,
         fileName = config.name + ConfigPackageCodec.EXTENSION,
         write = { uri ->
+            val ok = try {
             ConfigPackageManager.export(
                 context = context,
                 config = config,
                 target = uri,
                 requestedName = config.name + ConfigPackageCodec.EXTENSION,
+                onState = { reportProgress(it) },
             )
+            } finally {
+                clearProgress()
+            }
+            ok
         },
     )
 
@@ -289,6 +311,7 @@ fun ConfigListScreen(
     }
 
     /** 导入结果（成功），用于弹报告 */
+
     var importReport by remember { mutableStateOf<ConfigPackageManager.ImportResult?>(null) }
 
     /** 导入是磁盘操作，放协程里 */
@@ -344,7 +367,14 @@ fun ConfigListScreen(
                 return@launch
             }
 
-            val result = withContext(Dispatchers.IO) { ConfigPackageManager.import(context, uri) }
+            reportProgress("正在识别配置包…")
+            val result = try {
+                withContext(Dispatchers.IO) {
+                    ConfigPackageManager.import(context, uri) { reportProgress(it) }
+                }
+            } finally {
+                clearProgress()
+            }
             result
                 .onSuccess { report ->
                     viewModel.reloadConfigs()
@@ -601,6 +631,34 @@ fun ConfigListScreen(
      */
 
     importReport?.let { report ->
+    /*
+     * 进度对话框:导出/导入期间显示**阶段文案**。
+     *
+     * ⚠️ 不可关闭 —— 写盘是阻塞的，中途关掉会留半份文件;
+     * 出错时上层会把 [progressText] 清空，所以不会卡死。
+     */
+    progressText?.let { text ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { },
+            title = { androidx.compose.material3.Text("请稍候") },
+            text = {
+                androidx.compose.foundation.layout.Row(
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                ) {
+                    androidx.compose.material3.CircularProgressIndicator(
+                        modifier = androidx.compose.ui.Modifier.size(22.dp),
+                        strokeWidth = 2.dp,
+                    )
+                    androidx.compose.foundation.layout.Spacer(
+                        modifier = androidx.compose.ui.Modifier.width(12.dp),
+                    )
+                    androidx.compose.material3.Text(text)
+                }
+            },
+            confirmButton = { },
+        )
+    }
+
         ImportReportDialog(report = report, onDismiss = { importReport = null })
     }
 

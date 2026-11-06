@@ -524,6 +524,7 @@ fun CustomLayoutEditorScreen(
                     VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     CanvasPreview(
                         settings = settings,
+                            overallTextScalePercent = config.customTextScalePercent,
                         selectedId = selectedId,
                         modifier = Modifier.weight(1f),
                         showWindowFrame = showWindowFrame,
@@ -533,6 +534,7 @@ fun CustomLayoutEditorScreen(
                 } else {
                     CanvasPreview(
                         settings = settings,
+                            overallTextScalePercent = config.customTextScalePercent,
                         selectedId = selectedId,
                         modifier = Modifier.weight(1f),
                         showWindowFrame = showWindowFrame,
@@ -546,6 +548,7 @@ fun CustomLayoutEditorScreen(
         } else {
             CanvasPreview(
                 settings = settings,
+                    overallTextScalePercent = config.customTextScalePercent,
                 selectedId = selectedId,
                 showWindowFrame = showWindowFrame,
                 showSelectedFrame = showSelectedFrame,
@@ -1276,6 +1279,12 @@ private fun EditorTopBar(
 @Composable
 private fun CanvasPreview(
     settings: CustomLayoutSettings,
+    /**
+     * 配置级的**整体字符缩放**（百分比）。
+     *
+     * ⚠️ 编辑器必须跟着它走:"这里摆成什么样"要和"屏幕上实际什么样"一致。
+     */
+    overallTextScalePercent: Int,
     selectedId: String?,
     modifier: Modifier = Modifier,
     showWindowFrame: Boolean = true,
@@ -1461,6 +1470,17 @@ private fun CanvasPreview(
                 scale = scaleDp,
                 baseWidth = canvasWidth,
                 baseHeight = canvasHeight,
+                /*
+                 * ⚠️ 把配置级的**整体字符缩放**也带上:
+                 * 用户在配置编辑页把它调到 120% 之后，进这个编辑器看到的
+                 * 必须也是 120% —— 否则"这里摆好的样子"和"屏幕上实际的样子"
+                 * 对不上，而这个编辑器的全部意义就是所见即所得。
+                 */
+                overallTextScalePercent = overallTextScalePercent,
+                /* ⚠️ 媒体静态预览（用户要求:预览静态就好，不要动态） */
+                staticMedia = true,
+                /* ⚠️ 预览固定 120（与 (cps) 预览显示 0 同理:动态值会让画布每秒重排） */
+                fps = 120.0,
             )
 
             if (showSelectedFrame) {

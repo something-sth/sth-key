@@ -4,26 +4,30 @@ import android.content.Context
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.Icons
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -43,6 +47,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.something.sthkey.capture.OverlayService
 import com.something.sthkey.data.live2d.Live2DModelImporter
 import com.something.sthkey.domain.live2d.Live2DModelEntry
 import com.something.sthkey.domain.live2d.Live2DModelKind
@@ -50,6 +55,8 @@ import com.something.sthkey.domain.live2d.Live2DModels
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+
 
 /**
  * Live2D 模型选择对话框。
@@ -152,6 +159,26 @@ fun Live2DModelPickerDialog(
                             onClick = { if (!libraryMode) onSelect(model.id) },
                             onRename = { renaming = model },
                             onDelete = { deleting = model },
+                            /*
+                             * 多模式模型:在库里直接切换模式。
+                             *
+                             * ⚠️ 切换只改"这个模型用哪一套"，**不改任何配置** ——
+                             * 多模式是模型的属性。导出时整个模型（所有模式）都会带走。
+                             */
+                            onVariantSelect = { pageDir ->
+                                if (Live2DModels.selectVariant(model.id, pageDir)) {
+                                    revision++
+                                    onLibraryChanged()
+                                    /*
+                                     * ⚠️ 立刻让悬浮窗重新取页面。
+                                     *
+                                     * 切模式下**配置没变**（变的是模型库），所以不会有
+                                     * 任何配置推送；不主动刷一次的话，用户切完模式会看到
+                                     * "悬浮窗还是原来那套"，以为没生效。
+                                     */
+                                    OverlayService.refresh(context)
+                                }
+                            },
                         )
                     }
                 }
@@ -257,7 +284,13 @@ private fun ModelRow(
     onClick: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
+    /** 多模式模型切换模式；单模式模型不会调用 */
+    onVariantSelect: (String) -> Unit = {},
 ) {
+    /* 展开状态只影响这一个条目，默认收起（库里条目多，不该一进来就一屏模式按钮） */
+    var modesExpanded by remember(model.id) { mutableStateOf(false) }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -307,6 +340,57 @@ private fun ModelRow(
                 )
             }
         }
+    }
+
+    /*
+     * ============================================================
+     * 多模式（标准 / 键盘 / 手柄 …）
+     * ============================================================
+     * ⚠️ 只在"这个模型确实有多套"时出现。绝大多数模型是单模式，看不到这一块。
+     *
+     * ⚠️ 收起时副标题里已经写了当前模式，所以默认收起也不会让人不知道选的是哪个。
+     */
+    if (model.variants.size > 1) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 40.dp)
+                .clickable(enabled = enabled) { modesExpanded = !modesExpanded },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "模式：" + (
+                    model.variants.firstOrNull { it.pageDir == model.variant }?.name
+                        ?: model.variants.first().name
+                    ),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Icon(
+                imageVector = if (modesExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = if (modesExpanded) "收起模式" else "展开模式",
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        }
+
+        if (modesExpanded) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 40.dp, bottom = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                model.variants.forEach { variant ->
+                    FilterChip(
+                        selected = variant.pageDir == model.variant,
+                        onClick = { if (enabled) onVariantSelect(variant.pageDir) },
+                        label = { Text(variant.name) },
+                    )
+                }
+            }
+        }
+    }
     }
 }
 

@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import com.something.sthkey.capture.CaptureSession
 import com.something.sthkey.capture.CaptureState
 import com.something.sthkey.capture.shizuku.ShizukuShell
+import com.something.sthkey.data.fps.FpsMonitor
 import com.something.sthkey.domain.capture.KeyMode
 import com.something.sthkey.ui.component.CardDivider
 import com.something.sthkey.ui.component.ScrollableScreen
@@ -47,6 +48,7 @@ import com.something.sthkey.ui.component.SettingItem
 import com.something.sthkey.ui.component.SettingsCard
 import com.something.sthkey.ui.MainViewModel
 import kotlinx.coroutines.launch
+
 
 
 
@@ -87,6 +89,10 @@ fun CaptureModeScreen(
      * ⚠️ 为什么不点了就立刻切:切通道会**重启采集**（几百毫秒到几秒），
      * 用户如果只是想看看每个模式的说明，一路点过去就会连续重启好几次。
      */
+    /* FPS 读取通道（调试用，见下方卡片） */
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val prefs = remember { com.something.sthkey.core.prefs.AppPrefs.get(context) }
+    var fpsMode by remember { mutableStateOf(com.something.sthkey.data.fps.FpsMonitor.mode) }
     var pendingMode by remember { mutableStateOf(viewModel.requestedMode) }
 
     val scope = rememberCoroutineScope()
@@ -119,6 +125,7 @@ fun CaptureModeScreen(
     ) {
         item { SectionHeader("采集模式") }
 
+
         item {
             SettingsCard {
                 Column(modifier = Modifier.padding(16.dp)) {
@@ -134,7 +141,7 @@ fun CaptureModeScreen(
                         KeyMode.entries.forEachIndexed { index, mode ->
                             SegmentedButton(
                                 selected = pendingMode == mode,
-                                onClick = { pendingMode = mode },
+                                onClick = { pendingMode = mode; viewModel.applyRequestedMode(mode) },
                                 shape = SegmentedButtonDefaults.itemShape(
                                     index = index,
                                     count = KeyMode.entries.size,
@@ -152,24 +159,11 @@ fun CaptureModeScreen(
                         style = MaterialTheme.typography.bodyMedium,
                     )
 
-                    if (pendingMode != viewModel.requestedMode) {
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Button(
-                                onClick = { viewModel.applyRequestedMode(pendingMode) },
-                            ) {
-                                Text("应用")
-                            }
-                            OutlinedButton(
-                                onClick = { pendingMode = viewModel.requestedMode },
-                            ) {
-                                Text("撤销")
-                            }
-                        }
-                    }
+                    /*
+                     * ⚠️ **不再有「应用/撤销」**（用户要求与 FPS 卡片统一）:
+                     * 点分段按钮直接切。两处交互一致，用户不用记
+                     * "这张卡点了要应用、那张不用"。
+                     */
 
                     /*
                      * 直连自检。
@@ -221,6 +215,67 @@ fun CaptureModeScreen(
                             )
                         }
                     }
+                }
+            }
+        }
+
+        item {
+            /*
+             * ============================================================
+             * FPS 读取通道
+             * ============================================================
+             * ⚠️ 样式照搬上面那张「采集模式」卡:说明文字 + 分段按钮 + 当前值。
+             * 不要自己发明一种新卡 —— 用户原话:"你按那个样式做，不要自己又改个很丑的卡片"。
+             *
+             * ⚠️ 这一档是**调试用**的:自动判断出错时可以强制走某一条，
+             * 不必靠猜。默认「自动」:有 Shizuku 走 Surfaceflinger，否则走 Choreographer。
+             */
+            SettingsCard {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "选择读取 FPS 的方式",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        FpsMonitor.Mode.entries.forEachIndexed { index, mode ->
+                            SegmentedButton(
+                                selected = fpsMode == mode,
+                                onClick = {
+                                    fpsMode = mode
+                                    prefs.fpsMode = mode
+                                    FpsMonitor.mode = mode
+                                },
+                                shape = SegmentedButtonDefaults.itemShape(
+                                    index = index,
+                                    count = FpsMonitor.Mode.entries.size,
+                                ),
+                            ) {
+                                Text(mode.label)
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Text(
+                        text = when (fpsMode) {
+                            FpsMonitor.Mode.AUTO ->
+                                "有 Shizuku/root 时读 Surfaceflinger（游戏真实帧率）；" +
+                                    "没有权限时退到 Choreographer（屏幕节拍上限，不是游戏帧率）。"
+
+                            FpsMonitor.Mode.CHOREOGRAPHER ->
+                                "只测屏幕节拍上限，不需要任何权限。数值不代表游戏真实帧率。"
+
+                            FpsMonitor.Mode.SURFACE_FLINGER ->
+                                "强制读 Surfaceflinger。没有 Shizuku/root 时**不显示数字**（N/A），" +
+                                    "不会偷偷降级 —— 方便确认这条通道到底通不通。"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
                 }
             }
         }

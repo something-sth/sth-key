@@ -214,6 +214,7 @@ class StyleSpecificFieldsTest {
                 /* 只属于自定义 Key 样式 */
                 "custom" to setOf("CUSTOM_KEY"),
                 "customOpacityPercent" to setOf("CUSTOM_KEY"),
+                "customTextScalePercent" to setOf("CUSTOM_KEY"),
                 /* 有键位网格才读的一批：布局 / 文字 / 外观 */
                 "textScalePercent" to both,
                 "cornerRadiusEnabled" to both,

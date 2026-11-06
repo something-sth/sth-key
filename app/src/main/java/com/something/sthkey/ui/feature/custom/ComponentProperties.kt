@@ -5,18 +5,22 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.Icons
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
@@ -25,29 +29,26 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import com.something.sthkey.ui.component.ExpressiveSwitch
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -57,35 +58,39 @@ import com.something.sthkey.domain.config.AnimationMode
 import com.something.sthkey.domain.config.JoystickStyle
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.config.ShadowMode
+import com.something.sthkey.domain.custom.centeredOnCanvas
+import com.something.sthkey.domain.custom.clampedToCanvas
 import com.something.sthkey.domain.custom.ComponentCategory
 import com.something.sthkey.domain.custom.ComponentStyle
 import com.something.sthkey.domain.custom.ComponentType
-import com.something.sthkey.domain.custom.JoystickComponent
-import com.something.sthkey.domain.custom.StickSide
-import com.something.sthkey.domain.custom.TextualComponent
-import com.something.sthkey.domain.custom.summary
-import com.something.sthkey.domain.custom.typeLabel
 import com.something.sthkey.domain.custom.CustomComponent
 import com.something.sthkey.domain.custom.CustomLayout
 import com.something.sthkey.domain.custom.CustomLayoutSettings
-import com.something.sthkey.domain.custom.resizedToSide
+import com.something.sthkey.domain.custom.JoystickComponent
 import com.something.sthkey.domain.custom.KeyComponent
-import com.something.sthkey.domain.custom.SUGGESTED_KEY_CODES
-import com.something.sthkey.domain.custom.TextComponent
-import com.something.sthkey.domain.custom.centeredOnCanvas
-import com.something.sthkey.domain.custom.clampedToCanvas
+import com.something.sthkey.domain.custom.MediaComponent
 import com.something.sthkey.domain.custom.movedTo
 import com.something.sthkey.domain.custom.primaryText
 import com.something.sthkey.domain.custom.resizedTo
+import com.something.sthkey.domain.custom.resizedToSide
+import com.something.sthkey.domain.custom.StickSide
+import com.something.sthkey.domain.custom.SUGGESTED_KEY_CODES
+import com.something.sthkey.domain.custom.summary
+import com.something.sthkey.domain.custom.TextComponent
+import com.something.sthkey.domain.custom.TextualComponent
+import com.something.sthkey.domain.custom.typeLabel
 import com.something.sthkey.domain.custom.withPrimaryText
 import com.something.sthkey.domain.custom.withStyle
-import com.something.sthkey.ui.component.EditableSliderRow
 import com.something.sthkey.domain.custom.withTextOffset
 import com.something.sthkey.domain.custom.withTextScale
 import com.something.sthkey.domain.font.FontRegistry
 import com.something.sthkey.domain.keys.KeyCodes
+import com.something.sthkey.ui.component.EditableSliderRow
+import com.something.sthkey.ui.component.ExpressiveSwitch
 import com.something.sthkey.ui.component.HexColorRow
 import kotlin.math.round
+
+
 
 /**
  * 添加组件的类型选择弹窗（与"新建配置"选样式同一套做法）。
@@ -116,8 +121,21 @@ fun AddComponentDialog(
              * ⚠️ 空栏**照样显示**（键盘那一栏现在是空的）—— 那是刻意的占位，
              * 告诉用户"这里以后会放东西"，而不是让人以为键盘只有按键和文本。
              */
+            /*
+             * ⚠️ **必须可滚动 + 限制高度**。
+             *
+             * 以前是一个固定的 Column:组件类型一多（图片/动图/视频加进来之后
+             * 通用栏就有 5 个），内容会顶出弹窗、底部那几栏直接看不到，
+             * 而且没法滚 —— 用户报的"以后组件数量越来越多会有显示问题"就是它。
+             *
+             * ⚠️ `heightIn(max = …)` 而不是 `fillMaxHeight`:弹窗高度本来由内容决定，
+             * 给个上限就够；写死 `fillMaxHeight` 会让只有两栏的时候也撑满全屏。
+             */
             Column(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 ComponentCategory.entries.forEach { category ->
@@ -163,14 +181,24 @@ private fun CategoryRow(
                 modifier = Modifier.padding(vertical = 6.dp),
             )
         } else {
-            Row(
+            /*
+             * ⚠️ **一行放不下就换行**。
+             *
+             * 原来用的是 `Row` + `weight(1f)`:五个类型会被均分宽度挤成一坨，
+             * 用户报的"通用栏全挤在一行，看着非常丑"就是它。
+             *
+             * 现在每个卡片有最小宽度，`FlowRow` 放不下就自动折行。
+             */
+            FlowRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 types.forEach { type ->
                     Card(
                         modifier = Modifier
-                            .weight(1f)
+                            .widthIn(min = 132.dp)
+                            .weight(1f, fill = false)
                             .clickable { onPick(type) },
                         colors = CardDefaults.cardColors(
                             /* ⚠️ `surface` 而不是 `surfaceContainer`：后者等于页面底色，卡片会消失 */
@@ -389,6 +417,20 @@ fun PropertyPanel(
              * 左摇杆还是右摇杆"。
              */
             when (component) {
+                /*
+                 * ⚠️ 媒体组件没有这些"外观"概念（颜色/描边/圆角样式/按压动画）:
+                 * 它的外观就是"资源本身 + 铺满方式 + 不透明度"。
+                 * 真正的媒体面板在 [MediaSection]（内容栏），这里留空。
+                 */
+                is MediaComponent -> MediaSection(
+                    component = component,
+                    onComponentChange = { next, continuous ->
+                        onComponentChange(next, continuous)
+                    },
+                    onBeginContinuous = onBeginContinuous,
+                    onEndContinuous = onEndContinuous,
+                )
+
                 is JoystickComponent -> JoystickContentSection(
                     component = component,
                     onComponentChange = onComponentChange,
@@ -465,6 +507,13 @@ fun PropertyPanel(
             onToggle = { expanded = expanded.toggle(PanelSection.LOOK) },
         ) {
             when (component) {
+                /*
+                 * ⚠️ 媒体组件没有这些"外观"概念（颜色/描边/圆角样式/按压动画）:
+                 * 它的外观就是"资源本身 + 铺满方式 + 不透明度"。
+                 * 真正的媒体面板在 [MediaSection]（内容栏），这里留空。
+                 */
+                is MediaComponent -> Unit
+
                 is JoystickComponent -> JoystickLookSection(
                     component = component,
                     onComponentChange = onComponentChange,
@@ -488,6 +537,13 @@ fun PropertyPanel(
             onToggle = { expanded = expanded.toggle(PanelSection.COLORS) },
         ) {
             when (component) {
+                /*
+                 * ⚠️ 媒体组件没有这些"外观"概念（颜色/描边/圆角样式/按压动画）:
+                 * 它的外观就是"资源本身 + 铺满方式 + 不透明度"。
+                 * 真正的媒体面板在 [MediaSection]（内容栏），这里留空。
+                 */
+                is MediaComponent -> Unit
+
                 is JoystickComponent -> JoystickColorSection(
                     component = component,
                     onComponentChange = onComponentChange,
@@ -506,6 +562,13 @@ fun PropertyPanel(
             onToggle = { expanded = expanded.toggle(PanelSection.OPACITY) },
         ) {
             when (component) {
+                /*
+                 * ⚠️ 媒体组件没有这些"外观"概念（颜色/描边/圆角样式/按压动画）:
+                 * 它的外观就是"资源本身 + 铺满方式 + 不透明度"。
+                 * 真正的媒体面板在 [MediaSection]（内容栏），这里留空。
+                 */
+                is MediaComponent -> Unit
+
                 is JoystickComponent -> JoystickOpacitySection(
                     component = component,
                     onComponentChange = onComponentChange,

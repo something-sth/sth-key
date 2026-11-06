@@ -16,57 +16,66 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import androidx.compose.foundation.layout.padding
-import androidx.compose.runtime.MutableState
-import androidx.compose.runtime.State
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.State
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.savedstate.compose.LocalSavedStateRegistryOwner
 import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.something.sthkey.capture.accessibility.AccessibilityGrant
 import com.something.sthkey.capture.accessibility.OverlayWindowHost
-import com.something.sthkey.MainActivity
-import com.something.sthkey.R
 import com.something.sthkey.core.log.AppLog
 import com.something.sthkey.core.prefs.AppPrefs
 import com.something.sthkey.data.config.ConfigStore
-import com.something.sthkey.domain.style.OverlayStyleRegistry
+import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.custom.JoystickComponent
 import com.something.sthkey.domain.custom.JoystickSource
 import com.something.sthkey.domain.custom.KeyComponent
 import com.something.sthkey.domain.custom.TextComponent
-import com.something.sthkey.domain.config.KeyStrokesConfig
+import com.something.sthkey.domain.custom.TextualComponent
 import com.something.sthkey.domain.live2d.Live2DModels
 import com.something.sthkey.domain.overlay.OverlayLayout
 import com.something.sthkey.domain.overlay.OverlayLayouts
+import com.something.sthkey.domain.style.KeyLayout
+import com.something.sthkey.domain.style.OverlayStyleRegistry
 import com.something.sthkey.domain.style.StyleId
+import com.something.sthkey.MainActivity
+import com.something.sthkey.R
+import com.something.sthkey.ui.overlay.dpToPx
+import com.something.sthkey.ui.overlay.live2d.Live2DOverlayView
 import com.something.sthkey.ui.overlay.OVERLAY_MIN_SIZE_PX
 import com.something.sthkey.ui.overlay.OVERLAY_PADDING_PX
 import com.something.sthkey.ui.overlay.OverlayContent
-import com.something.sthkey.ui.overlay.dpToPx
-import com.something.sthkey.ui.overlay.live2d.Live2DOverlayView
-import com.something.sthkey.domain.style.KeyLayout
 import com.something.sthkey.ui.overlay.overlayWindowHeightPx
 import com.something.sthkey.ui.overlay.overlayWindowWidthPx
 import com.something.sthkey.ui.overlay.toWindowPx
 import com.something.sthkey.ui.theme.SthKeyTheme
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.SupervisorJob
+
+
+
 
 /**
  * 悬浮窗服务。
@@ -118,6 +127,13 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     private class OverlayWindow(
         val configId: String,
         val view: View,
+        /**
+         * 真正被 `WindowManager` 添加的那个视图（触摸容器）。
+         *
+         * ⚠️ 窗口级操作（updateViewLayout / removeView）**必须**用它 ——
+         * 拿内容视图去做会抛 "is not a child of this window"。
+         */
+        val host: View,
         val params: WindowManager.LayoutParams,
         initialConfig: KeyStrokesConfig,
         var styleId: String,
@@ -210,6 +226,12 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
      */
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
+    /** 当前配置里是否需要 FPS（决定采不采，见 [refreshFpsNeed]） */
+    private var fpsWanted = false
+
+    /** 延迟停止的 Job（debounce） */
+    private var stopFpsJob: kotlinx.coroutines.Job? = null
+
     /** 按键扇出订阅；服务存活期间只有这一条（位移是每窗口各一条，见 [startMouseFeed]） */
     private var keyFeedJob: Job? = null
 
@@ -237,7 +259,12 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         get() = savedStateRegistryController.savedStateRegistry
 
     override fun onCreate() {
-        super.onCreate()
+        /*
+         * FPS 通道偏好先塞进去;**采不采集由 [refreshFpsNeed] 决定**
+         * （配置里出现 `(fps)` 才启动，见那个函数）。
+         */
+        com.something.sthkey.data.fps.FpsMonitor.mode =
+            com.something.sthkey.core.prefs.AppPrefs.get(this).fpsMode
 
         /*
          * 整个启动流程都包在 try 里。
@@ -334,6 +361,46 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     }
 
     /** 启动失败时的统一收尾：标记未运行并结束服务 */
+    /**
+     * 按「当前有没有 `(fps)` 占位符」决定要不要采集。
+     *
+     * ============================================================
+     * ⚠️ 为什么要按需启停
+     * ============================================================
+     * 采集每秒要跑 `dumpsys`（root 下还要走 root shell），**不必为没用的配置付电费**。
+     * 这和手柄/触屏监听那套取舍一致:用到才开。
+     *
+     * ⚠️ 停止加 **5 秒 debounce**:
+     * 用户编辑文本时可能连续删/加 `(fps)`，立刻停会让它反复重启。
+     */
+    private fun refreshFpsNeed(configs: List<KeyStrokesConfig>) {
+        val needed = configs.any { config ->
+            config.custom.components.any { component ->
+                component is TextualComponent &&
+                    com.something.sthkey.domain.custom.FpsText.hasPlaceholder(
+                        com.something.sthkey.domain.custom.CustomLayout.primaryTextOf(component),
+                    )
+            }
+        }
+        if (needed == fpsWanted) {
+            stopFpsJob?.cancel()
+            stopFpsJob = null
+            return
+        }
+        fpsWanted = needed
+        stopFpsJob?.cancel()
+        stopFpsJob = null
+        if (needed) {
+            AppLog.i(TAG, "配置里出现 (fps) → 启动 FPS 采集")
+            com.something.sthkey.data.fps.FpsMonitor.start(this)
+        } else {
+            stopFpsJob = scope.launch {
+                delay(FPS_STOP_DEBOUNCE_MS)
+                AppLog.i(TAG, "配置里没有 (fps) → 停止 FPS 采集")
+                com.something.sthkey.data.fps.FpsMonitor.stop()
+            }
+        }
+    }
     private fun shutdownSelf() {
         isRunning = false
         stopSelf()
@@ -383,6 +450,16 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     override fun onDestroy() {
         isRunning = false
+
+        /*
+         * ⚠️ **FPS 采集跟着服务一起停**（用户实测:占位符配置全关掉后
+         * 采集还在跑）。按键采集不停是因为它是应用级的;而 FPS 只服务
+         * 悬浮窗上的 `(fps)` —— 没有窗口就没有意义。
+         */
+        stopFpsJob?.cancel()
+        stopFpsJob = null
+        fpsWanted = false
+        com.something.sthkey.data.fps.FpsMonitor.stop()
         instance = null
 
         /*
@@ -507,6 +584,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             AppLog.i(TAG, "已没有悬浮窗，结束服务（采集保持运行）")
             stopSelf()
         }
+        refreshFpsNeed(valid.mapNotNull { store.find(it) })
     }
 
     /**
@@ -631,7 +709,31 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
          */
         var windowRef: OverlayWindow? = null
         val view = createOverlayView(config) { windowRef }
-        setupDragListener(view, params, config.id)
+        /*
+         * ⚠️ **把触摸接管放在容器层**。
+         *
+         * 原来拖动监听直接装在 [view] 上，依赖"子 View 不消费触摸"——
+         * 只要有任何一个子 View 接了 DOWN（曾经是 WebView，后来是 AndroidView 里的
+         * ImageView），根视图就收不到事件，那一块就拖不动。
+         *
+         * 现在套一层 [DragTouchHost]:它在 `onInterceptTouchEvent` 里
+         * **无条件接管**整个手势，子 View 只收到 CANCEL，拖动永远生效。
+         */
+        val dragHost = DragTouchHost(this).apply { addView(view) }
+        /*
+         * ⚠️⚠️ **容器本身也要挂 owner**。
+         *
+         * release 包里 Compose 创建 recomposer 时会从**窗口根视图**往上找
+         * `ViewTreeLifecycleOwner`;现在窗口根是 [dragHost],不是 ComposeView ——
+         * 只给 ComposeView 挂 tag 的话，从根开始找就找不到 →
+         * `IllegalStateException: ViewTreeLifecycleOwner not found`,
+         * 崩在 `onAttachedToWindow`（用户日志就是这个）。
+         *
+         * 两个都挂上:根能找到，子视图也能找到。
+         */
+        dragHost.setViewTreeLifecycleOwner(this)
+        dragHost.setViewTreeSavedStateRegistryOwner(this)
+        setupDragListener(dragHost, params, config.id)
 
         /*
          * 鼠标位移流**在创建窗口的这一刻就开**，零点就是现在。
@@ -655,16 +757,31 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         val motion = CaptureSession.openMouseMotion()
 
         return try {
-            windowManager.addView(view, params)
+            windowManager.addView(dragHost, params)
             val window = OverlayWindow(
                 configId = config.id,
                 view = view,
+                host = dragHost,
                 params = params,
                 initialConfig = config,
                 styleId = config.styleId,
             ).apply { this.motion = motion }
             windowRef = window
             windows[config.id] = window
+
+            /*
+             * ⚠️ Live2D 模型**加载后才知道内容多大**。
+             *
+             * 窗口尺寸在创建时就按"模型记录里的内容比例"算过一次；某个模型第一次被用时
+             * 那条比例还不存在（0），窗口只能按固定 612×354 排 —— 内容四周于是留白
+             * （用户报的"左右下多一截空气"）。
+             *
+             * 页面把实测比例回报上来后，这里重算一次窗口尺寸。比例本身已存进模型记录，
+             * 所以**只有第一次**会走这条路径，之后开窗口就是对的。
+             */
+            (view as? Live2DOverlayView)?.contentAspectChanged = { _ ->
+                updateWindowSize(window)
+            }
 
             /*
              * 位置走**唯一算法**（基础坐标 + 偏移，再夹进屏内）。
@@ -750,7 +867,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         val y = old.params.y
         // Live2D 的 WebView 必须显式销毁，否则会连同渲染线程一起泄漏
         (old.view as? Live2DOverlayView)?.release()
-        runCatching { if (old.view.parent != null) windowManager.removeView(old.view) }
+runCatching { if (old.host.parent != null) windowManager.removeView(old.host) }
 
         val size = windowSizePx(config)
         val params = WindowManager.LayoutParams(
@@ -770,7 +887,31 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
         var windowRef: OverlayWindow? = null
         val view = createOverlayView(config) { windowRef }
-        setupDragListener(view, params, configId)
+        /*
+         * ⚠️ **把触摸接管放在容器层**。
+         *
+         * 原来拖动监听直接装在 [view] 上，依赖"子 View 不消费触摸"——
+         * 只要有任何一个子 View 接了 DOWN（曾经是 WebView，后来是 AndroidView 里的
+         * ImageView），根视图就收不到事件，那一块就拖不动。
+         *
+         * 现在套一层 [DragTouchHost]:它在 `onInterceptTouchEvent` 里
+         * **无条件接管**整个手势，子 View 只收到 CANCEL，拖动永远生效。
+         */
+        val dragHost = DragTouchHost(this).apply { addView(view) }
+        /*
+         * ⚠️⚠️ **容器本身也要挂 owner**。
+         *
+         * release 包里 Compose 创建 recomposer 时会从**窗口根视图**往上找
+         * `ViewTreeLifecycleOwner`;现在窗口根是 [dragHost],不是 ComposeView ——
+         * 只给 ComposeView 挂 tag 的话，从根开始找就找不到 →
+         * `IllegalStateException: ViewTreeLifecycleOwner not found`,
+         * 崩在 `onAttachedToWindow`（用户日志就是这个）。
+         *
+         * 两个都挂上:根能找到，子视图也能找到。
+         */
+        dragHost.setViewTreeLifecycleOwner(this)
+        dragHost.setViewTreeSavedStateRegistryOwner(this)
+        setupDragListener(dragHost, params, configId)
 
         // 重建视图也要重开一条位移流：旧视图那条的零点属于上一个页面，
         // 新页面刚 clear() 过（指针回到中心），沿用它会让第一次移动的幅度不对
@@ -781,10 +922,11 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         }
 
         return try {
-            windowManager.addView(view, params)
+            windowManager.addView(dragHost, params)
             val window = OverlayWindow(
                 configId = configId,
                 view = view,
+                host = dragHost,
                 params = params,
                 initialConfig = config,
                 styleId = config.styleId,
@@ -810,7 +952,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         try {
             // Live2D 的 WebView 必须显式销毁，否则会连同它的渲染线程一起泄漏
             (window.view as? Live2DOverlayView)?.release()
-            if (window.view.parent != null) windowManager.removeView(window.view)
+            if (window.host.parent != null) windowManager.removeView(window.host)
         } catch (_: Exception) {
         }
         AppLog.i(TAG, "已关闭悬浮窗：${configId.take(8)}（剩余 ${windows.size} 个）")
@@ -975,9 +1117,48 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             ComposeView(this).apply {
                 setViewTreeLifecycleOwner(this@OverlayService)
                 setViewTreeSavedStateRegistryOwner(this@OverlayService)
+                /*
+                 * ⚠️⚠️ **必须显式指定销毁策略**。
+                 *
+                 * ComposeView 默认策略是 `DisposeOnViewTreeLifecycleDestroyed`,
+                 * 它会在 `onAttachedToWindow` 里去读 `ViewTreeLifecycleOwner`,
+                 * **读不到就抛**:
+                 *
+                 * ```
+                 * IllegalStateException: ViewTreeLifecycleOwner not found from …
+                 *   at android.view.View.dispatchAttachedToWindow
+                 * ```
+                 *
+                 * 用户的 **release** 包就是这样"一开悬浮窗即闪退"（debug 不崩）:
+                 * 同一份代码在混淆前后行为不同 —— R8 把 lifecycle 的 tag 写入裁掉了，
+                 * 而默认策略仍去读它。
+                 *
+                 * 悬浮窗的窗口是我们自己 add/remove 的，本来就不需要
+                 * "跟着 Activity 生命周期销毁"，所以选 detached 策略:
+                 * **不读 lifecycle，也就不会因为读不到而崩**。
+                 */
+                setViewCompositionStrategy(
+                    ViewCompositionStrategy.DisposeOnDetachedFromWindowOrReleasedFromPool,
+                )
                 setContent {
-                    SthKeyTheme {
-                        val win = window()
+                    /*
+                     * ⚠️⚠️ **显式提供 LifecycleOwner / SavedStateRegistryOwner**。
+                     *
+                     * 只往视图树上打 tag（上面的 `setViewTreeLifecycleOwner`）在
+                     * **release 包**里不够 —— 用户实测加了之后仍然
+                     * `IllegalStateException: ViewTreeLifecycleOwner not found`,
+                     * 崩在 ComposeView 的 `onAttachedToWindow`（组合就发生在那里）。
+                     *
+                     * Compose 内部读的是 `LocalLifecycleOwner`:它默认去视图树找，
+                     * release 下找不到就抛。这里直接 provision，
+                     * **组合内部从此不依赖视图树**;tag 那条路留给外部代码用。
+                     */
+                    CompositionLocalProvider(
+                        LocalLifecycleOwner provides this@OverlayService,
+                        LocalSavedStateRegistryOwner provides this@OverlayService,
+                    ) {
+                        SthKeyTheme {
+                            val win = window()
                         OverlayContent(
                             config = win?.configState ?: remember { mutableStateOf(config) },
                             /*
@@ -996,9 +1177,10 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                             ),
                         )
                     }
+                    }
+                }
                 }
             }
-        }
 
     /**
      * 把配置应用到已经存在的视图上（不重建）。
@@ -1214,7 +1396,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
      */
     private fun updateLayoutParams(window: OverlayWindow) {
         try {
-            if (window.view.parent != null) windowManager.updateViewLayout(window.view, window.params)
+            if (window.host.parent != null) windowManager.updateViewLayout(window.host, window.params)
         } catch (e: Exception) {
             AppLog.w(TAG, "更新悬浮窗参数失败：${e.javaClass.simpleName}")
         }
@@ -1593,6 +1775,9 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     }
 
     companion object {
+
+        /** 「不需要 (fps) 了」到真正停止之间的缓冲，避免编辑时反复启停 */
+        private const val FPS_STOP_DEBOUNCE_MS = 5_000L
         private const val TAG = "Overlay"
 
         private const val CHANNEL_ID = "sthkey_overlay"

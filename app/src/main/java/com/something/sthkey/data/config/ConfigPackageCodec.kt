@@ -106,6 +106,16 @@ object ConfigPackageCodec {
      */
     const val DIR_LIVE2D = "assets/live2d/"
 
+    /**
+     * 自定义 Key 媒体资源在包内的目录。
+     *
+     * ⚠️ 收一层 `media/` 再按类型分（用户建议 `assets/images` 等平铺）:
+     * 多这一层是为了**命名空间** —— 以后可能加音频/图层等其它资源，
+     * 平铺的话 `assets/` 下会越来越乱，导入端还得逐个前缀判断。
+     * 目录名只给人看，真正的类型以 manifest 里的 `kind` 为准。
+     */
+    const val DIR_MEDIA = "assets/media/"
+
     /** params.json 里存字体的路径前缀：`sthkey-font://<包内相对路径>` */
     const val FONT_URI_PREFIX = "sthkey-font://"
 
@@ -132,6 +142,23 @@ object ConfigPackageCodec {
         val styleId: String,
         val fontFiles: List<FontFileInfo>,
         val live2d: Live2DFileInfo? = null,
+        /** 包内媒体资源（图片/动图/视频），见 [MediaFileInfo] */
+        val mediaFiles: List<MediaFileInfo> = emptyList(),
+    )
+
+    /**
+     * 包内一个媒体资源的元信息。
+     *
+     * @param id 导出方资源库里的 id；导入方会按内容去重后**重映射**
+     * @param name 原始显示名
+     * @param kind `image` / `gif` / `video`
+     * @param path 包内相对路径，例如 `assets/media/images/cat.png`
+     */
+    data class MediaFileInfo(
+        val id: String,
+        val name: String,
+        val kind: String,
+        val path: String,
     )
 
     /** 包内一个字体的元信息 */
@@ -185,6 +212,7 @@ object ConfigPackageCodec {
         exportedAt: Long,
         fontFiles: List<FontFileInfo>,
         live2d: Live2DFileInfo?,
+        mediaFiles: List<MediaFileInfo> = emptyList(),
     ): String = JSONObject().apply {
         put("format", FORMAT_ID)
         put("formatVersion", FORMAT_VERSION)
@@ -243,6 +271,23 @@ object ConfigPackageCodec {
                     put("layout", info.layout)
                 }
             } ?: JSONObject.NULL,
+        )
+
+        /* 包内媒体资源；没有时写空数组（与 live2d 同理:读的人不用猜） */
+        put(
+            "media",
+            org.json.JSONArray().apply {
+                mediaFiles.forEach { item ->
+                    put(
+                        JSONObject().apply {
+                            put("id", item.id)
+                            put("name", item.name)
+                            put("kind", item.kind)
+                            put("path", item.path)
+                        },
+                    )
+                }
+            },
         )
     }.toString(2)
 
@@ -311,6 +356,24 @@ object ConfigPackageCodec {
                 }
             }
 
+            val mediaFiles = buildList {
+                val array = json.optJSONArray("media") ?: return@buildList
+                for (index in 0 until array.length()) {
+                    val item = array.optJSONObject(index) ?: continue
+                    val path = item.optString("path")
+                    val id = item.optString("id")
+                    if (path.isBlank() || id.isBlank()) continue
+                    add(
+                        MediaFileInfo(
+                            id = id,
+                            name = item.optString("name").ifBlank { path.substringAfterLast('/') },
+                            kind = item.optString("kind").ifBlank { "image" },
+                            path = path,
+                        ),
+                    )
+                }
+            }
+
             Manifest(
                 format = FORMAT_ID,
                 formatVersion = json.optInt("formatVersion", 1),
@@ -321,6 +384,7 @@ object ConfigPackageCodec {
                 styleId = json.optString("styleId"),
                 fontFiles = fonts,
                 live2d = live2d,
+                mediaFiles = mediaFiles,
             )
         }
     } catch (_: Exception) {

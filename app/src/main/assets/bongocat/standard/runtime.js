@@ -173,7 +173,7 @@
       let value;
 
       if (id.endsWith('Z')) {
-        const dragX = 1 - 2 * xRatio;
+        const dragX = 2 * xRatio - 1;
         const dragY = 1 - 2 * yRatio;
         value = dragX * dragY * min;
       } else {
@@ -181,7 +181,31 @@
         if (state.globalReverse && id === 'ParamMouseX') {
           ratio = 1 - ratio;
         }
-        value = max - ratio * (max - min);
+        /*
+         * ============================================================
+         * ⚠️ 左右轴（X）用 `min + ratio * (max - min)`，上下轴（Y）用反过来的写法
+         * ============================================================
+         *
+         * 原来两个轴都写成 `max - ratio * (max - min)`（照搬自 BongoCat 原版
+         * runtime）。对**标准 Cubism 取值范围**来说，那条公式把 X 轴的方向算反了:
+         *
+         * | 光标位置 | ratio | 原公式给 ParamAngleX(-30..30) | 期望 |
+         * |---|---|---|---|
+         * | 最左 | 0 | **+30** | -30（头朝左） |
+         * | 最右 | 1 | **-30** | +30（头朝右） |
+         *
+         * 同一份公式也套在 `ParamEyeBallX`（-1..1）上 —— 光标往右时瞳孔会往左，
+         * 与头部一起反。用户报的「鼠标移动时头部跟随左右颠倒」就是它。
+         *
+         * ⚠️ 上下轴（Y）**保持原写法**:它没有同样的反馈（光标在上 → ParamAngleY 取
+         * max = 抬头），这次不改，避免把没报问题的方向也翻掉。
+         *
+         * ⚠️ `ParamAngleZ`（歪头）跟着 X 一起翻:它原本用 `1 - 2 * xRatio`，
+         * 与旧的 X 走法一致；X 翻了它不翻的话，光标在左右两端时歪头方向会和转头相反。
+         */
+        value = id.endsWith('X')
+          ? min + ratio * (max - min)
+          : max - ratio * (max - min);
       }
 
       renderer.setOverride(id, value);

@@ -366,6 +366,88 @@ val DEFAULT_CPS_KEY_CODES: List<Int> = listOf(KeyCodes.BTN_LEFT)
 const val DEFAULT_COMPONENT_FONT_ID = "system:sans-serif"
 
 /**
+ * 媒体资源的种类。
+ *
+ * ⚠️ 三者共用同一个数据类 [MediaComponent]，只有这个字段不同 ——
+ * 与三种摇杆共用 `JoystickComponent` 是同一个思路:
+ * **一套渲染、一套属性面板、一套编解码**，差异只落在"怎么画"这一处。
+ */
+enum class MediaKind(val id: String, val label: String) {
+    /** 静态图片（png / jpg / webp） */
+    IMAGE("image", "图片"),
+
+    /** 动图（gif / 动态 webp）：循环播放 */
+    GIF("gif", "动图"),
+
+    /** 视频（mp4 / webm）：循环播放，可单独静音 */
+    VIDEO("video", "视频"),
+    ;
+
+    companion object {
+        fun fromId(id: String?): MediaKind? = entries.firstOrNull { it.id == id }
+    }
+}
+
+/**
+ * 媒体在**组件边框内**怎么摆。
+ *
+ * ⚠️ 与 CSS 的 `object-fit` 同一套语义，用户不用再学新概念。
+ */
+enum class MediaFit(val id: String, val label: String) {
+    /** 完整显示；比例不符时留边 */
+    FIT("fit", "完整显示"),
+
+    /** 铺满边框；比例不符时裁掉超出部分 */
+    COVER("cover", "铺满裁剪"),
+
+    /**
+     * **拉伸铺满**:宽高各自拉到边框大小，比例不符时画面会变形。
+     *
+     * ⚠️ 用户点名要这个（"不是裁剪，是拉伸"）:做进度条、遮罩色块这类
+     * 本来就该跟着边框变的素材时，裁剪会切掉内容、留边会露底 ——
+     * **拉伸才是对的行为**。
+     */
+    STRETCH("stretch", "拉伸铺满"),
+    ;
+
+    companion object {
+        fun fromId(id: String?): MediaFit? = entries.firstOrNull { it.id == id }
+    }
+}
+
+/**
+ * **图片 / 动图 / 视频**组件。
+ *
+ * ============================================================
+ * 为什么它不实现 [TextualComponent]
+ * ============================================================
+ * 它没有文字。硬塞进去会带来一串永远不生效的字段（文字缩放、文字偏移、描边、字体…），
+ * 属性面板还得一路 `is MediaComponent` 才敢隐藏它们 —— 这正是 [TextualComponent]
+ * 接口注释里记过的那个坑。
+ *
+ * ============================================================
+ * ⚠️ `assetId` 只存 id，不存路径
+ * ============================================================
+ * 与字体完全一致:资源文件的真实路径随机器、随重装变化，存进配置会让"导出给别人"
+ * 直接失效。id 由资源库解析成文件。
+ */
+data class MediaComponent(
+    override val id: String,
+    override val x: Float,
+    override val y: Float,
+    override val width: Float,
+    override val height: Float,
+    val kind: MediaKind,
+    /** 全局资源库里的 id；空串 = 还没选资源（渲染成占位框） */
+    val assetId: String = "",
+    val fit: MediaFit = MediaFit.COVER,
+    /** 不透明度百分比 0..100 */
+    val opacityPercent: Int = 100,
+    /** 圆角百分比（相对短边）；0 = 不裁圆角 */
+    val cornerRadiusPercent: Int = 0,
+) : CustomComponent
+
+/**
  * **轮盘区域**里的方向。
  *
  * ============================================================
@@ -1050,6 +1132,39 @@ enum class ComponentType(
         description = "跟着屏幕触摸动：移动摇杆吃触摸区域，视角摇杆吃全屏滑动",
         category = ComponentCategory.TOUCH,
     ),
+
+    /*
+     * ============================================================
+     * 媒体组件（图片 / 动图 / 视频）
+     * ============================================================
+     * ⚠️ 三种**共用** [MediaComponent]，只靠 [MediaComponent.kind] 区分 ——
+     * 与三种摇杆共用 `JoystickComponent` 同一个思路:
+     * 一份渲染、一份属性面板、一份编解码。
+     *
+     * ⚠️ 为什么是三个**类型**而不是"一个类型 + 建完自己选"（触屏摇杆那种做法）:
+     * 用户说得很明确 ——「通用栏新增"图片"，"动图"，"视频"」；
+     * 而且三者在**选资源**那一步就该分流（图片只让选图片、视频只让选视频）。
+     */
+    IMAGE(
+        id = "image",
+        label = "图片",
+        description = "在悬浮窗上画一张静态图片（png / jpg / webp）",
+        category = ComponentCategory.COMMON,
+    ),
+
+    GIF(
+        id = "gif",
+        label = "动图",
+        description = "循环播放的动图（gif / 动态 webp）",
+        category = ComponentCategory.COMMON,
+    ),
+
+    VIDEO(
+        id = "video",
+        label = "视频",
+        description = "循环播放的视频（mp4 / webm），可单独静音",
+        category = ComponentCategory.COMMON,
+    ),
     ;
     /*
      * 注意:上面那三个摇杆类型与 [JoystickSource] 是**同一个东西的两种表达**
@@ -1109,7 +1224,7 @@ enum class ComponentType(
             JOYSTICK_KEYBOARD -> JoystickSource.KEYBOARD
             JOYSTICK_MOUSE -> JoystickSource.MOUSE
             JOYSTICK_TOUCH -> JoystickSource.TOUCH
-            KEY, TEXT -> error("不是摇杆类型：$type")
+            KEY, TEXT, IMAGE, GIF, VIDEO -> error("不是摇杆类型：$type")
         }
     }
 }

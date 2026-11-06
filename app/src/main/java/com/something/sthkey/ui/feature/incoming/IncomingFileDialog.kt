@@ -15,17 +15,20 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameMillis
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
@@ -38,10 +41,11 @@ import com.something.sthkey.data.incoming.IncomingFile
 import com.something.sthkey.data.live2d.Live2DModelImporter
 import com.something.sthkey.domain.font.bitmap.BitmapFontImporter
 import com.something.sthkey.domain.font.FontRegistry
-import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+
 
 
 /**
@@ -85,29 +89,12 @@ fun IncomingFileDialog(
     var phase by remember(request) { mutableStateOf<Phase>(Phase.Sniffing) }
 
     /*
-     * 嗅探阶段复制出来的缓存文件。
-     *
-     * ⚠️ **必须**在离开时统一删掉:一个材质包动辄几十 MB，
-     * 用户在确认框上点了「取消」的话，导入那一步根本不会跑，
-     * 也就没人删它 —— 一次取消就永久占掉几十 MB 的 cacheDir。
-     */
-    val cacheFiles = remember(request) { mutableListOf<File>() }
-    DisposableEffect(request) {
-        onDispose {
-            cacheFiles.forEach { runCatching { it.delete() } }
-        }
-    }
-
-    /*
      * 识别：进来就做，不等用户点确定（他首先要知道"这文件能不能用"）。
      */
     LaunchedEffect(request) {
         val items = withContext(Dispatchers.IO) {
             request.uris.map { uri -> sniffOne(context, uri) }
         }
-
-        /* ⚠️ 登记缓存，离开时统一删（见 cacheFiles 的说明） */
-        items.forEach { item -> item.cacheFile?.let(cacheFiles::add) }
 
         /* ⚠️ 一份都认不出来就直接进结果页，不给一个"确认导入什么"的空框 */
         phase = if (items.none { it.kind != FileKind.UNKNOWN }) {
@@ -142,7 +129,15 @@ fun IncomingFileDialog(
                         SniffedList(current.items)
                     }
 
-                    Phase.Working -> Progress()
+                    /*
+                     * ⚠️ 第二个对话框（真正导入）用**圆圈 + 假装进度条**:
+                     * 大资源（Live2D 模型 / 带媒体的配置）动辄几十秒，
+                     * 只有一个静止的圈会让人以为卡死了。
+                     *
+                     * ⚠️ 第一个对话框（"正在识别"）**保持不变** ——
+                     * 那一步只读文件头，一瞬间的事，给进度条反而显得慢。
+                     */
+                    Phase.Working -> WorkingProgress()
 
                     is Phase.Done -> Column {
                         ResultList(current.results)
@@ -203,10 +198,16 @@ fun IncomingFileDialog(
 
 /** 一个文件识别出来之后的样子 */
 internal data class SniffedItem(
+    /**
+     * 原始 Uri。
+     *
+     * ⚠️ 不再有「嗅探时复制出来的缓存副本」了（见 `FileSniffer` 的说明）:
+     * 导入器各自只需要**顺序读一次**，所以直接把原 Uri 交给它们。
+     * 这样 110 MB 的模型包也不会被"读不到这个文件"挡住。
+     */
     val uri: Uri,
     val kind: FileKind,
     val displayName: String,
-    val cacheFile: File?,
     val error: String? = null,
 )
 
@@ -218,7 +219,6 @@ private fun sniffOne(context: Context, uri: Uri): SniffedItem {
             uri = uri,
             kind = FileKind.UNKNOWN,
             displayName = name ?: uri.lastPathSegment.orEmpty(),
-            cacheFile = null,
             error = result.exceptionOrNull()?.message ?: "读不到这个文件",
         )
 
@@ -226,7 +226,6 @@ private fun sniffOne(context: Context, uri: Uri): SniffedItem {
         uri = uri,
         kind = sniffed.kind,
         displayName = sniffed.originalName ?: uri.lastPathSegment.orEmpty(),
-        cacheFile = sniffed.cacheFile,
     )
 }
 
@@ -237,22 +236,23 @@ private fun sniffOne(context: Context, uri: Uri): SniffedItem {
 /**
  * 执行一个文件的导入。
  *
- * ⚠️ 一律用嗅探阶段复制出来的**缓存文件**（包成 `file://` Uri）:
- * 同一个 `content://` Uri 不能反复 `openInputStream`。
- *
  * ⚠️ 每个导入器**只调一次**并把 `Result` 存下来 ——
  * 写成 `?: return Failed(importer(...).exceptionOrNull())` 会**导两遍**
  * （一遍进库、一遍只为了拿错误信息），既慢又可能生成两份数据。
  */
 internal fun runImport(context: Context, item: SniffedItem): ItemResult {
     if (item.error != null) return ItemResult.Failed(item.displayName, item.error)
-    val cacheFile = item.cacheFile ?: return ItemResult.Failed(item.displayName, "读不到这个文件")
-    val cacheUri = Uri.fromFile(cacheFile)
+
+    /*
+     * ⚠️ **直接用原 Uri**，不再有缓存副本（见 `FileSniffer` 的说明）:
+     * 每个导入器内部只需要顺序读一次，大文件由它们自己分块处理。
+     */
+    val uri = item.uri
 
     return try {
         when (item.kind) {
             FileKind.CONFIG_PACKAGE -> {
-                val result = ConfigPackageManager.import(context, cacheUri)
+                val result = ConfigPackageManager.import(context, uri)
                 val outcome = result.getOrNull()
                 if (outcome == null) {
                     ItemResult.Failed(item.displayName, describe(result.exceptionOrNull()))
@@ -262,7 +262,7 @@ internal fun runImport(context: Context, item: SniffedItem): ItemResult {
             }
 
             FileKind.GROUP_PACKAGE -> {
-                val result = GroupPackageManager.import(context, cacheUri)
+                val result = GroupPackageManager.import(context, uri)
                 val outcome = result.getOrNull()
                 if (outcome == null) {
                     ItemResult.Failed(item.displayName, describe(result.exceptionOrNull()))
@@ -278,7 +278,7 @@ internal fun runImport(context: Context, item: SniffedItem): ItemResult {
                  */
                 val result = Live2DModelImporter.importZip(
                     context = context,
-                    uri = cacheUri,
+                    uri = uri,
                     displayNameHint = namedForImport(item.displayName, item.kind),
                 )
                 val outcome = result.getOrNull()
@@ -302,7 +302,7 @@ internal fun runImport(context: Context, item: SniffedItem): ItemResult {
                  */
                 val source = BitmapFontImporter.readFrom(
                     context,
-                    cacheUri,
+                    uri,
                     namedForImport(item.displayName, item.kind),
                 )
                 if (source is BitmapFontImporter.Source.Failure) {
@@ -317,7 +317,7 @@ internal fun runImport(context: Context, item: SniffedItem): ItemResult {
             FileKind.VECTOR_FONT_COLLECTION,
             -> {
                 val outcome = FontRegistry.importDetailed(
-                    uri = cacheUri,
+                    uri = uri,
                     displayNameHint = namedForImport(item.displayName, item.kind),
                 )
                 if (outcome == null) {
@@ -331,12 +331,6 @@ internal fun runImport(context: Context, item: SniffedItem): ItemResult {
         }
     } catch (e: Exception) {
         ItemResult.Failed(item.displayName, e.message ?: e.javaClass.simpleName)
-    } finally {
-        /*
-         * ⚠️ 缓存文件用完就删:一次导入几十 MB 很常见，
-         * 不删的话 cacheDir 会被这些临时包堆满。
-         */
-        cacheFile.delete()
     }
 }
 
@@ -388,6 +382,36 @@ internal sealed interface ItemResult {
  * UI 片段
  * ============================================================ */
 
+/**
+ * 「真正导入」阶段的进度:圆圈 + **假装**进度条。
+ *
+ * ============================================================
+ * ⚠️ 为什么是假进度
+ * ============================================================
+ * 与导出那边同一个理由:解压/写盘拿不到细粒度回调，而用户要的是
+ * "它在动"这个信号。做法是逐帧逼近 92%、越接近越慢 ——
+ * **卡住不动就说明真卡住了**，这比永远停在 90% 诚实。
+ */
+@Composable
+private fun WorkingProgress() {
+    var progress by remember { mutableFloatStateOf(0.06f) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            withFrameMillis { progress += (0.92f - progress) * 0.012f }
+        }
+    }
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        CircularProgressIndicator()
+        Spacer(modifier = Modifier.height(12.dp))
+        LinearProgressIndicator(
+            progress = { progress },
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
 @Composable
 private fun Progress() {
     Row(

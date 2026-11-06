@@ -28,10 +28,10 @@ import androidx.compose.material.icons.rounded.SpaceBar
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.SportsEsports
 import androidx.compose.material.icons.rounded.SwapHoriz
-import androidx.compose.material.icons.rounded.ViewInAr
 import androidx.compose.material.icons.rounded.TouchApp
 import androidx.compose.material.icons.rounded.Transform
 import androidx.compose.material.icons.rounded.VerticalAlignTop
+import androidx.compose.material.icons.rounded.ViewInAr
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -73,6 +73,7 @@ import com.something.sthkey.domain.config.resetParamsToDefault
 import com.something.sthkey.domain.config.ShadowMode
 import com.something.sthkey.domain.config.TextShadow
 import com.something.sthkey.domain.custom.canConvertToCustom
+import com.something.sthkey.domain.custom.CustomLayout
 import com.something.sthkey.domain.custom.CustomTouchRegion
 import com.something.sthkey.domain.custom.KeyComponent
 import com.something.sthkey.domain.custom.TextComponent
@@ -109,6 +110,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
 
 
 
@@ -2323,6 +2325,37 @@ private fun LazyListScope.customKeyStyleSections(
                 display = "${editable.customOpacityPercent}%",
                 onValueChange = { value ->
                     applyChange { it.copy(customOpacityPercent = value.toInt()) }
+                },
+            )
+
+            /*
+             * 整体字符缩放
+             * ============================================================
+             * 用户的原话:
+             *
+             * > 整体字符缩放与自定义 key 内单独组件的字符缩放共同决定最终字符缩放
+             *
+             * ⚠️ 所以它是**第二层**，不是替代品:组件自己在编辑器里调的那个仍然保留，
+             * 最终字号 = 两者**相乘**（换算收在 `CustomLayout.textSize(组件, 整体)`）。
+             *
+             * ⚠️ 范围与组件自己的文字缩放一致（50..300）:
+             * 两处滑块范围不一样的话，用户来回试很容易困惑。
+             *
+             * ⚠️ 只影响**文字**，不动组件的位置与尺寸 ——
+             * 键帽方块还是原来那么大，字大了会溢出方块（那是用户自己调的结果）。
+             *
+             * ⚠️ 步进 5%:250 / 5 = 50 段，所以 `steps = 49`。
+             * 与上面透明度那条保持同一个手感。
+             */
+            SliderRow(
+                label = "整体字符缩放",
+                value = editable.customTextScalePercent.toFloat(),
+                valueRange = CustomLayout.TEXT_SCALE_MIN.toFloat()..
+                    CustomLayout.TEXT_SCALE_MAX.toFloat(),
+                steps = 49,
+                display = "${editable.customTextScalePercent}%",
+                onValueChange = { value ->
+                    applyChange { it.copy(customTextScalePercent = value.toInt()) }
                 },
             )
         }

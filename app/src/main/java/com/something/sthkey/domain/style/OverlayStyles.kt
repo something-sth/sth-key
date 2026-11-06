@@ -2,6 +2,8 @@ package com.something.sthkey.domain.style
 
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.custom.CustomLayout
+import com.something.sthkey.domain.live2d.Live2DModels
+
 
 /**
  * 悬浮窗样式标识。
@@ -288,9 +290,32 @@ object OverlayStyleRegistry {
                 enabled = true,
                 iconKey = ICON_LIVE2D,
                 category = StyleCategory.GENERAL,
-                // Live2D 的尺寸是固定的设计分辨率，与配置内容无关
-                baseSize = { _, _ ->
-                    OverlayBaseSize(LIVE2D_DESIGN_WIDTH, LIVE2D_DESIGN_HEIGHT)
+                /*
+                 * Live2D 的尺寸默认是固定设计分辨率，与配置内容无关。
+                 *
+                 * ⚠️ 但**导入的模型**要按它自己的内容比例来:
+                 * 用户报过「复杂模型左、右、下各多一截空气」—— 原因是窗口固定 612×354，
+                 * 而模型内容（页面实测的 `contentBounds`）比例往往更竖，塞进固定窗口就留白。
+                 *
+                 * 比例存在模型记录里（`Live2DModelEntry.contentAspect`），
+                 * 由页面加载后回报；没测到（0）时退回固定尺寸。
+                 */
+                baseSize = { config, _ ->
+                    val aspect = Live2DModels.find(config.live2d.modelId)?.contentAspect ?: 0f
+                    if (aspect > 0f) {
+                        /*
+                         * 高度保持设计高、宽度按内容比例推。
+                         *
+                         * ⚠️ 只收窄宽度、不动高度:高度是"内容能画多高"的上限，
+                         * 高度也一起变的话，同一模型在不同比例下会整体缩放跳变。
+                         */
+                        OverlayBaseSize(
+                            width = LIVE2D_DESIGN_HEIGHT * aspect,
+                            height = LIVE2D_DESIGN_HEIGHT,
+                        )
+                    } else {
+                        OverlayBaseSize(LIVE2D_DESIGN_WIDTH, LIVE2D_DESIGN_HEIGHT)
+                    }
                 },
             ),
         )

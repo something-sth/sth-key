@@ -5,16 +5,21 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Base64
 import com.something.sthkey.core.log.AppLog
+import com.something.sthkey.domain.live2d.Live2DJunkFilter
 import com.something.sthkey.domain.live2d.Live2DModelEntry
 import com.something.sthkey.domain.live2d.Live2DModels
 import com.something.sthkey.domain.live2d.Live2DSemantics
-import org.json.JSONArray
-import org.json.JSONObject
+import com.something.sthkey.domain.live2d.Live2DVariant
+import com.something.sthkey.domain.live2d.Model3Selection
 import java.io.File
 import java.io.Writer
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.zip.ZipInputStream
+import org.json.JSONArray
+import org.json.JSONObject
+
+
 
 /**
  * 把一个 Live2D 模型 ZIP 导入到模型库。
@@ -106,7 +111,7 @@ object Live2DModelImporter {
 
         return try {
             dir.mkdirs()
-            extract(context, uri, dir)
+            val skippedJunk = extract(context, uri, dir)
             /*
              * 显示名：优先用调用方给的（外部导入），否则取 SAF 给的文件名。
              * 两者都取到 .zip 后缀，统一去掉。
@@ -115,7 +120,7 @@ object Live2DModelImporter {
                 ?: queryDisplayName(context, uri))
                 .substringBeforeLast('.')
                 .ifBlank { "导入的模型" }
-            finishImport(dir, dirId, displayName)
+            finishImport(dir, dirId, displayName, skippedJunk)
         } catch (e: Exception) {
             // 任何一步失败都不留半份模型：目录整体删掉
             AppLog.e(TAG, "导入模型失败", e)
@@ -137,12 +142,28 @@ object Live2DModelImporter {
     fun repairImportedPages() {
         Live2DModels.importedModels().forEach { model ->
             val dir = model.dir ?: return@forEach
-            val file = File(dir, Live2DModels.ENTRY_INDEX)
-            val expected = buildHtml(model.layout)
-            if (runCatching { file.readText() }.getOrNull() != expected) {
-                runCatching { file.writeText(expected) }
-                    .onSuccess { AppLog.i(TAG, "已更新模型页面：${model.displayName}") }
-                    .onFailure { AppLog.w(TAG, "更新模型页面失败：${model.displayName}") }
+
+            /*
+             * ⚠️ 多模式模型:每套模式各有一份页面，都要刷。
+             * 只刷根目录那份的话，切到"标准"或"手柄"时看到的还是旧页面骨架。
+             */
+            val pages = if (model.variants.isEmpty()) {
+                listOf(dir to model.layout)
+            } else {
+                model.variants.map { variant ->
+                    val root = if (variant.pageDir.isEmpty()) dir else File(dir, variant.pageDir)
+                    root to if (isResourceDir(root)) Live2DModels.LAYOUT_FULL else Live2DModels.LAYOUT_CAT
+                }
+            }
+
+            pages.forEach { (root, layout) ->
+                val file = File(root, Live2DModels.ENTRY_INDEX)
+                val expected = buildHtml(layout)
+                if (runCatching { file.readText() }.getOrNull() != expected) {
+                    runCatching { file.writeText(expected) }
+                        .onSuccess { AppLog.i(TAG, "已更新模型页面：${model.displayName}") }
+                        .onFailure { AppLog.w(TAG, "更新模型页面失败：${model.displayName}") }
+                }
             }
 
             /*
@@ -182,11 +203,60 @@ object Live2DModelImporter {
         dir: File,
         dirId: String,
         displayName: String,
+        /** 解压时被丢掉的无关文件数（只用于给用户的提示） */
+        skippedJunk: Int = 0,
     ): Result<Outcome> {
-        // 1. 找模型描述文件（可能在子目录里，所以是遍历）
-        val modelJsonFile = dir.walkTopDown()
-            .firstOrNull { it.isFile && it.name.endsWith(".model3.json", ignoreCase = true) }
-            ?: return Result.failure(IllegalStateException("这个压缩包里没有 .model3.json，不是 Live2D 模型包"))
+        /*
+         * 1. 找模型描述文件。
+         *
+         * ⚠️⚠️ **不能取遍历到的第一个** —— 见 [Model3Selection] 的说明。
+         *
+         * 实测样本 `鸣潮卡提希娅最牛逼键盘猫模型` 的结构:
+         * ```
+         * img/cat.model3.json                 ← 最浅，但引用的 moc/贴图都不存在（孤儿）
+         * img/keyboard/cat_model/cat.model3.json  ← 完整
+         * img/standard/…  img/gamepad/…           ← 另外两套完整变体
+         * ```
+         * 取第一个的结果是:**导入成败取决于文件系统遍历顺序**，
+         * 而且即使成功也是随机命中三套变体之一（键帽资源各不相同）。
+         */
+        val scan = chooseModel3(dir)
+        val choice = scan.choice
+        val modelJsonFile = when (choice) {
+            is Model3Selection.Choice.Picked -> File(dir, choice.path)
+
+            Model3Selection.Choice.NoModel3 -> return Result.failure(
+                IllegalStateException("这个压缩包里没有 .model3.json，不是 Live2D 模型包"),
+            )
+
+            is Model3Selection.Choice.AllBroken -> return Result.failure(
+                IllegalStateException(
+                    "找到 ${choice.total} 个 .model3.json，但资源都不完整:\n" +
+                        choice.reasons.joinToString("\n") { "· $it" },
+                ),
+            )
+        }
+
+        /*
+         * 2.0 **多模式模型**:一个包里有多套完整模型时，各建一套页面。
+         *
+         * ⚠️ 用户的原话:
+         * > 这个模型有三种模式……而软件内，导入的模型不能切换模式
+         * > 做 live2d 库里展开的话，无论选择多模式模型的哪一种模式，
+         * > 导出时都是这个模型全部导出，不是单独导出某个模式
+         *
+         * ⚠️ 所以导出**不做"只带选中变体"的裁剪** —— 整个模型目录都会被打包
+         * （见 `ConfigPackageManager.writeModel`，它扫的就是整个 `entry.dir`）。
+         */
+        if (scan.picks.size > 1) {
+            return importVariants(
+                dir = dir,
+                dirId = dirId,
+                displayName = displayName,
+                scan = scan,
+                skippedJunk = skippedJunk,
+            )
+        }
 
         val modelJson = runCatching { JSONObject(modelJsonFile.readText()) }.getOrNull()
             ?: return Result.failure(IllegalStateException("模型描述文件无法解析（.model3.json 格式不对）"))
@@ -194,7 +264,15 @@ object Live2DModelImporter {
         val refs = modelJson.optJSONObject("FileReferences")
             ?: return Result.failure(IllegalStateException("模型描述文件里没有 FileReferences"))
 
-        // 2. 校验 moc 与贴图
+        /*
+         * 2. 校验 moc 与贴图。
+         *
+         * ⚠️ 这里**只做"能不能画"的最低校验**（选 model3 的时候已经用
+         * [validateModel3] 校验过一遍了）。两处都留着的理由:
+         * - 选 model3 那次是为了**在多个候选里挑一个能用的**；
+         * - 这一次是为了给**用户**一句准确的话（缺哪个文件）。
+         * 两次用的是同一套判据，不会出现"选了它又说它不行"。
+         */
         val modelBase = modelJsonFile.parentFile ?: dir
         val moc = resolveInside(modelBase, refs.optString("Moc"), dir)
             ?: return Result.failure(IllegalStateException("模型缺少主体文件（Moc）"))
@@ -217,7 +295,35 @@ object Live2DModelImporter {
             textures += file
         }
 
-        // 3. 内容摘要 —— 命中已有模型就直接复用
+        /*
+         * 2.5 超大贴图降采样。
+         *
+         * ⚠️ 必须在**摘要之前**做:摘要要反映"真正入库的内容"，
+         * 否则同一个包在不同机型上（一个降了、一个没降）算出来的摘要不同。
+         *
+         * ⚠️ 也必须在这里（而不是渲染时）:渲染在 WebView 里，
+         * 8192² 的纹理**根本传不上去**（很多机器 GL_MAX_TEXTURE_SIZE = 4096），
+         * 那时已经没有"缩小"的机会了 —— 只能白屏。
+         */
+        val textureAdaptation = runCatching {
+            Live2DTextureAdapter.adapt(modelBase, refs)
+        }.onFailure {
+            /* ⚠️ 降采样失败不该让整个导入失败:原图可能本来就能显示 */
+            AppLog.w(TAG, "贴图降采样失败（保留原图）：${it.javaClass.simpleName}")
+        }.getOrNull()
+
+        /*
+         * ⚠️ 降采样之后**重新校验一遍**（Axon 也这么做）:重编码是我们自己做的，
+         * 万一某张图写坏了，必须在这里发现 —— 而不是等用户在屏幕上看到半个模型。
+         */
+        if (textureAdaptation != null) {
+            val broken = validateModel3(dir, modelJsonFile)
+            if (broken != null) {
+                return Result.failure(IllegalStateException("贴图降采样后模型校验失败:$broken"))
+            }
+        }
+
+        /* 3. 内容摘要 —— 命中已有模型就直接复用 */
         val digest = computeDigest(dir)
         Live2DModels.findByDigest(digest)?.let { existing ->
             AppLog.i(TAG, "模型内容与已有模型一致，直接复用：${existing.displayName}")
@@ -233,7 +339,18 @@ object Live2DModelImporter {
         if (resourceDir != null) fillMissingKeycaps(resourceDir)
 
         // 5. 生成页面
-        writeModelData(dir, moc, textures, resourceDir, layout)
+        /* ⚠️ Mver 风格包（自带逐键 PNG 手）不能去收模型手臂，见 writeModelData 的说明 */
+        val expressions = loadExpressions(modelJson, modelBase, dir)
+        writeModelData(
+            dir = dir,
+            moc = moc,
+            textures = textures,
+            resourceDir = resourceDir,
+            layout = layout,
+            mverHands = hasMverHands(dir),
+            expressions = expressions,
+            exprBindings = loadExpressionBindings(dir, null, expressions.length()),
+        )
         File(dir, Live2DModels.ENTRY_INDEX).writeText(buildHtml(layout))
 
         // 6. 登记
@@ -251,16 +368,351 @@ object Live2DModelImporter {
             if (layout == Live2DModels.LAYOUT_CAT) {
                 add("这个模型没有自带键盘美术，因此只显示角色本身（键帽与键盘底图都不会出现）。")
             }
+            /*
+             * 多变体包:告诉用户"选的是哪一套"。
+             *
+             * ⚠️ 不说的话用户会以为"我明明有 gamepad 版，怎么画出来是键盘"。
+             * 实测样本里就有 keyboard / standard / gamepad 三套。
+             */
+            if (choice is Model3Selection.Choice.Picked && choice.total > 1) {
+                val variantName = choice.variant ?: "其中一套"
+                add("这个压缩包里带 ${choice.total} 套模型，已导入 $variantName 那一套。")
+            }
+            /*
+             * 贴图被降采样时说清楚:用户会问"我的模型怎么不如电脑上清楚"。
+             *
+             * ⚠️ 这不是我们"优化"的结果，而是手机的硬限制:
+             * 8192 的纹理在多数机型上根本上传不了（GL 上限 4096）。
+             */
+            textureAdaptation?.let { adapted ->
+                add(
+                    "这个模型的贴图对手机来说太大了，已把 ${adapted.count} 张贴图" +
+                        "缩小到 1/${adapted.sample}（否则会白屏或只有部分部件显示）。",
+                )
+            }
+            if (skippedJunk > 0) {
+                add("已忽略 $skippedJunk 个无关文件（exe / dll / 说明文档等）。")
+            }
         }
         AppLog.i(TAG, "模型导入成功：${entry.displayName}（布局 $layout，提示 ${notes.size} 条）")
         return Result.success(Outcome(entry, reused = false, notes = notes))
     }
 
     /* ============================================================
+     * 选 model3
+     * ============================================================ */
+
+    /**
+     * 把目录里所有候选 `*.model3.json` 找出来、逐个校验，再交给
+     * [Model3Selection.choose] 排序决策。
+     *
+     * ⚠️ 校验在这里做（要读文件），**排序与决策在纯函数里做**（可单测）。
+     *
+     * ⚠️ 深度上限与 Axon 一致（5 层）:太深的多半是压缩包里套的备份目录，
+     * 扫下去只会变慢，还可能命中模型作者自己放的历史版本。
+     */
+    private fun chooseModel3(root: File): Scan {
+        val candidates = mutableListOf<Model3Selection.Candidate>()
+
+        root.walkTopDown()
+            .maxDepth(Model3Selection.MAX_DEPTH)
+            .filter { it.isFile && it.name.endsWith(".model3.json", ignoreCase = true) }
+            .forEach { file ->
+                val relative = relativePath(root, file)
+                val depth = relative.split('/').size - 1
+                val reason = validateModel3(root, file)
+                candidates += Model3Selection.Candidate(
+                    path = relative,
+                    depth = depth,
+                    valid = reason == null,
+                    reason = reason,
+                )
+                if (reason != null) {
+                    AppLog.i(TAG, "跳过候选 $relative：$reason")
+                }
+            }
+
+        val choice = Model3Selection.choose(candidates)
+        val picks = Model3Selection.chooseAll(candidates)
+        when (choice) {
+            is Model3Selection.Choice.Picked -> AppLog.i(
+                TAG,
+                "选中 ${choice.path}（候选 ${choice.total} 个，有效 ${picks.size} 个，" +
+                    "变体 ${choice.variant ?: "未知"}）",
+            )
+
+            Model3Selection.Choice.NoModel3 -> AppLog.w(TAG, "包内没有 .model3.json")
+
+            is Model3Selection.Choice.AllBroken ->
+                AppLog.w(TAG, "全部候选都不可用：${choice.reasons.joinToString("；")}")
+        }
+        return Scan(choice = choice, picks = picks)
+    }
+
+    /**
+     * 扫描结果。
+     *
+     * @param choice 决策（用于报错文案与"选中哪一个"）
+     * @param picks **所有有效候选**，已按同一套规则排序（第一个 = [choice] 选中的那个）。
+     *   多于一个时说明是**多模式模型**，导入器会给它们各建一套页面。
+     */
+    private data class Scan(
+        val choice: Model3Selection.Choice,
+        val picks: List<Model3Selection.Picked>,
+    )
+
+    /**
+     * 校验一个 model3 能不能用。
+     *
+     * @return `null` = 可用；否则是**给人看**的原因
+     *
+     * ⚠️ 判据照 Axon 的 `validateModel3`:
+     * `Version >= 3`、`Moc` 存在、`Textures` 逐个存在、
+     * 以及**声明了的** `Physics` / `Pose` / `DisplayInfo` 必须存在。
+     *
+     * ⚠️ 最后这三个是可选项，但"声明了却不在"是真的坏包:
+     * 运行时会去找那个文件，找不到就报错 —— 与其让它渲染到一半炸，
+     * 不如在导入时换下一套候选（这也正是多变体包的救法）。
+     */
+    private fun validateModel3(root: File, modelFile: File): String? {
+        val json = runCatching { JSONObject(modelFile.readText()) }.getOrNull()
+            ?: return "model3 无法解析"
+
+        val version = json.optInt("Version", 0)
+        if (version < 3) return "仅支持 Cubism 3 以上的模型（Version=$version）"
+
+        val refs = json.optJSONObject("FileReferences") ?: return "缺少 FileReferences"
+        val modelBase = modelFile.parentFile ?: return "model3 没有所在目录"
+
+        val mocRelative = refs.optString("Moc").trim()
+        if (mocRelative.isEmpty()) return "缺少 Moc"
+        val moc = resolveInside(modelBase, mocRelative, root) ?: return "Moc 路径非法: $mocRelative"
+        if (!moc.isFile || moc.length() < 4L) return "Moc 不存在或为空: $mocRelative"
+
+        val textures = refs.optJSONArray("Textures") ?: return "缺少 Textures"
+        if (textures.length() == 0) return "Textures 为空"
+        for (index in 0 until textures.length()) {
+            val relative = textures.optString(index).trim()
+            if (relative.isEmpty()) return "存在空纹理路径"
+            val file = resolveInside(modelBase, relative, root) ?: return "纹理路径非法: $relative"
+            if (!file.isFile) return "纹理不存在: $relative"
+        }
+
+        /* ⚠️ 声明了就必须在（见上面的说明） */
+        for (key in listOf("Physics", "Pose", "DisplayInfo")) {
+            val relative = refs.optString(key).trim()
+            if (relative.isEmpty()) continue
+            val file = resolveInside(modelBase, relative, root) ?: return "$key 路径非法: $relative"
+            if (!file.isFile) return "$key 不存在: $relative"
+        }
+
+        return null
+    }
+
+    /* ============================================================
+     * 多模式导入
+     * ============================================================ */
+
+    /**
+     * 一个变体最终落在哪里、用什么布局。
+     *
+     * @param name 给人看的模式名（`键盘` / `标准` / `手柄`）
+     * @param pageDir 页面目录**相对模型根**的路径（写入模型库，切换模式时用）
+     */
+    private data class VariantPage(
+        /** 这套模式的 model3 文件 */
+        val modelFile: File,
+        val name: String,
+        val root: File,
+        val pageDir: String,
+        val layout: String,
+        /** 包配置里对应的段名（`keyboard` / `standard` / `gamepad`） */
+        val mode: String? = null,
+    ) {
+        /** 包配置里的段名；认不出来返回 null（`loadExpressionBindings` 会兜底） */
+        fun configMode(): String? = mode
+    }
+
+    /**
+     * 导入一个**多模式模型**:每套模式各写一套页面，登记成一个模型（可切换）。
+     *
+     * ⚠️ 为什么页面写在"变体自己的目录"里:
+     * 生成页面时贴图路径是**相对页面目录**写的（`cat_model/cat.8192/texture_00.png`），
+     * 键帽资源也是同级目录。把页面放在变体根目录，这些相对路径天然成立；
+     * 若统一放在包根，就得写一堆 `../..`，`file://` 下很容易出错。
+     *
+     * ⚠️ 摘要仍然按**整个包**算（与单模式一致）:
+     * 多模式是一个模型，不该因为"这次只看了键盘那套"就变两个模型。
+     */
+    private fun importVariants(
+        dir: File,
+        dirId: String,
+        displayName: String,
+        scan: Scan,
+        skippedJunk: Int,
+    ): Result<Outcome> {
+        val plan = scan.picks.map { pick ->
+            val modelFile = File(dir, pick.path)
+            val modelBase = modelFile.parentFile ?: dir
+            /*
+             * 变体根目录:
+             * 1. 优先找"带 BongoCat 键帽资源标记"的祖先目录（标准社区包）；
+             * 2. 否则取 model3 的**父目录的父目录**（`<变体>/cat_model/cat.model3.json`
+             *    是这个生态的固定结构），再兜底到 model3 所在目录。
+             */
+            val markerRoot = ancestorWithResourceMarker(modelBase, dir)
+            val root = markerRoot ?: modelBase.parentFile?.takeIf { it.path.length > dir.path.length } ?: modelBase
+            val layout = if (markerRoot != null) Live2DModels.LAYOUT_FULL else Live2DModels.LAYOUT_CAT
+            VariantPage(
+                name = variantLabel(pick.variant, root.name),
+                mode = pick.variant,
+                modelFile = modelFile,
+                root = root,
+                pageDir = relativePath(dir, root),
+                layout = layout,
+            )
+        }.distinctBy { it.pageDir }
+
+        if (plan.size <= 1) {
+            /* 万一所有变体都落在同一个目录（奇怪但可能），退回单模式逻辑 */
+            AppLog.w(TAG, "多变体候选落在同一目录，按单模式导入")
+            return Result.failure(IllegalStateException("这个模型的多套模式在同一个目录里，无法分开"))
+        }
+
+        /* ① 先算摘要并去重 —— 同一份包不该占两份空间 */
+        val digest = computeDigest(dir)
+        Live2DModels.findByDigest(digest)?.let { existing ->
+            AppLog.i(TAG, "模型内容与已有模型一致，直接复用：${existing.displayName}")
+            dir.deleteRecursively()
+            return Result.success(Outcome(existing, reused = true, notes = emptyList()))
+        }
+
+        /* ② 逐套建页面 */
+        val supportedKeys = mutableSetOf<String>()
+        var adaptedCount = 0
+        var adaptedSample = 1
+
+        plan.forEach { variant ->
+            val modelFile = variant.modelFile
+            val json = runCatching { JSONObject(modelFile.readText()) }.getOrNull()
+            val refs = json?.optJSONObject("FileReferences")
+            if (json == null || refs == null) {
+                AppLog.w(TAG, "变体 ${variant.name} 的描述文件不可用，跳过")
+                return@forEach
+            }
+            val modelBase = modelFile.parentFile ?: return@forEach
+
+            /* 贴图降采样:每套各自算（三套的贴图可能大小不同） */
+            runCatching { Live2DTextureAdapter.adapt(modelBase, refs) }
+                .onFailure { AppLog.w(TAG, "变体 ${variant.name} 贴图降采样失败：${it.javaClass.simpleName}") }
+                .getOrNull()
+                ?.let { adapted ->
+                    adaptedCount += adapted.count
+                    adaptedSample = maxOf(adaptedSample, adapted.sample)
+                }
+
+            val moc = resolveInside(modelBase, refs.optString("Moc"), dir) ?: return@forEach
+            val textures = buildList {
+                val array = refs.optJSONArray("Textures") ?: return@buildList
+                for (index in 0 until array.length()) {
+                    resolveInside(modelBase, array.optString(index), dir)?.takeIf { it.isFile }?.let { add(it) }
+                }
+            }
+            if (textures.isEmpty()) {
+                AppLog.w(TAG, "变体 ${variant.name} 没有可用贴图，跳过")
+                return@forEach
+            }
+
+            val resourceDir = if (variant.layout == Live2DModels.LAYOUT_FULL) variant.root else null
+            if (resourceDir != null) {
+                fillMissingKeycaps(resourceDir)
+                supportedKeys += providedKeycaps(resourceDir)
+            }
+
+            val variantExpressions = loadExpressions(json, modelBase, dir)
+            writeModelData(
+                dir = variant.root,
+                moc = moc,
+                textures = textures,
+                resourceDir = resourceDir,
+                layout = variant.layout,
+                /* ⚠️ Mver 风格包不能收模型手臂，见 writeModelData 的说明 */
+                mverHands = hasMverHands(variant.root),
+                expressions = variantExpressions,
+                exprBindings = loadExpressionBindings(
+                    packageRoot = dir,
+                    /* 包配置按模式分段（keyboard / standard / gamepad） */
+                    mode = variant.configMode(),
+                    expressionCount = variantExpressions.length(),
+                ),
+            )
+            File(variant.root, Live2DModels.ENTRY_INDEX).writeText(buildHtml(variant.layout))
+            AppLog.i(TAG, "已生成变体页面：${variant.name}（${variant.pageDir}）")
+        }
+
+        /* ③ 登记（一个模型，多个模式） */
+        val entry = Live2DModels.registerImported(
+            dirId = dirId,
+            displayName = displayName,
+            digest = digest,
+            layout = plan.first().layout,
+            supportedKeys = supportedKeys,
+            variants = plan.map { Live2DVariant(name = it.name, pageDir = it.pageDir) },
+        )
+
+        val notes = buildList {
+            add(
+                "这个模型带 ${plan.size} 套模式（${plan.joinToString(" / ") { it.name }}），" +
+                    "已选用「${plan.first().name}」。可在「库 → Live2D」里切换。",
+            )
+            if (skippedJunk > 0) {
+                add("已忽略 $skippedJunk 个无关文件（exe / dll / 说明文档等）。")
+            }
+            if (adaptedCount > 0) {
+                add("贴图对手机来说太大了，已把 $adaptedCount 张贴图缩小到 1/$adaptedSample。")
+            }
+        }
+        AppLog.i(TAG, "多模式模型导入成功：${entry.displayName}（${plan.size} 套）")
+        return Result.success(Outcome(entry, reused = false, notes = notes))
+    }
+
+    /** 从 [start] 往上找第一个"带 BongoCat 键帽资源标记"的目录（不超过 [stopAt]） */
+    private fun ancestorWithResourceMarker(start: File, stopAt: File): File? {
+        var current: File? = start
+        val limit = stopAt.canonicalPath.length
+        while (current != null && current.canonicalPath.length >= limit) {
+            if (isResourceDir(current)) return current
+            current = current.parentFile
+        }
+        return null
+    }
+
+    /** 这个目录像不像 BongoCat 的键帽资源目录（判据与 [findResourceDir] 一致） */
+    private fun isResourceDir(dir: File): Boolean =
+        File(dir, RESOURCE_MARKER).isFile && (
+            File(dir, "cover.png").isFile ||
+                File(dir, "left-keys").isDirectory ||
+                File(dir, "right-keys").isDirectory
+        )
+
+    /** 变体目录名 → 用户看得懂的模式名 */
+    private fun variantLabel(variant: String?, dirName: String): String = when (variant) {
+        "keyboard" -> "键盘"
+        "standard" -> "标准"
+        "gamepad" -> "手柄"
+        else -> variant ?: dirName
+    }
+
+    /* ============================================================
      * 解压
      * ============================================================ */
 
-    private fun extract(context: Context, uri: Uri, target: File) {
+    /**
+     * 解压到 [target]。
+     *
+     * @return 被丢掉的**无关文件**数量（exe / dll / 说明文档等），用于给用户提示
+     */
+    private fun extract(context: Context, uri: Uri, target: File): Int {
         val input = context.contentResolver.openInputStream(uri)
             ?: error("无法读取所选文件")
 
@@ -268,10 +720,29 @@ object Live2DModelImporter {
             ZipInputStream(stream.buffered()).use { zip ->
                 var count = 0
                 var total = 0L
+                var skipped = 0
 
                 while (true) {
                     val entry = zip.nextEntry ?: break
                     if (++count > MAX_FILES) error("压缩包里文件太多（超过 $MAX_FILES 个）")
+
+                    /*
+                     * ⚠️ **无关文件直接跳过，不落盘**。
+                     *
+                     * 这些包本来就是 Windows 版 BongoCat 的发行包:
+                     * 实测样本里有 2 个 exe + 13 个 dll + docx + psd，约 24 MB。
+                     * 以前它们会一起进模型库，导出配置时再被打进 `.sthkey` 带出去。
+                     *
+                     * ⚠️ 跳过的**内容仍然要读掉**（`closeEntry` 之前必须消费完），
+                     * 否则 `ZipInputStream` 会把后面的条目读错位。
+                     */
+                    if (!entry.isDirectory && Live2DJunkFilter.isJunk(entry.name)) {
+                        skipped++
+                        val buffer = ByteArray(64 * 1024)
+                        while (zip.read(buffer) > 0) { /* 丢弃 */ }
+                        zip.closeEntry()
+                        continue
+                    }
 
                     val out = safeTarget(target, entry.name)
                     if (entry.isDirectory) {
@@ -296,6 +767,11 @@ object Live2DModelImporter {
                     }
                     zip.closeEntry()
                 }
+
+                if (skipped > 0) {
+                    AppLog.i(TAG, "已跳过 $skipped 个无关文件（exe/dll/文档等）")
+                }
+                return skipped
             }
         }
     }
@@ -333,6 +809,25 @@ object Live2DModelImporter {
         textures: List<File>,
         resourceDir: File?,
         layout: String,
+        /*
+         * 这个包是不是 **Mver 风格的键盘猫包**（自带 PNG 手）。
+         *
+         * ⚠️ 用户报的原话:
+         * > 第三方模型，按按键手部会直接消失
+         *
+         * 原因:这类包（实测样本就是）在 `config.json` 里把每个键映射到
+         * `lefthand/<N>.png` / `righthand/<N>.png`，按下去时 **Mver 画那张 PNG**，
+         * 同时把模型自己的手臂用 `CatParamLeftHandDown=1` 收起来。
+         *
+         * 我们只做了"收起"这一半 —— PNG 手没画，于是模型的手直接消失。
+         *
+         * ⚠️ 所以这类包**暂时不去动那两个参数**（保持手臂在 idle 姿势），
+         * 宁可没有按压动画，也不能让手没了。
+         */
+        mverHands: Boolean = false,
+        /* 表情与按键组合（见 loadExpressions / loadExpressionBindings） */
+        expressions: JSONArray? = null,
+        exprBindings: JSONArray? = null,
     ) {
         val texturePaths = JSONArray().apply {
             textures.forEach { put(relativePath(dir, it)) }
@@ -351,7 +846,228 @@ object Live2DModelImporter {
             out.write("window.__BONGO_RESOURCE_BASE=${JSONObject.quote(resourceBase)};\n")
             out.write("window.__BONGO_IMPORTED_MODEL=true;\n")
             out.write("window.__BONGO_MODEL_LAYOUT=${JSONObject.quote(layout)};\n")
+            out.write("window.__BONGO_MVER_HANDS=$mverHands;\n")
+
+            /*
+             * ⚠️ 表情与按键组合**预解析后内联**。
+             *
+             * 为什么不给页面一个路径让它自己 fetch:
+             * 页面是 `file://`，WebView 对 `fetch`/XHR 读本地文件是**拒绝**的
+             * （moc 当初也是因为这个才用 base64 内联，见类注释）。
+             */
+            out.write("window.__BONGO_EXPRESSIONS=${expressions.orEmptyJsonArray()};\n")
+            out.write("window.__BONGO_EXPR_BINDINGS=${exprBindings.orEmptyJsonArray()};\n")
         }
+    }
+
+    /**
+     * 把 model3 的 `Expressions` 读成**扁平结构**，供运行时段直接用。
+     *
+     * 输出:`[{"name":"正常眼","params":[["Param14",0,"Add"], …]}]`
+     *
+     * ⚠️ 读不出来的表情直接跳过（不因为一个坏文件让整个模型导入失败）。
+     */
+    private fun loadExpressions(
+        modelJson: JSONObject,
+        modelBase: File,
+        root: File,
+    ): JSONArray {
+        val result = JSONArray()
+        val list = modelJson.optJSONObject("FileReferences")?.optJSONArray("Expressions") ?: return result
+
+        for (index in 0 until list.length()) {
+            val item = list.optJSONObject(index) ?: continue
+            val relative = item.optString("File").trim()
+            if (relative.isEmpty()) continue
+            val file = resolveInside(modelBase, relative, root) ?: continue
+            val json = runCatching { JSONObject(file.readText()) }.getOrNull() ?: continue
+
+            val params = JSONArray()
+            val array = json.optJSONArray("Parameters") ?: continue
+            for (p in 0 until array.length()) {
+                val param = array.optJSONObject(p) ?: continue
+                val id = param.optString("Id").trim()
+                if (id.isEmpty()) continue
+                params.put(
+                    JSONArray().apply {
+                        put(id)
+                        put(param.optDouble("Value", 0.0))
+                        put(param.optString("Blend").ifBlank { "Add" })
+                    },
+                )
+            }
+            if (params.length() == 0) continue
+
+            result.put(
+                JSONObject().apply {
+                    put("name", item.optString("Name").ifBlank { "表情 ${index + 1}" })
+                    put("params", params)
+                },
+            )
+        }
+        return result
+    }
+
+    /**
+     * 读包配置里"按键组合 → 表情下标"的绑定。
+     *
+     * Mver 的 `config.json` 里每个模式都有一段 `l2d_expression`:
+     * `[[18,219],[18,57],[18,48],[18,189]]` ——
+     * **外层下标 = 表情下标**，内层那几个数字是 **Windows 虚拟键码**，要一起按下。
+     *
+     * ⚠️ 这条语义是从 Axon 的 `mverComboBindings` 抄过来的（它就是这么解的），
+     * 不是我们猜的:它对每个内层数组调用 `mverKeyCombo`，把数字当 VK 翻成键名。
+     */
+    private fun loadExpressionBindings(
+        packageRoot: File,
+        mode: String?,
+        expressionCount: Int,
+    ): JSONArray {
+        val result = JSONArray()
+        if (expressionCount <= 0) return result
+
+        val config = listOf("config.json", "config.json5", "config.jsonc")
+            .map { File(packageRoot, it) }
+            .firstOrNull { it.isFile } ?: return result
+
+        val json = runCatching {
+            /* ⚠️ 允许注释:社区包常见 `//注释`，org.json 会直接解析失败 */
+            JSONObject(stripJsonComments(config.readText()))
+        }.getOrNull() ?: return result
+
+        val section = json.optJSONObject(mode ?: "standard")
+            ?: json.optJSONObject("keyboard")
+            ?: return result
+        val combos = section.optJSONArray("l2d_expression") ?: return result
+
+        for (index in 0 until minOf(combos.length(), expressionCount)) {
+            val combo = combos.optJSONArray(index) ?: continue
+            val keys = JSONArray()
+            for (k in 0 until combo.length()) {
+                vkKeyName(combo.optInt(k, -1))?.let { keys.put(it) }
+            }
+            if (keys.length() == 0) continue
+            result.put(
+                JSONObject().apply {
+                    put("keys", keys)
+                    put("index", index)
+                },
+            )
+        }
+        return result
+    }
+
+    /** 去掉 `//` 与 `/* */` 注释（字符串里的不动） */
+    private fun stripJsonComments(text: String): String {
+        val out = StringBuilder(text.length)
+        var i = 0
+        var inString = false
+        while (i < text.length) {
+            val c = text[i]
+            when {
+                inString -> {
+                    out.append(c)
+                    if (c == '\\' && i + 1 < text.length) {
+                        out.append(text[i + 1])
+                        i += 2
+                        continue
+                    }
+                    if (c == '"') inString = false
+                    i++
+                }
+
+                c == '"' -> {
+                    inString = true
+                    out.append(c)
+                    i++
+                }
+
+                c == '/' && i + 1 < text.length && text[i + 1] == '/' -> {
+                    while (i < text.length && text[i] != '\n') i++
+                }
+
+                c == '/' && i + 1 < text.length && text[i + 1] == '*' -> {
+                    i += 2
+                    while (i + 1 < text.length && !(text[i] == '*' && text[i + 1] == '/')) i++
+                    i += 2
+                }
+
+                else -> {
+                    out.append(c)
+                    i++
+                }
+            }
+        }
+        return out.toString()
+    }
+
+    /**
+     * Windows 虚拟键码 → 我们运行时用的键名。
+     *
+     * ⚠️ 映射表照 Axon 的 `mverVkName` 抄（那份是社区包实测过的），
+     * 键名要与我们 `runtime.js` 的 `LEFT_KEYS`/`RIGHT_KEYS` 一致，
+     * 否则按下去永远匹配不上组合。
+     */
+    private fun vkKeyName(vk: Int): String? {
+        if (vk in 0x30..0x39) return "Num" + (vk - 0x30)
+        if (vk in 0x41..0x5A) return "Key" + ('A' + (vk - 0x41))
+        if (vk in 0x60..0x69) return "Numpad" + (vk - 0x60)
+        if (vk in 0x70..0x7B) return "F" + (vk - 0x70 + 1)
+        return when (vk) {
+            0x01 -> "MouseLeft"
+            0x02 -> "MouseRight"
+            0x04 -> "MouseMiddle"
+            0x08 -> "Backspace"
+            0x09 -> "Tab"
+            0x0D -> "Return"
+            0x10 -> "Shift"
+            0x11 -> "Control"
+            0x12 -> "Alt"
+            0x13 -> "CapsLock"
+            0x1B -> "Escape"
+            0x20 -> "Space"
+            0xA0 -> "ShiftLeft"
+            0xA1 -> "ShiftRight"
+            0xA2 -> "ControlLeft"
+            0xA3 -> "ControlRight"
+            0x25 -> "LeftArrow"
+            0x26 -> "UpArrow"
+            0x27 -> "RightArrow"
+            0x28 -> "DownArrow"
+            0xBB -> "Equal"
+            0xBC -> "Comma"
+            0xBD -> "Minus"
+            0xBE -> "Period"
+            0xBF -> "Slash"
+            0xC0 -> "BackQuote"
+            0xDB -> "BracketLeft"
+            0xDC -> "Backslash"
+            0xDD -> "BracketRight"
+            0xDE -> "Quote"
+            else -> null
+        }
+    }
+
+    private fun JSONArray?.orEmptyJsonArray(): String =
+        this?.toString() ?: "[]"
+
+    /**
+     * 这个目录像不像 **Mver 风格的键盘猫包**（自带逐键 PNG 手）。
+     *
+     * ⚠️ 不能只认 `lefthand/` + `righthand/`:
+     * 实测样本的 `keyboard` 变体是 `lefthand/`+`righthand/`，
+     * 但 **`standard` 变体用的是 `hand/`**，`gamepad` 又是另一套名字 ——
+     * 第一版按名字卡死，结果标准模式没被识别出来（用户报"标准模式手还是消失"）。
+     *
+     * 社区包命名五花八门，所以常见的都算上，再把 Mver 包根的 `config.json` 也算一条。
+     *
+     * ⚠️ 这个标记现在**不决定"收不收手臂"**（导入模型一律不收，见 runtime 的
+     * `syncHandOverrides`），它是留给后续"PNG 手合成"用的。
+     */
+    private fun hasMverHands(dir: File): Boolean {
+        if (File(dir, "lefthand").isDirectory || File(dir, "righthand").isDirectory) return true
+        if (File(dir, "hand").isDirectory || File(dir, "left_hand").isDirectory) return true
+        return listOf("config.json", "config.json5", "config.jsonc").any { File(dir, it).isFile }
     }
 
     /**
@@ -608,7 +1324,11 @@ object Live2DModelImporter {
      */
     private fun computeDigest(dir: File): String {
         val files = dir.walkTopDown()
-            .filter { it.isFile }
+            /*
+             * ⚠️ 跳过无关文件:老模型库里可能已经躺着 exe/dll（过滤是后加的）。
+             * 不跳的话"同一个模型因为带了 exe 而摘要不同"，去重就失效了。
+             */
+            .filter { it.isFile && !Live2DJunkFilter.isJunk(it.name) }
             .sortedBy { relativePath(dir, it) }
 
         val digest = MessageDigest.getInstance("SHA-256")

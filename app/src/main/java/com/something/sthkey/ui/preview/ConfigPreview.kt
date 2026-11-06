@@ -149,6 +149,8 @@ fun ConfigPreview(
             val windowed = CustomLayout.toWindow(config.custom.components, customBounds)
 
             CustomKeyCanvas(
+                /* ⚠️ 预览/编辑器固定 120:动态数值会让画布每秒重排，也拖慢预览 */
+                fps = 120.0,
                 settings = config.custom.copy(components = windowed.components),
                 pressedCodes = emptySet(),
                 scale = pxToDp * fit,
@@ -158,6 +160,10 @@ fun ConfigPreview(
                 baseHeight = windowed.bounds.height,
                 /* 预览要跟着显示整体透明度 —— 否则预览与实际不一致 */
                 overallAlpha = config.customOpacityPercent.coerceIn(0, 100) / 100f,
+                /* ⚠️ 整体字符缩放（与每个组件自己的文字缩放相乘） */
+                overallTextScalePercent = config.customTextScalePercent,
+                /* ⚠️ 媒体静态预览（用户要求:预览静态就好，不要动态） */
+                staticMedia = true,
                 /*
                  * 与悬浮窗一样自适应：按预览框实际给的空间反推缩放，
                  * 不会因为多层尺寸推算的误差而溢出。

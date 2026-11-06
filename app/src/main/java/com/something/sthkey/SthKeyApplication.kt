@@ -9,10 +9,12 @@ import com.something.sthkey.core.log.CrashLogger
 import com.something.sthkey.core.prefs.AppPrefs
 import com.something.sthkey.data.config.ConfigStore
 import com.something.sthkey.data.live2d.Live2DModelImporter
-import com.something.sthkey.domain.font.FontRegistry
 import com.something.sthkey.domain.font.bitmap.BitmapFontStore
+import com.something.sthkey.domain.font.FontRegistry
 import com.something.sthkey.domain.live2d.Live2DModels
+import com.something.sthkey.domain.media.CustomMediaStore
 import com.something.sthkey.domain.overlay.OverlayLayouts
+
 
 /**
  * 应用入口。
@@ -76,8 +78,26 @@ class SthKeyApplication : Application() {
         BitmapFontStore.pruneMissing()
 
         // Live2D 模型库同理：导入的模型放在私有目录
+        /*
+         * 自定义 Key 的媒体资源库（图片 / 动图 / 视频）。
+         *
+         * ⚠️ **必须初始化**，否则 `fileOfId` 永远返回 null，
+         * 组件只会画成"（未选择资源）"的占位框 —— 看起来像资源没导入成功。
+         */
+        CustomMediaStore.init(this)
+
         Live2DModels.init(this)
         Live2DModels.pruneMissing()
+        /*
+         * 再清一次**没记录的目录**。
+         *
+         * ⚠️ `pruneMissing` 修好之前，多模式模型的记录被误删过，
+         * 但 100+ MB 的目录还留在磁盘上（既占空间、又永远不会出现在库里）。
+         * 这里顺手回收;判据很保守（32 位 id + 目录里确实有模型内容），
+         * 见 `pruneOrphanDirectories` 的说明。
+         */
+        runCatching { Live2DModels.pruneOrphanDirectories() }
+            .onSuccess { if (it > 0) AppLog.i("App", "回收了 $it 个无记录的模型目录") }
         // 生成页面的逻辑可能变过：把已导入模型的页面刷新到当前版本
         Live2DModelImporter.repairImportedPages()
 
@@ -144,3 +164,4 @@ class SthKeyApplication : Application() {
         }.getOrDefault("")
     }
 }
+

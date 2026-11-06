@@ -1,11 +1,13 @@
 package com.something.sthkey.core.prefs
 
 import android.content.Context
-import com.something.sthkey.data.config.ExportMethod
 import android.content.SharedPreferences
+import com.something.sthkey.data.config.ExportMethod
+import com.something.sthkey.data.fps.FpsMonitor
 import com.something.sthkey.domain.capture.KeyMode
 import com.something.sthkey.ui.EditMode
 import com.something.sthkey.ui.EditorPanelSide
+
 
 /**
  * 编辑器画布的**预设底色**。
@@ -611,6 +613,26 @@ class AppPrefs private constructor(context: Context) {
 
     /*
      * ============================================================
+     * FPS 显示
+     * ============================================================
+     */
+
+    /**
+     * FPS 读取通道。默认 [FpsMonitor.Mode.AUTO]（有 Shizuku 走 SurfaceFlinger，否则估算上限）。
+     *
+     * ⚠️ 存 **id 字符串**而不是 ordinal:枚举加成员时 ordinal 会整体错位，
+     * 用户的设置会莫名其妙变成别的档位（与 `appearanceColorMode` 同一个理由）。
+     *
+     * ⚠️ 手动档位是**调试用**的:自动判断出错时可以强制走一条，不必靠猜。
+     */
+    var fpsMode: FpsMonitor.Mode
+        get() = FpsMonitor.Mode.fromId(prefs.getString(KEY_FPS_MODE, null))
+        set(value) {
+            prefs.edit().putString(KEY_FPS_MODE, value.id).apply()
+        }
+
+    /*
+     * ============================================================
      * 外观（Miuix 主题 + 底栏样式）
      * ============================================================
      * 用户的原话:
@@ -720,6 +742,7 @@ class AppPrefs private constructor(context: Context) {
         private const val KEY_CONFIG_LIST_COMPACT_ACTIONS = "config_list_compact_actions"
         private const val KEY_CONFIG_LIST_COLUMNS = "config_list_columns"
         private const val KEY_EXPORT_METHOD = "export_method"
+    private const val KEY_FPS_MODE = "fps_mode"
 
         /* 外观（Miuix 主题与底栏样式）—— 见 `appearance` 的说明 */
         private const val KEY_APPEARANCE_COLOR_MODE = "appearance_color_mode"

@@ -55,6 +55,42 @@ data class Live2DModelEntry(
     val supportedKeys: Set<String> = emptySet(),
     val dir: File? = null,
     val digest: String = "",
+    /**
+     * 多模式变体（标准 / 键盘 / 手柄 …）。
+     *
+     * ⚠️ 只有一个变体的模型这里是**空列表**（绝大多数模型），
+     * 那种情况下 [pageUrl] 就是目录根上的 `index.html`，与旧行为完全一致。
+     */
+    val variants: List<Live2DVariant> = emptyList(),
+    /** 当前选中的变体（[Live2DVariant.pageDir]）；空串 = 根目录 */
+    val variant: String = "",
+    /**
+     * 模型**实际内容**的宽高比（宽 / 高）。
+     *
+     * ⚠️ 为什么需要它:
+     * 悬浮窗是固定设计尺寸 612×354，而导入模型的实际内容往往是竖构图，
+     * 于是被塞进那块区域后**左、右、下各留一大截空白**（用户报的"多一截空气"）。
+     *
+     * 值由页面在加载完成后实测回报（`contentBounds`），存在模型记录里，
+     * 之后算窗口尺寸时按它来，窗口就与内容比例一致、四周没有多余空白。
+     *
+     * `0f` = 还没测到（按 612×354 兜底）。
+     */
+    val contentAspect: Float = 0f,
+)
+
+/**
+ * 模型包里的**一套模式**。
+ *
+ * 实测样本 `鸣潮卡提希娅最牛逼键盘猫模型` 同时带 `keyboard` / `standard` / `gamepad`
+ * 三套，每套的键帽资源、moc 都不同，所以必须分开建页面。
+ *
+ * @param name 给人看的模式名（`键盘` / `标准` / `手柄` / 作者原始目录名）
+ * @param pageDir 相对模型目录的页面所在目录（**空串 = 目录根**）
+ */
+data class Live2DVariant(
+    val name: String,
+    val pageDir: String,
 )
 
 /**
@@ -154,13 +190,24 @@ object Live2DModels {
             displayName = record.displayName,
             kind = Live2DModelKind.IMPORTED,
             subtitle = "${record.layoutLabel} · ${directorySizeLabel(dir)}",
-            pageUrl = Uri.fromFile(File(dir, ENTRY_INDEX)).toString(),
+            /*
+             * ⚠️ 多模式模型:页面在各变体自己的目录里（`<variant>/index.html`），
+             * 因为那里的相对路径（`cat_model/…`、`bg.png`、`left-keys/`）才是对的。
+             * 单模式模型 `variant` 是空串，就是根目录的 `index.html`（旧行为）。
+             */
+            pageUrl = Uri.fromFile(
+                if (record.variant.isEmpty()) File(dir, ENTRY_INDEX)
+                else File(File(dir, record.variant), ENTRY_INDEX),
+            ).toString(),
             // 导入模型走的是键盘版 runtime（贴图分组里有方向键），所以有右侧
             hasArrowSide = true,
             layout = record.layout,
             supportedKeys = record.supportedKeys,
             dir = dir,
             digest = record.digest,
+            variants = record.variants,
+            variant = record.variant,
+            contentAspect = record.contentAspect,
         )
     }
 
@@ -212,6 +259,7 @@ object Live2DModels {
         digest: String,
         layout: String,
         supportedKeys: Set<String> = emptySet(),
+        variants: List<Live2DVariant> = emptyList(),
     ): Live2DModelEntry {
         val records = readImported().filterNot { it.id == dirId }.toMutableList()
         records += Record(
@@ -220,6 +268,9 @@ object Live2DModels {
             digest = digest,
             layout = layout,
             supportedKeys = supportedKeys,
+            variants = variants,
+            /* ⚠️ 默认选第一个:导入时排序规则已经把 keyboard 排在最前 */
+            variant = variants.firstOrNull()?.pageDir.orEmpty(),
         )
         writeImported(records)
         AppLog.i(
@@ -228,6 +279,57 @@ object Live2DModels {
                 "支持的键 ${supportedKeys.size} 个）",
         )
         return importedModels().first { it.id == IMPORTED_PREFIX + dirId }
+    }
+
+    /**
+     * 切换多模式模型的**当前模式**。
+     *
+     * ⚠️ 只改"这个模型用哪一套"，**不改配置**:
+     * 多模式是**模型**的属性（用户说的"库里展开选模式"），不是配置的属性。
+     * 导出时整个模型（所有模式）都会被打包带走 —— 见 `ConfigPackageManager`。
+     *
+     * @return 是否真的改了
+     */
+    fun selectVariant(id: String, pageDir: String): Boolean {
+        val raw = id.removePrefix(IMPORTED_PREFIX)
+        val records = readImported()
+        val index = records.indexOfFirst { it.id == raw }
+        if (index < 0) return false
+
+        val record = records[index]
+        if (record.variants.none { it.pageDir == pageDir }) {
+            AppLog.w(TAG, "变体不存在:$raw / $pageDir")
+            return false
+        }
+        if (record.variant == pageDir) return false
+
+        records[index] = record.copy(variant = pageDir)
+        writeImported(records)
+        AppLog.i(TAG, "模型已切换模式:$raw → ${pageDir.ifEmpty { "根目录" }}")
+        return true
+    }
+
+    /**
+     * 记下模型**实际内容**的宽高比（由页面实测回报）。
+     *
+     * ⚠️ 只在"还没记过"或"变化明显"时才写盘，避免每次开悬浮窗都写一次偏好。
+     * @return 是否真的更新了（调用方据此决定要不要重算窗口尺寸）
+     */
+    fun updateContentAspect(id: String, aspect: Float): Boolean {
+        if (!aspect.isFinite() || aspect <= 0f) return false
+        val raw = id.removePrefix(IMPORTED_PREFIX)
+        val records = readImported()
+        val index = records.indexOfFirst { it.id == raw }
+        if (index < 0) return false
+
+        val previous = records[index].contentAspect
+        /* 相差 1% 以内就不动 —— 亚像素级别的抖动不该触发重排窗口 */
+        if (previous > 0f && kotlin.math.abs(previous - aspect) / previous < 0.01f) return false
+
+        records[index] = records[index].copy(contentAspect = aspect)
+        writeImported(records)
+        AppLog.i(TAG, "模型内容比例已记录:$raw → %.3f".format(aspect))
+        return true
     }
 
     /**
@@ -283,14 +385,72 @@ object Live2DModels {
      *
      * 用户清应用数据、或手工删目录之后会出现这种状态；
      * 留着的话模型列表里会有一项选了没反应。
+     *
+     * ============================================================
+     * ⚠️⚠️ 多模式模型的页面**不在根目录**
+     * ============================================================
+     * 多模式（标准 / 键盘 / 手柄）的页面写在各自的变体目录里
+     * （`<dirId>/<pageDir>/index.html`），根目录根本没有 `index.html`。
+     *
+     * 第一版这里只查根目录 —— 结果是**多模式模型一重启就被当成失效记录删掉**，
+     * 用户报的「导入的模型不持久化了，杀进程重进就没」就是它。
+     *
+     * ⚠️ 所以判定要按**选定变体的页面**来查；没有变体信息的老记录仍然查根目录。
      */
     fun pruneMissing() {
         val records = readImported()
-        val alive = records.filter { File(File(importDir(), it.id), ENTRY_INDEX).isFile }
+        val alive = records.filter { record -> pageFileOf(record).isFile }
         if (alive.size != records.size) {
             writeImported(alive)
             AppLog.w(TAG, "清理了 ${records.size - alive.size} 个失效模型记录")
         }
+    }
+
+    /** 这条记录**当前选中变体**的页面文件 */
+    private fun pageFileOf(record: Record): File {
+        val dir = File(importDir(), record.id)
+        /*
+         * 选中变体为空（老记录 / 单模式）→ 根目录页面；
+         * 否则看变体目录。多模式的记录一定带 `variant`，但这里也兼容
+         * "只有 variants 没有 variant" 的中间状态（取第一套）。
+         */
+        val pageDir = record.variant.ifEmpty { record.variants.firstOrNull()?.pageDir.orEmpty() }
+        return if (pageDir.isEmpty()) File(dir, ENTRY_INDEX) else File(File(dir, pageDir), ENTRY_INDEX)
+    }
+
+    /**
+     * 删掉"**没有记录、但文件还在**"的模型目录。
+     *
+     * 起因:`pruneMissing()` 修好之前，多模式模型的记录被误删过，
+     * 而它们 100+ MB 的目录还留在磁盘上 —— 既占空间又永远不会出现在库里。
+     *
+     * ⚠️ 保守判据，两条都满足才删:
+     * 1. 目录名是导入器生成的 32 位十六进制 id（别误删用户放进去的东西）；
+     * 2. 目录里确实有模型内容（`index.html` 或任意 `*.model3.json`）。
+     *
+     * @return 清掉的目录数
+     */
+    fun pruneOrphanDirectories(): Int {
+        val context = appContext ?: return 0
+        val known = readImported().map { it.id }.toSet()
+        val root = importRoot(context)
+        val dirs = root.listFiles()?.filter { it.isDirectory } ?: return 0
+
+        var removed = 0
+        dirs.forEach { dir ->
+            if (dir.name in known) return@forEach
+            if (!dir.name.matches(Regex("[0-9a-f]{32}"))) return@forEach
+
+            val looksLikeModel = File(dir, ENTRY_INDEX).isFile ||
+                dir.walkTopDown().any { it.isFile && it.name.endsWith(".model3.json", ignoreCase = true) }
+            if (!looksLikeModel) return@forEach
+
+            if (runCatching { dir.deleteRecursively() }.getOrDefault(false)) {
+                removed++
+                AppLog.w(TAG, "清理了没有记录的模型目录：${dir.name}")
+            }
+        }
+        return removed
     }
 
     /** 重名自动加序号（与配置、字体一致） */
@@ -326,6 +486,12 @@ object Live2DModels {
         val layout: String,
         /** 真实提供键帽的键名；空集 = 不过滤 */
         val supportedKeys: Set<String> = emptySet(),
+        /** 多模式变体；空列表 = 单模式（绝大多数模型） */
+        val variants: List<Live2DVariant> = emptyList(),
+        /** 当前选中的变体（空串 = 根目录页面） */
+        val variant: String = "",
+        /** 内容宽高比（宽/高）；0 = 还没测到。见 [Live2DModelEntry.contentAspect] */
+        val contentAspect: Float = 0f,
     ) {
         val layoutLabel: String
             get() = when (layout) {
@@ -361,6 +527,22 @@ object Live2DModels {
                             displayName = item.optString("name").ifBlank { "导入的模型" },
                             digest = item.optString("digest"),
                             layout = item.optString("layout").ifBlank { LAYOUT_CAT },
+                            variants = item.optJSONArray("variants")?.let { array ->
+                                buildList {
+                                    for (index in 0 until array.length()) {
+                                        val v = array.optJSONObject(index) ?: continue
+                                        val pageDir = v.optString("pageDir")
+                                        add(
+                                            Live2DVariant(
+                                                name = v.optString("name").ifBlank { "模式" },
+                                                pageDir = pageDir,
+                                            ),
+                                        )
+                                    }
+                                }
+                            }.orEmpty(),
+                            variant = item.optString("variant"),
+                            contentAspect = item.optDouble("contentAspect", 0.0).toFloat(),
                             supportedKeys = item.optJSONArray("supportedKeys")
                                 ?.let { array ->
                                     buildSet {
@@ -395,6 +577,25 @@ object Live2DModels {
                         "supportedKeys",
                         JSONArray().apply { record.supportedKeys.forEach { put(it) } },
                     )
+                    if (record.variants.isNotEmpty()) {
+                        put(
+                            "variants",
+                            JSONArray().apply {
+                                record.variants.forEach { variant ->
+                                    put(
+                                        JSONObject().apply {
+                                            put("name", variant.name)
+                                            put("pageDir", variant.pageDir)
+                                        },
+                                    )
+                                }
+                            },
+                        )
+                        put("variant", record.variant)
+                    }
+                    if (record.contentAspect > 0f) {
+                        put("contentAspect", record.contentAspect.toDouble())
+                    }
                 },
             )
         }

@@ -98,6 +98,34 @@ object Live2DSemantics {
         111 to "Delete",
 
         /*
+         * ============================================================
+         * 符号键与小键盘（**为表情快捷键补的**）
+         * ============================================================
+         * ⚠️ 社区包（Mver 键盘猫）的表情快捷键写在 `config.json` 的
+         * `l2d_expression` 里，用的是 Windows 虚拟键码，实测样本是
+         * `Alt + [ ] 9 0` 这种组合。
+         *
+         * 这些键以前**不在表里** → `semanticOf` 返回 null → 事件根本不转发，
+         * 表情自然永远切不了。它们不加进 runtime 的 `LEFT_KEYS`，
+         * 所以也不会去加载不存在的键帽图。
+         */
+        26 to "BracketLeft",
+        27 to "BracketRight",
+        12 to "Minus",
+        13 to "Equal",
+        51 to "Comma",
+        52 to "Period",
+        39 to "Semicolon",
+        40 to "Quote",
+        43 to "Backslash",
+        86 to "IntlBackslash",
+
+        /* 小键盘数字（表达式快捷键常用）*/
+        82 to "Numpad0", 79 to "Numpad1", 80 to "Numpad2", 81 to "Numpad3",
+        75 to "Numpad4", 76 to "Numpad5", 77 to "Numpad6",
+        71 to "Numpad7", 72 to "Numpad8", 73 to "Numpad9",
+
+        /*
          * 左右 Meta 都叫 Meta —— 两个键码映射到同一个语义。
          *
          * 这就是"必须按语义计数而不是按布尔"的原因：同时按住左右 Meta，

@@ -3,9 +3,9 @@ package com.something.sthkey.data.incoming
 import android.content.Context
 import android.net.Uri
 import com.something.sthkey.core.log.AppLog
-import java.io.File
 import java.io.IOException
-import java.util.zip.ZipFile
+import java.io.InputStream
+import java.util.zip.ZipInputStream
 
 /**
  * **按内容嗅探**外部文件的类型。
@@ -36,28 +36,33 @@ import java.util.zip.ZipFile
  *
  * ⚠️ 反过来（先判字体/图片）会把 Live2D 包误判成图片字体 —— 那类包里有贴图，
  * 按"图集"去读也能读出东西来，最后导入一个残缺的图片字体，比直接报错更糟。
+ *
+ * ============================================================
+ * ⚠️⚠️ 为什么是"流式嗅探"而不是"先复制到缓存"
+ * ============================================================
+ * 第一版是 `copyToCache()` 之后用 `ZipFile` 随机访问。那条路有两个硬伤:
+ *
+ * | 问题 | 后果 |
+ * |---|---|
+ * | 有一个 64 MB 的大小上限 | 实测的 Live2D 包有 **110 MB** → 直接被拒 → 提示"读不到这个文件"（用户报的 bug） |
+ * | 为了嗅探**整份复制一次** | 110 MB 的包要占 220 MB（缓存 + 解压），低存储设备直接失败 |
+ *
+ * 现在改成:用 `ZipInputStream` **流式扫一遍条目名**（不落盘、不留副本），
+ * 然后把**原 Uri** 交给导入器（每个导入器自己只需要顺序读一次）。
  */
 object FileSniffer {
 
     private const val TAG = "FileSniffer"
 
-    /** 单个文件的大小上限；超过直接拒绝（防止把存储写满） */
-    const val MAX_BYTES = 64L * 1024 * 1024
-
     /** 扫描 zip 时的条目数上限（防 zip 炸弹） */
     private const val MAX_ZIP_ENTRIES = 4000
+
+    /** 只读这么多个字节就够判断魔数（PNG 头 12 字节 + 字体 4 字节，留点余量） */
+    private const val HEAD_BYTES = 16
 
     /** 嗅探结果 */
     data class Sniffed(
         val kind: FileKind,
-        /**
-         * 落到私有缓存的副本。
-         *
-         * ⚠️ 后续导入**必须**用这个文件而不是原 Uri:
-         * 同一个 `content://` Uri 不能反复 `openInputStream`
-         * （有些 provider 第二次直接抛 SecurityException 或返回空流）。
-         */
-        val cacheFile: File,
         /** 原文件名（可能为 null —— 外部打开时经常给不出） */
         val originalName: String?,
     )
@@ -65,20 +70,29 @@ object FileSniffer {
     /**
      * 嗅探一个外部文件。
      *
-     * ⚠️ 磁盘操作，调用方放 IO 线程。
+     * ⚠️ 只读**一次** Uri（顺序读），不产生任何临时文件。
      *
      * @return 失败时 `Result.failure` 里带**给用户看的原因**
      */
     fun sniff(context: Context, uri: Uri, originalName: String?): Result<Sniffed> {
-        val cacheFile = copyToCache(context, uri)
+        val head = readHead(context, uri)
             ?: return Result.failure(IOException("读不到这个文件"))
 
+        val headKind = imageKindOf(head) ?: vectorFontKindOf(head)
+        if (headKind != null) {
+            return Result.success(Sniffed(headKind, originalName))
+        }
+
+        if (!isZip(head)) {
+            return Result.success(Sniffed(FileKind.UNKNOWN, originalName))
+        }
+
+        /* zip:再开一次流扫条目（只读条目名，manifest.json 还要读内容） */
         return try {
-            val kind = detectKind(context, cacheFile)
-            Result.success(Sniffed(kind, cacheFile, originalName))
+            Result.success(Sniffed(detectZipKind(context, uri), originalName))
         } catch (e: Exception) {
-            AppLog.w(TAG, "嗅探失败：${e.javaClass.simpleName}: ${e.message}")
-            Result.failure(IOException("这个文件读不出来（${e.javaClass.simpleName}）"))
+            AppLog.w(TAG, "zip 扫描失败：${e.javaClass.simpleName}: ${e.message}")
+            Result.success(Sniffed(FileKind.UNKNOWN, originalName))
         }
     }
 
@@ -86,58 +100,61 @@ object FileSniffer {
      * 判定
      * ============================================================ */
 
-    private fun detectKind(context: Context, file: File): FileKind {
-        /* 先看魔数：字体与图片都能在几十字节内确定，不用开 zip */
-        val head = readHead(file, 16)
-
-        imageKindOf(head)?.let { return it }
-        vectorFontKindOf(head)?.let { return it }
-
-        if (!isZip(head)) return FileKind.UNKNOWN
-
-        return detectZipKind(file)
-    }
-
     /**
      * zip 里到底是什么。
      *
      * ⚠️ 一次遍历同时收集三种线索，**不要**为了"顺序清晰"扫三遍:
      * 大包（材质包）扫一遍就要几百毫秒。
+     *
+     * ⚠️ 用 `ZipInputStream` 而不是 `ZipFile`:后者需要随机访问，
+     * 也就意味着必须先把整份文件落到磁盘上（见类注释）。
      */
-    private fun detectZipKind(file: File): FileKind {
+    private fun detectZipKind(context: Context, uri: Uri): FileKind {
         var hasModel3 = false
         var hasJavaAtlas = false
         var hasBedrockAtlas = false
         var manifestFormat: String? = null
 
-        try {
-            ZipFile(file).use { zip ->
-                val entries = zip.entries()
+        val input = context.contentResolver.openInputStream(uri)
+            ?: return FileKind.UNKNOWN
+
+        input.use { stream ->
+            ZipInputStream(stream.buffered()).use { zip ->
                 var count = 0
-                while (entries.hasMoreElements()) {
+                while (true) {
+                    val entry = zip.nextEntry ?: break
                     if (++count > MAX_ZIP_ENTRIES) {
                         AppLog.w(TAG, "zip 条目超过 $MAX_ZIP_ENTRIES，放弃扫描")
                         break
                     }
-                    val entry = entries.nextElement()
-                    if (entry.isDirectory) continue
+                    if (entry.isDirectory) {
+                        zip.closeEntry()
+                        continue
+                    }
 
                     val name = entry.name.substringAfterLast('/').lowercase()
                     when {
                         name == "manifest.json" -> {
                             /* ⚠️ 读内容才能分辨配置包与组合包 */
-                            manifestFormat = readManifestFormat(zip, entry.name)
+                            manifestFormat = readManifestFormat(zip)
                         }
 
                         name.endsWith(".model3.json") -> hasModel3 = true
                         name == "ascii.png" -> hasJavaAtlas = true
                         name == "default8.png" -> hasBedrockAtlas = true
                     }
+
+                    /*
+                     * ⚠️ 线索齐了就不必扫完:300 个条目的 Live2D 包扫完很便宜，
+                     * 但材质包可能上千条，先停能省一大截。
+                     */
+                    if (manifestFormat != null &&
+                        (hasModel3 || hasJavaAtlas || hasBedrockAtlas)
+                    ) {
+                        break
+                    }
                 }
             }
-        } catch (e: Exception) {
-            AppLog.w(TAG, "zip 打不开：${e.javaClass.simpleName}")
-            return FileKind.UNKNOWN
         }
 
         /*
@@ -155,16 +172,16 @@ object FileSniffer {
     }
 
     /**
-     * 读 `manifest.json` 的 `format` 字段。
+     * 从流里读 `manifest.json` 的 `format` 字段。
      *
      * ⚠️ 不在这里做完整校验:真正的校验仍在 `ConfigPackageManager` /
-     * `GroupPackageManager` 里（它们会检查缺字段、版本等）。
-     * 这里只是"分辨是谁的包"，读不出来就返回 null，让后续走"未知"。
+     * `GroupPackageManager` 里（缺字段、版本等）。这里只分辨"是谁的包"，
+     * 读不出来就返回 null，后续会走"未知"。
+     *
+     * ⚠️ 限读 64 KB:别人的包可能塞一个巨大的 manifest，读进内存不值。
      */
-    private fun readManifestFormat(zip: ZipFile, entryName: String): String? = try {
-        val entry = zip.getEntry(entryName) ?: return null
-        /* manifest 只有几百字节，但别人做的包可能很大 —— 限个读取量 */
-        val bytes = zip.getInputStream(entry).use { input -> input.readAtMost(64 * 1024) }
+    private fun readManifestFormat(zip: ZipInputStream): String? = try {
+        val bytes = zip.readAtMost(64 * 1024)
         REGEX_FORMAT.find(String(bytes, Charsets.UTF_8))?.groupValues?.getOrNull(1)
     } catch (e: Exception) {
         null
@@ -173,6 +190,14 @@ object FileSniffer {
     /* ============================================================
      * 魔数
      * ============================================================ */
+
+    /** 只读文件开头几十个字节 */
+    private fun readHead(context: Context, uri: Uri): ByteArray? = try {
+        context.contentResolver.openInputStream(uri)?.use { it.readAtMost(HEAD_BYTES) }
+    } catch (e: Exception) {
+        AppLog.w(TAG, "读取文件头失败：${e.javaClass.simpleName}")
+        null
+    }
 
     private fun isZip(head: ByteArray): Boolean =
         head.size >= 4 &&
@@ -198,8 +223,8 @@ object FileSniffer {
     /**
      * 字体魔数 → 矢量字体。
      *
-     * ⚠️ `ttcf` 必须排在 `ttf` 之前判断:字体集合的头部也是 `00010000` 之外
-     * 的独立魔数，但两者都以 `t` 开头，靠长度区分容易错。
+     * ⚠️ `ttcf` 必须排在 `ttf` 之前判断:字体集合的头部也是 `00010000` 之外的独立魔数，
+     * 但两者都以 `t` 开头，靠长度区分容易错。
      */
     private fun vectorFontKindOf(head: ByteArray): FileKind? {
         if (head.size < 4) return null
@@ -232,12 +257,6 @@ object FileSniffer {
      * 工具
      * ============================================================ */
 
-    private fun readHead(file: File, size: Int): ByteArray = try {
-        file.inputStream().use { it.readAtMost(size) }
-    } catch (e: Exception) {
-        ByteArray(0)
-    }
-
     /**
      * 最多读 [limit] 字节。
      *
@@ -245,7 +264,7 @@ object FileSniffer {
      * Android 上要 **API 33+** 才有。minSdk 是 28，直接用会在旧机上抛
      * `NoSuchMethodError`，而且崩在导入路径里，看起来像"文件坏了"。
      */
-    private fun java.io.InputStream.readAtMost(limit: Int): ByteArray {
+    private fun InputStream.readAtMost(limit: Int): ByteArray {
         val buffer = java.io.ByteArrayOutputStream()
         val chunk = ByteArray(8 * 1024)
         var total = 0
@@ -257,43 +276,6 @@ object FileSniffer {
             total += read
         }
         return buffer.toByteArray()
-    }
-
-    /**
-     * 复制到私有缓存。
-     *
-     * ⚠️ 有**大小上限**:先看已知大小，不知道就边读边数，超了就中止。
-     * 不做这一步的话，用户点一个 2 GB 的视频，我们会先把它完整复制一份
-     * 把手机写满，然后才报"不认识这个文件"。
-     */
-    private fun copyToCache(context: Context, uri: Uri): File? = try {
-        val target = File(context.cacheDir, "incoming_${System.nanoTime()}.bin")
-        var copied = 0L
-
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            target.outputStream().use { output ->
-                val buffer = ByteArray(64 * 1024)
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read <= 0) break
-                    copied += read
-                    if (copied > MAX_BYTES) {
-                        output.close()
-                        target.delete()
-                        return null
-                    }
-                    output.write(buffer, 0, read)
-                }
-            }
-        } ?: run {
-            target.delete()
-            return null
-        }
-
-        target
-    } catch (e: Exception) {
-        AppLog.w(TAG, "复制到缓存失败：${e.javaClass.simpleName}")
-        null
     }
 
     /** 我们自己的两种包在 manifest 里的 `format` 取值 */

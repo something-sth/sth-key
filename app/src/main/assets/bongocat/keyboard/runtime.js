@@ -8,6 +8,27 @@
   const BUILTIN_RESOURCE_BASE = 'file:///android_asset/bongocat/keyboard/resources';
   const IMPORTED_MODEL = Boolean(window.__BONGO_IMPORTED_MODEL);
   const MODEL_LAYOUT = String(window.__BONGO_MODEL_LAYOUT || (IMPORTED_MODEL ? 'cat' : 'native'));
+  /*
+   * 这个包是不是 Mver 风格（自带逐键 PNG 手）。
+   *
+   * ⚠️ 现在**不再用它决定"收不收手臂"**（导入模型一律不收，见 syncHandOverrides）。
+   * 保留它是因为接下来要做的"PNG 手合成"需要知道这个信息，
+   * 由导入器在 `modeldata.js` 里写好。
+   */
+  const MVER_HANDS = Boolean(window.__BONGO_MVER_HANDS);
+
+  /*
+   * ============================================================
+   * 表情（Cubism 标准 `.exp3.json`，由导入器预解析后内联）
+   * ============================================================
+   * `[{"name":"正常眼","params":[["Param14",0,"Add"], …]}]`
+   *
+   * ⚠️ 必须内联而不是让页面 fetch:`file://` 页面读本地文件被 WebView 拒绝，
+   * moc 当初也是因为这个才用 base64（见导入器类注释）。
+   */
+  const EXPRESSIONS = Array.isArray(window.__BONGO_EXPRESSIONS) ? window.__BONGO_EXPRESSIONS : [];
+  /* `[{"keys":["Alt","Numpad1"],"index":0}]` —— 按下这组键就切到第 0 个表情 */
+  const EXPR_BINDINGS = Array.isArray(window.__BONGO_EXPR_BINDINGS) ? window.__BONGO_EXPR_BINDINGS : [];
   // When an arbitrary Live2D character is imported without a matching BongoCat keyboard skin,
   // place the visible character where the built-in cat lives instead of preserving an unrelated
   // desktop-model canvas offset (which commonly puts the character off-screen/right).
@@ -70,6 +91,10 @@
     targetY: 0.5,
     pointerActive: false,
     globalReverse: false,
+    /* 当前按住的键（用于匹配"组合键 → 表情"） */
+    pressedKeys: new Set(),
+    /* 当前表情下标；-1 = 没有表情 */
+    expressionIndex: -1,
     ready: false,
   };
 
@@ -184,8 +209,104 @@
     image.classList.remove('hidden');
   }
 
+  /*
+   * 按键盘时要不要去动模型的左右手参数。
+   *
+   * ⚠️⚠️ 用户报的 bug:
+   * > 第三方模型，按按键手部会直接消失
+   *
+   * 原因:这一类包（Mver 键盘猫包）在 `config.json` 里把每个键映射到
+   * `lefthand/<N>.png` / `righthand/<N>.png`。按下时 **Mver 画那张 PNG**，
+   * 同时 `CatParamLeftHandDown=1` 让模型把自己的手臂收起来（免得和 PNG 重叠）。
+   *
+   * 我们只做了"收起"这一半 —— PNG 手没画，于是手直接消失。
+   * 所以这类包（模型包里有 `lefthand/` + `righthand/`）**不去动**这两个参数:
+   * 宁可没有按压动画，也不能让手没了。
+   */
+  /**
+   * 切到第 index 个表情。
+   *
+   * @param index -1 = 取消表情
+   */
+  function applyExpression(index) {
+    const next = Number(index);
+    if (!Number.isInteger(next) || next < 0 || next >= EXPRESSIONS.length) {
+      state.expressionIndex = -1;
+      if (renderer) renderer.expression = null;
+      return;
+    }
+    state.expressionIndex = next;
+    if (renderer) renderer.expression = EXPRESSIONS[next].params || [];
+  }
+
+  /**
+   * 按下的键满足某个"组合键 → 表情"绑定时切过去。
+   *
+   * ⚠️ 要求**全部**键都按住（组合键语义）:Mver 的 `l2d_expression` 里
+   * `[[18,219],…]` 这种就是"Alt + 某个键"。
+   *
+   * ⚠️ 匹配不上时**不做任何事**:不能让"按 A"把表情重置掉，
+   * 那样普通按键会把用户刚切的表情清掉。
+   */
+  function evaluateExpressionBindings() {
+    if (EXPR_BINDINGS.length === 0 || state.pressedKeys.size === 0) return;
+    for (const binding of EXPR_BINDINGS) {
+      const keys = Array.isArray(binding.keys) ? binding.keys : [];
+      if (keys.length === 0) continue;
+      if (!keys.every((key) => state.pressedKeys.has(String(key)))) continue;
+      if (state.expressionIndex !== binding.index) applyExpression(binding.index);
+      return;
+    }
+  }
+
+  /**
+   * 把模型内容的比例回报给原生侧。
+   *
+   * ⚠️ 只在**比例明显变化**时回报（1% 以上），否则每次 resize 都会往 Java 侧
+   * 发一次调用，窗口会反复重排。
+   *
+   * ⚠️ 用 `addJavascriptInterface` 暴露的对象，页面上是 `window.SthKeyBridge`；
+   * 不存在时（例如内置模型页面）静默跳过。
+   */
+  let lastReportedAspect = 0;
+  function reportContentAspect(contentWidth, contentHeight) {
+    const aspect = Number(contentWidth) / Math.max(1, Number(contentHeight));
+    if (!Number.isFinite(aspect) || aspect <= 0) return;
+    if (lastReportedAspect > 0 && Math.abs(lastReportedAspect - aspect) / lastReportedAspect < 0.01) return;
+    lastReportedAspect = aspect;
+
+    try {
+      const bridge = window.SthKeyBridge;
+      if (bridge && typeof bridge.onContentAspect === 'function') {
+        bridge.onContentAspect(aspect);
+      }
+    } catch (_) {
+      /* 桥不存在/被拒绝时不影响渲染 */
+    }
+  }
+
   function syncHandOverrides() {
     if (!renderer) return;
+    /*
+     * ⚠️ **所有导入的模型都不去动这两个参数**。
+     *
+     * 第一版只对"目录里有 `lefthand/` + `righthand/`"的包跳过 —— 结果实测样本的
+     * `standard` 变体用的是 `hand/`（不是 lefthand/righthand），没被识别出来，
+     * 于是标准模式下手照样消失。
+     *
+     * ⚠️ 教训:**别按资源目录名判断**。社区包的命名五花八门
+     * （`lefthand/` `righthand/` `hand/` `left_hand/`，甚至散在根目录的 png）。
+     *
+     * 而这些包的共同点是:模型自带的 `CatParam*HandDown` 是给"收起手臂、让位给 PNG 手"
+     * 用的，我们**不画 PNG 手**，所以对任何导入模型设 1 都是错的。
+     *
+     * ⚠️ 显式置 0（而不是"不碰"）:上一次按键可能已经把它设成 1。
+     */
+    if (IMPORTED_MODEL) {
+      renderer.setOverride('CatParamLeftHandDown', 0);
+      renderer.setOverride('CatParamRightHandDown', 0);
+      return;
+    }
     renderer.setOverride('CatParamLeftHandDown', state.leftKey ? 1 : 0);
     renderer.setOverride('CatParamRightHandDown', state.rightKey ? 1 : 0);
   }
@@ -204,7 +325,7 @@
       let value;
 
       if (id.endsWith('Z')) {
-        const dragX = 1 - 2 * xRatio;
+        const dragX = 2 * xRatio - 1;
         const dragY = 1 - 2 * yRatio;
         value = dragX * dragY * min;
       } else {
@@ -212,7 +333,31 @@
         if (state.globalReverse && id === 'ParamMouseX') {
           ratio = 1 - ratio;
         }
-        value = max - ratio * (max - min);
+        /*
+         * ============================================================
+         * ⚠️ 左右轴（X）用 `min + ratio * (max - min)`，上下轴（Y）用反过来的写法
+         * ============================================================
+         *
+         * 原来两个轴都写成 `max - ratio * (max - min)`（照搬自 BongoCat 原版
+         * runtime）。对**标准 Cubism 取值范围**来说，那条公式把 X 轴的方向算反了:
+         *
+         * | 光标位置 | ratio | 原公式给 ParamAngleX(-30..30) | 期望 |
+         * |---|---|---|---|
+         * | 最左 | 0 | **+30** | -30（头朝左） |
+         * | 最右 | 1 | **-30** | +30（头朝右） |
+         *
+         * 同一份公式也套在 `ParamEyeBallX`（-1..1）上 —— 光标往右时瞳孔会往左，
+         * 与头部一起反。用户报的「鼠标移动时头部跟随左右颠倒」就是它。
+         *
+         * ⚠️ 上下轴（Y）**保持原写法**:它没有同样的反馈（光标在上 → ParamAngleY 取
+         * max = 抬头），这次不改，避免把没报问题的方向也翻掉。
+         *
+         * ⚠️ `ParamAngleZ`（歪头）跟着 X 一起翻:它原本用 `1 - 2 * xRatio`，
+         * 与旧的 X 走法一致；X 翻了它不翻的话，光标在左右两端时歪头方向会和转头相反。
+         */
+        value = id.endsWith('X')
+          ? min + ratio * (max - min)
+          : max - ratio * (max - min);
       }
 
       renderer.setOverride(id, value);
@@ -228,8 +373,30 @@
   }
 
   window.AxonBongoCat = {
+    /** 手动切表情（下标对应 model3 的 Expressions 顺序；-1 取消） */
+    setExpression(index) {
+      applyExpression(index);
+    },
+
+    /** 当前表情下标（-1 = 无） */
+    expressionIndex() {
+      return state.expressionIndex;
+    },
+
+    /** 这个模型有哪些表情名（供调试/以后做设置项） */
+    expressionNames() {
+      return EXPRESSIONS.map((item) => String(item.name || ''));
+    },
     key(key, pressed) {
       const rawValue = String(key || '');
+      /*
+       * ⚠️ 组合键匹配要用**原始键名**（`rawValue`）:表情绑定里的键名来自
+       * 包配置的虚拟键码，与 `inputKey()` 的左右手镜像无关。
+       */
+      if (pressed) state.pressedKeys.add(rawValue);
+      else state.pressedKeys.delete(rawValue);
+      evaluateExpressionBindings();
+
       const rawSide = keySide(rawValue);
       if (!rawSide) return;
 
@@ -347,6 +514,8 @@
       this.canvasInfo = model.canvasinfo;
       this.paramIndex = new Map();
       this.overrides = new Map();
+      /* 当前表情的参数列表；null = 没有表情（见 applyExpression） */
+      this.expression = null;
       this.defaults = Array.from(this.parameters.defaultValues);
       this.eyeBlink = 1;
       this.elapsedSeconds = 0;
@@ -490,17 +659,28 @@
       }
 
       if (IMPORTED_MODEL && this.contentBounds) {
-        // Generic Live2D imports often use a portrait/desktop canvas with the character offset
-        // to one side. Fit the actual visible drawables into the original cat region.
+        /*
+         * ============================================================
+         * 导入模型:按**内容实际包围盒**铺满窗口
+         * ============================================================
+         * 以前是"把内容塞进设计坐标里的 CAT_TARGET 矩形"，于是窗口四边
+         * 留出大片透明区域（用户报的"左、右、下多一截空气"）。
+         *
+         * ⚠️ 现在改成**直接在设备像素里铺满**:
+         * 窗口尺寸由 Kotlin 侧按"内容比例"算（比例就是下面回报上去的），
+         * 所以两者比例一致时 `Math.min` 的两个候选值相等 —— 既不裁切、也不留白。
+         *
+         * 第一次加载时比例还没测到（窗口是 612×354），这里会短暂留白；
+         * 回报之后窗口按内容比例重排，下一帧就正好铺满。
+         */
         const b = this.contentBounds;
-        const fit = Math.min(CAT_TARGET.width / b.width, CAT_TARGET.height / b.height);
-        const fittedWidth = b.width * fit;
-        const fittedHeight = b.height * fit;
-        const designLeft = CAT_TARGET.x + (CAT_TARGET.width - fittedWidth) * 0.5;
-        const designTop = CAT_TARGET.y + (CAT_TARGET.height - fittedHeight) * 0.5;
-        this.scale = stageScale * fit;
-        this.offsetX = stageOffsetX + designLeft * stageScale - b.minX * this.scale;
-        this.offsetY = stageOffsetY + designTop * stageScale - b.minY * this.scale;
+        const fit = Math.min(width / Math.max(1, b.width), height / Math.max(1, b.height));
+        this.scale = fit;
+        this.offsetX = (width - b.width * fit) * 0.5 - b.minX * fit;
+        this.offsetY = (height - b.height * fit) * 0.5 - b.minY * fit;
+
+        /* 把内容比例回报给原生侧（只回报一次，之后的窗口重排会再次进来） */
+        reportContentAspect(b.width, b.height);
         return;
       }
 
@@ -573,6 +753,37 @@
       // BongoCat's setParameterValueById values have highest priority and persist across frames.
       for (const [index, value] of this.overrides) {
         this.parameters.values[index] = value;
+      }
+
+      this.applyExpression();
+    }
+
+    /**
+     * 应用当前表情。
+     *
+     * ⚠️ 顺序:在**所有基础值（呼吸/眨眼/覆盖）都算完之后**再加表情，
+     * 否则表情会被后面的覆盖值盖掉 —— 表现就是"按了快捷键没反应"。
+     *
+     * ⚠️ `Blend` 三种含义（Cubism 规范）:
+     * - `Add`       → 在当前值上**加**
+     * - `Multiply`  → **乘**
+     * - `Overwrite` → 直接覆盖
+     * 我们的渲染器只有"绝对赋值"，所以在这里手工算出最终值。
+     */
+    applyExpression() {
+      if (!this.expression) return;
+      for (const entry of this.expression) {
+        const id = entry[0];
+        const index = this.paramIndex.get(String(id));
+        if (index === undefined) continue;
+        const value = Number(entry[1]) || 0;
+        const blend = String(entry[2] || 'Add');
+        const current = this.parameters.values[index];
+        let next;
+        if (blend === 'Multiply') next = current * value;
+        else if (blend === 'Overwrite') next = value;
+        else next = current + value;
+        this.parameters.values[index] = this.clamp(index, next);
       }
     }
 

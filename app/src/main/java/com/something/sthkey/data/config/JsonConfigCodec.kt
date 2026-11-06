@@ -7,33 +7,36 @@ import com.something.sthkey.domain.config.ColorSet
 import com.something.sthkey.domain.config.DEFAULT_CPS_TEMPLATE
 import com.something.sthkey.domain.config.DEFAULT_CPS_TEMPLATE_MODE1
 import com.something.sthkey.domain.config.DEFAULT_FONT_ID
+import com.something.sthkey.domain.config.defaultConfig
+import com.something.sthkey.domain.config.defaultKeyMappings
+import com.something.sthkey.domain.config.defaultShowSpaceKey
+import com.something.sthkey.domain.config.JoystickStyle
 import com.something.sthkey.domain.config.KeyMapping
 import com.something.sthkey.domain.config.KeyOutline
-import com.something.sthkey.domain.config.JoystickStyle
 import com.something.sthkey.domain.config.KeyStrokesConfig
-import com.something.sthkey.domain.config.defaultShowSpaceKey
-import com.something.sthkey.domain.config.TextOffset
-import com.something.sthkey.domain.style.KeyLayout
-import com.something.sthkey.domain.style.StyleId
-import com.something.sthkey.domain.config.TextSpacing
+import com.something.sthkey.domain.keys.KeyCodes
 import com.something.sthkey.domain.config.LIVE2D_MODEL_STANDARD
 import com.something.sthkey.domain.config.Live2DSettings
+import com.something.sthkey.domain.config.migratedOutlineColors
 import com.something.sthkey.domain.config.Opacity
 import com.something.sthkey.domain.config.ShadowMode
+import com.something.sthkey.domain.config.TextOffset
 import com.something.sthkey.domain.config.TextShadow
+import com.something.sthkey.domain.config.TextSpacing
 import com.something.sthkey.domain.config.TouchFeelSpec
-import com.something.sthkey.domain.config.TouchRegionBinding
 import com.something.sthkey.domain.config.TouchRegion
+import com.something.sthkey.domain.config.TouchRegionBinding
 import com.something.sthkey.domain.config.TouchRegionSpec
 import com.something.sthkey.domain.config.TouchSettings
 import com.something.sthkey.domain.config.TouchStickFeel
 import com.something.sthkey.domain.config.TouchStickSettings
-import com.something.sthkey.domain.config.defaultConfig
-import com.something.sthkey.domain.config.defaultKeyMappings
-import com.something.sthkey.domain.config.migratedOutlineColors
+import com.something.sthkey.domain.custom.CustomLayout
+import com.something.sthkey.domain.style.KeyLayout
 import com.something.sthkey.domain.style.OverlayStyleRegistry
+import com.something.sthkey.domain.style.StyleId
 import org.json.JSONArray
 import org.json.JSONObject
+
 
 /**
  * 配置的 JSON 编解码。
@@ -304,6 +307,7 @@ object JsonConfigCodec {
         /* ── 只属于自定义 Key 样式 ── */
         "custom" to setOf(StyleId.CUSTOM_KEY),
         "customOpacityPercent" to setOf(StyleId.CUSTOM_KEY),
+        "customTextScalePercent" to setOf(StyleId.CUSTOM_KEY),
 
         /*
          * ============================================================
@@ -963,6 +967,16 @@ object JsonConfigCodec {
         }
 
         /*
+         * 自定义 Key 的**整体字符缩放**（同样只写给自定义样式）。
+         *
+         * ⚠️ 它与每个组件自己的文字缩放是**两层，相乘** ——
+         * 所以必须单独存，不能折算进组件的值里（见字段的说明）。
+         */
+        if (appliesTo(config.styleId, "customTextScalePercent")) {
+            put("customTextScalePercent", config.customTextScalePercent)
+        }
+
+        /*
          * ⚠️ 触屏设置 —— **只写给触屏样式**。
          *
          * 它里面装着两个摇杆的缩放与手感、以及移动轮盘的触摸区域，
@@ -1201,6 +1215,14 @@ object JsonConfigCodec {
              * 不夹的话 alpha 会越界（>1 在某些设备上表现为整块不画）。
              */
             customOpacityPercent = json.optInt("customOpacityPercent", 100).coerceIn(0, 100),
+
+            /*
+             * ⚠️ 夹 50..300（与组件自己的文字缩放同一范围）:
+             * 手改过的 JSON 塞个 0 或 5000 进来，字号会变成 0 或大到离谱，
+             * 用户看到的是"字不见了"或"整块被一行字糊住"。
+             */
+            customTextScalePercent = json.optInt("customTextScalePercent", 100)
+                .coerceIn(CustomLayout.TEXT_SCALE_MIN, CustomLayout.TEXT_SCALE_MAX),
             touch = decodeTouch(json.optJSONObject("touch")),
         )
     }

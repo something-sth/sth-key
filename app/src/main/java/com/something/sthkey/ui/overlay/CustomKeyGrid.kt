@@ -1,80 +1,87 @@
 package com.something.sthkey.ui.overlay
 
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.material3.Text
-import androidx.compose.runtime.remember
-import com.something.sthkey.ui.component.bitmapSpecOf
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Size
-import com.something.sthkey.domain.style.RippleGeometry
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.CompositingStrategy
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.ui.unit.em
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import com.something.sthkey.capture.MouseMotion
+import com.something.sthkey.capture.StickState
 import com.something.sthkey.core.log.AppLog
 import com.something.sthkey.domain.config.AnimationMode
 import com.something.sthkey.domain.config.JoystickStyle
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.config.ShadowMode
-import com.something.sthkey.domain.custom.JoystickComponent
-import com.something.sthkey.domain.custom.StickSide
-import com.something.sthkey.domain.custom.TextualComponent
-import com.something.sthkey.ui.overlay.gamepad.baseOffset
-import com.something.sthkey.capture.StickState
-import com.something.sthkey.domain.style.KeyBox
-import com.something.sthkey.ui.overlay.gamepad.JoystickSlot
-import com.something.sthkey.capture.MouseMotion
-import com.something.sthkey.domain.custom.TouchDirection
-import com.something.sthkey.domain.custom.JoystickFollowMode
-import com.something.sthkey.domain.custom.JOYSTICK_FOLLOW_DURATION_MIN
-import com.something.sthkey.domain.custom.JOYSTICK_FOLLOW_DURATION_MAX
-import com.something.sthkey.domain.custom.JoystickSource
-import com.something.sthkey.domain.custom.MouseJoystickFeel
-import com.something.sthkey.domain.custom.keyboardJoystickVector
-import com.something.sthkey.domain.custom.mouseJoystickStep
 import com.something.sthkey.domain.custom.CustomComponent
 import com.something.sthkey.domain.custom.CustomLayout
 import com.something.sthkey.domain.custom.CustomLayoutSettings
+import com.something.sthkey.domain.custom.FpsText
+import com.something.sthkey.domain.custom.JOYSTICK_FOLLOW_DURATION_MAX
+import com.something.sthkey.domain.custom.JOYSTICK_FOLLOW_DURATION_MIN
+import com.something.sthkey.domain.custom.JoystickComponent
+import com.something.sthkey.domain.custom.JoystickFollowMode
+import com.something.sthkey.domain.custom.JoystickSource
+import com.something.sthkey.domain.custom.keyboardJoystickVector
 import com.something.sthkey.domain.custom.KeyComponent
+import com.something.sthkey.domain.custom.MediaComponent
+import com.something.sthkey.domain.custom.MediaFit
+import com.something.sthkey.domain.custom.MediaKind
+import com.something.sthkey.domain.custom.MouseJoystickFeel
+import com.something.sthkey.domain.custom.mouseJoystickStep
+import com.something.sthkey.domain.custom.StickSide
 import com.something.sthkey.domain.custom.TextComponent
+import com.something.sthkey.domain.custom.TextualComponent
+import com.something.sthkey.domain.custom.TouchDirection
+import com.something.sthkey.domain.media.CustomMediaStore
+import com.something.sthkey.domain.style.KeyBox
 import com.something.sthkey.domain.style.KeyLayout
+import com.something.sthkey.domain.style.RippleGeometry
+import com.something.sthkey.ui.component.bitmapSpecOf
 import com.something.sthkey.ui.component.composeFontFamily
+import com.something.sthkey.ui.overlay.gamepad.baseOffset
+import com.something.sthkey.ui.overlay.gamepad.JoystickSlot
+
+
 
 /**
  * 自定义 Key 的画布渲染（悬浮窗与编辑器/预览**共用同一份**）。
@@ -285,6 +292,12 @@ fun CustomKeyCanvas(
     scale: Float,
     modifier: Modifier = Modifier,
     cpsBySlot: Map<String, Int> = emptyMap(),
+    /**
+     * 当前帧率（`(fps)` 占位符用）;`null` = 读不到 → 渲染成 `N/A`。
+     *
+     * ⚠️ 预览传固定 120，只有悬浮窗才传实时值 —— 与 `(cps)` 预览显示 0 同一个思路。
+     */
+    fps: Double? = null,
     slotIdOf: (Int) -> String? = { null },
     /** 根容器尺寸（基础坐标）；默认 = 包围盒。传定位区尺寸就是整个定位区 */
     baseWidth: Float = CustomLayout.bounds(settings.components).width,
@@ -297,6 +310,15 @@ fun CustomKeyCanvas(
      * "拖动组件"和"看到的位移"就对不上了。
      */
     fitToContainer: Boolean = false,
+    /**
+     * 媒体组件是否**静态预览**（不播动图/视频）。
+     *
+     * ⚠️ 编辑器画布与配置预览都传 true —— 用户的原话:
+     * > 预览就跟相册软件差不多…… 视频动图这些，预览静态就好，不要动态
+     *
+     * 悬浮窗里传 false（真播）。
+     */
+    staticMedia: Boolean = false,
     /**
      * 自适应时的倍率上限。
      *
@@ -325,6 +347,17 @@ fun CustomKeyCanvas(
      * 不必为它们多开一层离屏合成。
      */
     overallAlpha: Float = 1f,
+
+    /**
+     * **整体字符缩放**（百分比，100 = 不缩放）。
+     *
+     * ⚠️ 它与组件自己的 `textScalePercent` 是**两层，相乘** ——
+     * 精确的换算在 `CustomLayout.textSize(组件, 整体)` 里（纯函数、有单测）。
+     *
+     * ⚠️ 只影响**文字**，不动组件的位置与尺寸 ——
+     * 键帽方块还是原来那么大，字大了会溢出方块（那是用户自己调的结果）。
+     */
+    overallTextScalePercent: Int = 100,
     /**
      * 摇杆数据（左右两个轴的当前值）。
      *
@@ -377,8 +410,30 @@ fun CustomKeyCanvas(
      */
     touchCpsOf: (String) -> Int = { 0 },
 ) {
+    /*
+     * 整体透明度。
+     *
+     * ============================================================
+     * ⚠️⚠️ 必须挂在"尺寸等于整块画布"的那个节点上
+     * ============================================================
+     * `graphicsLayer` 一旦挂上就**多了一层离屏合成**，而这一层是按节点
+     * 自己的布局边界裁剪的。之前的写法是套在内容外面一个**没有 size 的**
+     * `Box`:那个 Box 会缩到"最大的那个组件"那么大 ——
+     * 组件之间的相对位置是用 `offset` 摆的，**不计入**父容器的测量尺寸。
+     *
+     * 结果就是:alpha = 100% 时没有这一层，画出去多少都看得见；
+     * 一旦调到 99% 以下，整块内容会在那一层边界处被**裁掉一大半**。
+     * 用户报的「透明度拉到 100% 以下，下面一大半就被裁剪」正是这个。
+     *
+     * ⚠️ 所以现在把 alpha 挂在**外层那个 `size(baseWidth, baseHeight)` 的 Box**
+     * 上（悬浮窗里就是整个窗口），界外还额外 `clip = false` ——
+     * 文字阴影/描边会稍微画出画布，别把它们也裁了。
+     */
     val alphaLayer = if (overallAlpha < 1f) {
-        Modifier.graphicsLayer { alpha = overallAlpha.coerceIn(0f, 1f) }
+        Modifier.graphicsLayer {
+            alpha = overallAlpha.coerceIn(0f, 1f)
+            clip = false
+        }
     } else {
         Modifier
     }
@@ -388,20 +443,25 @@ fun CustomKeyCanvas(
             widthPx = baseWidth * scale * LocalDensity.current.density,
             heightPx = baseHeight * scale * LocalDensity.current.density,
         )
-        Box(modifier = modifier.size((baseWidth * scale).dp, (baseHeight * scale).dp)) {
-            Box(modifier = alphaLayer) {
-                CustomKeyCanvasContent(
-                    settings,
-                    pressedCodes,
-                    scale,
-                    cpsBySlot,
-                    slotIdOf,
-                    sticks,
-                    mouseMotion,
-                    touchInput,
-                    touchCpsOf,
-                )
-            }
+        Box(
+            modifier = modifier
+                .size((baseWidth * scale).dp, (baseHeight * scale).dp)
+                .then(alphaLayer),
+        ) {
+            CustomKeyCanvasContent(
+                settings,
+                pressedCodes,
+                scale,
+                cpsBySlot,
+                fps,
+                slotIdOf,
+                sticks,
+                mouseMotion,
+                touchInput,
+                touchCpsOf,
+                overallTextScalePercent,
+                staticMedia,
+            )
         }
         return
     }
@@ -425,21 +485,23 @@ fun CustomKeyCanvas(
                     (baseWidth * fittedScale).dp,
                     (baseHeight * fittedScale).dp,
                 )
-                .align(Alignment.Center),
+                .align(Alignment.Center)
+                .then(alphaLayer),
         ) {
-            Box(modifier = alphaLayer) {
-                CustomKeyCanvasContent(
-                    settings,
-                    pressedCodes,
-                    fittedScale,
-                    cpsBySlot,
-                    slotIdOf,
-                    sticks,
-                    mouseMotion,
-                    touchInput,
-                    touchCpsOf,
-                )
-            }
+            CustomKeyCanvasContent(
+                settings,
+                pressedCodes,
+                fittedScale,
+                cpsBySlot,
+                fps,
+                slotIdOf,
+                sticks,
+                mouseMotion,
+                touchInput,
+                touchCpsOf,
+                overallTextScalePercent,
+                staticMedia,
+            )
         }
     }
 }
@@ -451,6 +513,7 @@ private fun CustomKeyCanvasContent(
     pressedCodes: Set<Int>,
     scale: Float,
     cpsBySlot: Map<String, Int>,
+    fps: Double?,
     slotIdOf: (Int) -> String?,
     sticks: StickState,
     mouseMotion: MouseMotion?,
@@ -458,6 +521,10 @@ private fun CustomKeyCanvasContent(
     touchInput: TouchInputState?,
     /** ⚠️ 触摸区域那一路的 CPS，见 [CustomKeyCanvas] 的说明 */
     touchCpsOf: (String) -> Int,
+    /** ⚠️ 整体字符缩放（百分比），见 [CustomKeyCanvas] 的说明 */
+    overallTextScalePercent: Int,
+    /** 媒体组件是否静态预览（见 [CustomKeyCanvas] 的同名参数） */
+    staticMedia: Boolean = false,
 ) {
     settings.components.forEach { component ->
         /*
@@ -487,6 +554,22 @@ private fun CustomKeyCanvasContent(
             return@forEach
         }
 
+        /*
+         * ⚠️ 媒体组件（图片/动图/视频）走**独立分支**。
+         *
+         * 下面那句 `component as TextualComponent` 是**刻意**的收窄
+         * （见那里的注释）—— 媒体组件不在这里分派就会抛
+         * ClassCastException，加一个图片组件就能让悬浮窗崩。
+         */
+        if (component is MediaComponent) {
+            MediaComponentView(
+                component = component,
+                scale = scale,
+                staticPreview = staticMedia,
+            )
+            return@forEach
+        }
+
         CustomComponentView(
             /*
              * ⚠️ **必须显式收窄**。上面 `if (component is JoystickComponent) { …; return@forEach }`
@@ -502,8 +585,10 @@ private fun CustomKeyCanvasContent(
             pressed = component.isPressed(pressedCodes, touchInput),
             scale = scale,
             cpsBySlot = cpsBySlot,
+            fps = fps,
             slotIdOf = slotIdOf,
             touchCpsOf = touchCpsOf,
+            overallTextScalePercent = overallTextScalePercent,
         )
     }
 }
@@ -549,6 +634,9 @@ private fun CustomComponent.isPressed(
 
     /* 摇杆上报的是**轴**，"按下"对它没有意义 */
     is JoystickComponent -> false
+
+    /* 媒体组件没有"按下" —— 它只是画在上面 */
+    is MediaComponent -> false
 }
 
 /**
@@ -1106,9 +1194,12 @@ private fun CustomComponentView(
     pressed: Boolean,
     scale: Float,
     cpsBySlot: Map<String, Int>,
+    fps: Double?,
     slotIdOf: (Int) -> String?,
     /** ⚠️ 触摸区域那一路的 CPS，见 [CustomKeyCanvas] 的说明 */
     touchCpsOf: (String) -> Int,
+    /** ⚠️ 整体字符缩放（百分比），见 [CustomKeyCanvas] 的说明 */
+    overallTextScalePercent: Int,
 ) {
     val style = component.style
     val mode = (component as? KeyComponent)?.animationMode ?: AnimationMode.NONE
@@ -1194,7 +1285,13 @@ private fun CustomComponentView(
     val radiusDp = CustomLayout.cornerRadius(style, minOf(widthDp, heightDp))
     val shape = androidx.compose.foundation.shape.RoundedCornerShape(radiusDp.dp)
 
-    val fontSize = (CustomLayout.textSize(component.textScalePercent) * scale).sp
+    /*
+     * ⚠️ 最终字号 = 基础字号 × **组件自己的文字缩放** × **整体字符缩放** × 画布缩放。
+     * 前两项的换算收在 `CustomLayout.textSize(组件, 整体)` 里（纯函数、有单测）。
+     */
+    val fontSize = (
+        CustomLayout.textSize(component.textScalePercent, overallTextScalePercent) * scale
+        ).sp
     val fontFamily = composeFontFamily(style.fontId)
 
     val rippleColor = if (isRipple) Color(downFill) else Color.Transparent
@@ -1318,7 +1415,14 @@ private fun CustomComponentView(
             touchCpsOf = touchCpsOf,
         )
         val cpsValue = cpsValues.firstOrNull() ?: 0
-        val text = CustomLayout.displayTextAt(component, cpsValues)
+                /*
+                 * ⚠️ CPS 渲染完之后再套 FPS:两者是**独立**占位符，
+                 * 同一段文字里可以同时出现 `(cps)` 和 `(fps+1000)`。
+                 */
+                val text = FpsText.render(
+                    template = CustomLayout.displayTextAt(component, cpsValues),
+                    fps = fps,
+                )
 
         /*
          * CPS 那一行的额外缩放（只有按键组件有这个字段）。

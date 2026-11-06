@@ -104,7 +104,7 @@ object KeyCodes {
 
     /**
      * ============================================================
-     * 扳机的**伪键码** —— 不是 evdev 的码，是本应用自己造的
+     * 扳机的键码 —— **与真实 evdev 码一致**（`BTN_TL2` / `BTN_TR2`）
      * ============================================================
      * ⚠️ **扳机不是按键，是模拟轴** —— 这是本项目踩过的一个坑，
      * 用户的原话是:
@@ -124,15 +124,39 @@ object KeyCodes {
      * 折成"按下 / 抬起"，并用下面这两个码表示（见
      * `CaptureController.setGamepadStick`）。
      *
-     * ⚠️ 取值在 **`0x300` 以上**是有意的:evdev 的真实按键码最大到
-     * `BTN_TRIGGER_HAPPY40`（`0x2c0 + 39 = 0x2e7`），留出余量就不会
-     * 与任何真实键码撞车 —— 撞车的话"按 A 却亮了 LT"这种错极难查。
+     * ============================================================
+     * ⚠️ 曾经这里是**自造伪键码** 0x300 / 0x301（= 768 / 769）
+     * ============================================================
+     * 当时的理由:模拟扳机只上报 `ABS_Z` / `ABS_RZ` 轴，没有按键事件，
+     * 于是用一个"只在本应用内流转"的伪键码表示"扳机按下"。
+
+     * **这带来了一个真实问题**（用户反馈）:
+     * 手柄配置里 LT/RT 存的就是 768/769，而"键位映射"里用户能看到、
+     * 能选的**正规**扳机键码是 [BTN_TL2] / [BTN_TR2]（312 / 313）。
+     * 两套码并存 → 转自定义 Key 后 312/313 点了没反应，
+     * 多绑几个键还会互相干扰。
      *
-     * ⚠️ 它们**只在本应用内部流转**（`pressedCodes` 里），
-     * 不会写到 evdev，也不需要设备认识。
+     * 现在**统一成真实键码**:模拟轴触发时直接合成 [BTN_TL2] / [BTN_TR2]，
+     * 与数字式手柄上报的码完全一致。旧配置由 [migrateLegacyCode] 迁移。
      */
-    const val PSEUDO_KEY_TRIGGER_LEFT = 0x300
-    const val PSEUDO_KEY_TRIGGER_RIGHT = 0x301
+    const val PSEUDO_KEY_TRIGGER_LEFT = BTN_TL2
+    const val PSEUDO_KEY_TRIGGER_RIGHT = BTN_TR2
+
+    /** 旧版本写进配置的伪键码（只用于迁移，别在新代码里用） */
+    const val LEGACY_PSEUDO_KEY_TRIGGER_LEFT = 0x300
+    const val LEGACY_PSEUDO_KEY_TRIGGER_RIGHT = 0x301
+
+    /**
+     * 把旧配置里的伪键码迁成真实键码。
+     *
+     * ⚠️ 在读配置时调用（[com.something.sthkey.data.config.JsonConfigCodec]），
+     * 这样老用户的手柄配置不用重做。
+     */
+    fun migrateLegacyCode(code: Int): Int = when (code) {
+        LEGACY_PSEUDO_KEY_TRIGGER_LEFT -> BTN_TL2
+        LEGACY_PSEUDO_KEY_TRIGGER_RIGHT -> BTN_TR2
+        else -> code
+    }
 
     /** 相对位移轴，键盘猫等需要鼠标移动的样式以后会用到 */
     const val REL_X = 0
@@ -477,7 +501,7 @@ object KeyCodes {
          * 0x130..0x13e  BTN_SOUTH … BTN_THUMBR（面键 / 扳机 / 摇杆按下）
          * 0x220..0x223  BTN_DPAD_*（方向键）
          * 0x2c0..0x2e7  BTN_TRIGGER_HAPPY*（背键）
-         * 0x300+        扳机伪键码（本项目自造，见 PSEUDO_KEY_TRIGGER_*）
+         * 312 / 313     扳机（BTN_TL2 / BTN_TR2;曾是自造伪键码 768/769，已统一）
          * ```
          */
         keyCode in 0x130..0x13e -> PickerGroup.GAMEPAD

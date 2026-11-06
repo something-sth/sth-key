@@ -624,6 +624,30 @@ data class KeyStrokesConfig(
     val customOpacityPercent: Int = 100,
 
     /**
+     * 自定义 Key 的**整体字符缩放**（百分比，50..300，100 = 不缩放）。
+     *
+     * ============================================================
+     * ⚠️ 它与"组件自己的文字缩放"是**两层，相乘**
+     * ============================================================
+     * 用户的原话:
+     *
+     * > 整体字符缩放与自定义 key 内单独组件的字符缩放共同决定最终字符缩放
+     *
+     * | 层 | 谁调 | 范围 |
+     * |---|---|---|
+     * | 组件 `ComponentStyle.textScalePercent` | 编辑器里逐个组件调 | 那一个组件 |
+     * | 本字段 | 配置编辑页一个滑块 | **所有**组件的文字 |
+     *
+     * ⚠️ 为什么不把它乘进 `custom` 里的组件字段:
+     * 那样"整体"就成了一次性写入，用户后来再拖滑块改的是**组件自己的值**，
+     * 整体与个体的边界就消失了。
+     *
+     * 默认 100（不缩放）:新配置看起来必须是"正常的样子" ——
+     * 与 [customOpacityPercent] 同一个理由。
+     */
+    val customTextScalePercent: Int = 100,
+
+    /**
      * **触屏**样式专有的设置（两个摇杆 + 触摸区域 + 手感）。
      *
      * ============================================================
@@ -769,8 +793,8 @@ fun defaultKeyMappings(): List<KeyMapping> = listOf(
  *
  * | 槽位 | 显示 | 绑的键 |
  * |---|---|---|
- * | `LMB`（左） | `LT` | **扳机伪键码** `PSEUDO_KEY_TRIGGER_LEFT` |
- * | `RMB`（右） | `RT` | **扳机伪键码** `PSEUDO_KEY_TRIGGER_RIGHT` |
+ * | `LMB`（左） | `LT` | 真实键码 `BTN_TL2`（312），见 `KeyCodes.PSEUDO_KEY_TRIGGER_LEFT` |
+ * | `RMB`（右） | `RT` | 真实键码 `BTN_TR2`（313），见 `KeyCodes.PSEUDO_KEY_TRIGGER_RIGHT` |
  * | `SPACE` | `A` | `BTN_SOUTH`（下方位） |
  * | `SHIFT` | `L3` | `BTN_THUMBL`（左摇杆按下） |
  *
@@ -792,15 +816,8 @@ fun defaultKeyMappings(): List<KeyMapping> = listOf(
  * `KeyCodes` 里的键名表写得很清楚:
  * `AvailableKey(BTN_TL, "LB", …)` / `AvailableKey(BTN_TL2, "LT", …)`。
  *
- * 所以扳机要用**伪键码**（见 `KeyCodes.PSEUDO_KEY_TRIGGER_*` 的说明）——
- * native 把扳机作为 `0..1000` 的轴送过来，采集层按阈值折成"按下 / 抬起"。
- *
- * ⚠️ 玩家当然可以自己改（配置页的键位映射是通用的）——
- * 这里只是**默认值**。
- *
- * ⚠️ WASD 那四个位置**没有默认映射** —— gamepad2 里它们的位置
- * 是摇杆（见 `KeyLayout.Id.JOYSTICK_*`），摇杆不绑键码。
- * 留着的话配置页会列出四个"永远不会亮"的槽位。
+ * ⚠️ 早期这里用的是自造伪键码（768/769），现已统一成真实键码
+ * `BTN_TL2` / `BTN_TR2` —— 见 `KeyCodes.PSEUDO_KEY_TRIGGER_*` 的说明。
  */
 fun gamepad2KeyMappings(): List<KeyMapping> = listOf(
     /*
@@ -1125,6 +1142,16 @@ fun KeyStrokesConfig.resetParamsToDefault(
     cpsTextTemplateMode1 = preset.cpsTextTemplateMode1,
     keyMappings = preset.keyMappings,
     live2d = preset.live2d,
+    /*
+     * ⚠️ 自定义 Key 的**两个整体设置**属于"参数"（不是用户的创作），
+     * 所以必须在这里重置 —— 按 `docs/custom-key.md` 的标准:
+     * 颜色/缩放/动画 = 参数，重置；只有**组件布局**才算创作。
+     *
+     * ⚠️ [customOpacityPercent] 之前**漏在这里**了（重置透明度不生效），
+     * 顺手补上 —— 两个字段是同一类东西，只重置一个更没道理。
+     */
+    customOpacityPercent = preset.customOpacityPercent,
+    customTextScalePercent = preset.customTextScalePercent,
     /*
      * ⚠️ 这里**故意不列 custom**（自定义 Key 的组件布局）。
      *

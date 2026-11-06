@@ -132,6 +132,8 @@ object TouchToCustomConverter {
         /* ② 逐个组件:摇杆换来源、给手感（区域不再挂在组件上） */
         val components = base.custom.components.map { component ->
             when (component) {
+                /* 媒体组件与输入源无关，原样保留 */
+                is MediaComponent -> component
                 /*
                  * ⚠️ 摇杆:布局里那两个槽位转出来的就是它们，
                  * 位置尺寸已经由 `KeyToCustomConverter` 照 `box` 摆好了。

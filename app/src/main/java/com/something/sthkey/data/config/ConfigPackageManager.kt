@@ -4,16 +4,18 @@ import android.content.Context
 import android.net.Uri
 import com.something.sthkey.BuildConfig
 import com.something.sthkey.core.log.AppLog
+import com.something.sthkey.data.live2d.Live2DModelImporter
 import com.something.sthkey.domain.config.DEFAULT_FONT_ID
 import com.something.sthkey.domain.config.DEFAULT_LIVE2D_MODEL_ID
 import com.something.sthkey.domain.config.KeyStrokesConfig
+import com.something.sthkey.domain.custom.MediaComponent
+import com.something.sthkey.domain.custom.MediaKind
+import com.something.sthkey.domain.font.bitmap.BitmapFontStore
 import com.something.sthkey.domain.font.FontKind
 import com.something.sthkey.domain.font.FontRegistry
-import com.something.sthkey.domain.font.bitmap.BitmapFontStore
 import com.something.sthkey.domain.live2d.Live2DModelKind
 import com.something.sthkey.domain.live2d.Live2DModels
-import com.something.sthkey.data.live2d.Live2DModelImporter
-import org.json.JSONObject
+import com.something.sthkey.domain.media.CustomMediaStore
 import java.io.File
 import java.io.IOException
 import java.io.OutputStream
@@ -23,6 +25,8 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
+import org.json.JSONObject
+
 
 /**
  * 配置包的导入导出。
@@ -156,15 +160,16 @@ object ConfigPackageManager {
         config: KeyStrokesConfig,
         target: Uri,
         requestedName: String,
+        onState: ((String) -> Unit)? = null,
     ): Boolean {
-        if (writePackage(context, config, target)) return true
+        if (writePackage(context, config, target, onState)) return true
 
         AppLog.w(TAG, "首次导出失败，尝试清理目标文件后按同名重试一次")
         if (!deleteEmptyTarget(context, target, requestedName)) {
             AppLog.w(TAG, "目标文件不符合清理条件（非空、未改名或删不掉），放弃同名重试")
             return false
         }
-        return writePackage(context, config, target)
+        return writePackage(context, config, target, onState)
     }
 
     /**
@@ -268,7 +273,12 @@ object ConfigPackageManager {
         writePackage(context, config, target)
 
     /** 真正写一个包进去；不管名字、不做重试 */
-    private fun writePackage(context: Context, config: KeyStrokesConfig, target: Uri): Boolean {
+    private fun writePackage(
+        context: Context,
+        config: KeyStrokesConfig,
+        target: Uri,
+        onState: ((String) -> Unit)? = null,
+    ): Boolean {
         val model = collectLive2DModel(config)
 
         return try {
@@ -286,7 +296,11 @@ object ConfigPackageManager {
              * 顺序因此是：编码 params → 扫树收集 → 改写 params → 写盘。
              */
             val params = JsonConfigCodec.encode(config)
+            onState?.invoke("正在收集字体…")
             val fonts = collectFonts(params)
+            /* 媒体资源（图片/动图/视频），只打**被引用**的那些 */
+            val media = collectMedia(config)
+            onState?.invoke("正在准备资源…")
 
             // 把树里所有包内字体的 id 改写成包内引用（系统/内置字体保持原样）
             ParamsTree.rewriteFontIds(params) { id -> fonts.uriById[id] }
@@ -302,6 +316,7 @@ object ConfigPackageManager {
                             exportedAt = System.currentTimeMillis(),
                             fontFiles = fonts.files.map { it.info },
                             live2d = model?.info,
+                            mediaFiles = media.map { it.info },
                         ),
                     )
 
@@ -340,7 +355,15 @@ object ConfigPackageManager {
                     }
 
                     // 4. assets/live2d/<模型名>/...
+                    if (media.isNotEmpty()) onState?.invoke("正在准备资源…")
                     model?.let { writeModel(zip, it) }
+
+                    // 5. assets/media/<kind>/...
+                    media.forEach { item ->
+                        zip.putNextEntry(ZipEntry(item.info.path))
+                        item.file.inputStream().use { it.copyTo(zip) }
+                        zip.closeEntry()
+                    }
                 }
             }
 
@@ -584,6 +607,100 @@ object ConfigPackageManager {
      * - 更要紧的是它们**会污染内容摘要** —— 摘要里带上它们，同一个模型
      *   在不同机器上算出来的摘要就不一样，"复用已有模型"永远命中不了。
      */
+    /**
+     * 收集**被引用**的媒体资源（图片 / 动图 / 视频）。
+     *
+     * ⚠️ 只收配置里真有组件在用的那些:媒体库是全局的，用户可能导入了几十张
+     * 图只用了一张，全打进包会让包无谓地大很多。
+     */
+    private fun collectMedia(config: KeyStrokesConfig): List<CollectedMedia> {
+        val result = mutableListOf<CollectedMedia>()
+        val usedPaths = mutableSetOf<String>()
+
+        config.custom.components
+            .filterIsInstance<MediaComponent>()
+            .map { it.assetId }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .forEach { assetId ->
+                val entry = CustomMediaStore.find(assetId) ?: return@forEach
+                val file = CustomMediaStore.fileOf(entry) ?: return@forEach
+                val kindDir = when (entry.kind) {
+                    MediaKind.IMAGE -> "images/"
+                    MediaKind.GIF -> "gifs/"
+                    MediaKind.VIDEO -> "videos/"
+                }
+                var path = ConfigPackageCodec.DIR_MEDIA + kindDir + entry.fileName
+                var index = 2
+                while (!usedPaths.add(path)) {
+                    val base = entry.fileName.substringBeforeLast('.', entry.fileName)
+                    val ext = entry.fileName.substringAfterLast('.', "")
+                    val candidate = if (ext.isEmpty()) "$base ($index)" else "$base ($index).$ext"
+                    path = ConfigPackageCodec.DIR_MEDIA + kindDir + candidate
+                    index++
+                }
+                result += CollectedMedia(
+                    file = file,
+                    info = ConfigPackageCodec.MediaFileInfo(
+                        id = entry.id,
+                        name = entry.displayName,
+                        kind = entry.kind.id,
+                        path = path,
+                    ),
+                )
+            }
+        return result
+    }
+
+    /** 一个要打进包的媒体资源 */
+    private data class CollectedMedia(
+        val file: File,
+        val info: ConfigPackageCodec.MediaFileInfo,
+    )
+
+    /**
+     * 把包里媒体导进本机库，并**改写 params 树里的 assetId**。
+     *
+     * ⚠️ 必须重映射:包里的 id 是导出方的 UUID，导入方库里可能已有同一张图
+     * （sha256 相同），[CustomMediaStore.importFile] 会复用已有条目并返回**别的 id**。
+     * 不重映射的话所有媒体组件都会显示"资源已删除"。
+     *
+     * ⚠️ 必须**流式**写盘:`zip.readEntry` 会把整个文件读进 byte[]，
+     * 用户 100+MB 的视频直接 OOM（实测 199MB 分配失败）。
+     */
+    private fun importMedia(
+        context: Context,
+        manifest: ConfigPackageCodec.Manifest,
+        zip: ZipFile,
+        params: JSONObject,
+    ) {
+        if (manifest.mediaFiles.isEmpty()) return
+        val mapping = mutableMapOf<String, String>()
+
+        manifest.mediaFiles.forEach { info ->
+            val zipEntry = zip.getEntry(info.path) ?: return@forEach
+            val kind = MediaKind.fromId(info.kind) ?: MediaKind.IMAGE
+            val temp = File(context.cacheDir, "media_import_${System.nanoTime()}.tmp")
+            val entry = try {
+                zip.getInputStream(zipEntry).use { input ->
+                    temp.outputStream().use { output -> input.copyTo(output) }
+                }
+                CustomMediaStore.importFile(temp, kind, info.name)
+            } finally {
+                temp.delete()
+            } ?: return@forEach
+            mapping[info.id] = entry.id
+        }
+
+        val components = params.optJSONObject("custom")?.optJSONArray("components") ?: return
+        for (index in 0 until components.length()) {
+            val item = components.optJSONObject(index) ?: continue
+            val old = item.optString("assetId")
+            if (old.isBlank()) continue
+            mapping[old]?.let { item.put("assetId", it) }
+        }
+        AppLog.i(TAG, "已恢复 ${mapping.size} 个媒体资源")
+    }
     private fun writeModel(zip: ZipOutputStream, model: CollectedModel) {
         val generated = setOf(Live2DModels.ENTRY_INDEX, Live2DModels.ENTRY_MODEL_DATA)
         val prefix = model.info.path.trimEnd('/') + "/"
@@ -622,12 +739,16 @@ object ConfigPackageManager {
      * [ZipFile] 会先校验中央目录，损坏 / 被截断的文件在打开时就被拦下，
      * 而且条目可以按名字直接取，字体也不必整个读进内存。
      */
-    fun import(context: Context, source: Uri): Result<ImportResult> {
+    fun import(
+        context: Context,
+        source: Uri,
+        onState: ((String) -> Unit)? = null,
+    ): Result<ImportResult> {
         val temp = copyToCache(context, source)
             ?: return Result.failure(ImportException(ImportError.Broken("无法读取所选文件")))
 
         return try {
-            ZipFile(temp).use { zip -> importFromZip(context, zip) }
+            ZipFile(temp).use { zip -> importFromZip(context, zip, onState) }
         } catch (e: ImportException) {
             AppLog.e(TAG, "导入配置失败：${e.error}")
             Result.failure(e)
@@ -660,7 +781,11 @@ object ConfigPackageManager {
     }
 
     /** 真正的导入流程；此时压缩包已经校验过、可以随机取条目 */
-    private fun importFromZip(context: Context, zip: ZipFile): Result<ImportResult> {
+    private fun importFromZip(
+        context: Context,
+        zip: ZipFile,
+        onState: ((String) -> Unit)? = null,
+    ): Result<ImportResult> {
         // 1. manifest 必须存在且格式正确 —— 不做"半份入库"
         val manifestRaw = zip.readEntry(ConfigPackageCodec.ENTRY_MANIFEST)
             ?: return Result.failure(ImportException(ImportError.MissingManifest))
@@ -668,6 +793,7 @@ object ConfigPackageManager {
             manifestRaw.toString(Charsets.UTF_8),
         ) ?: return Result.failure(ImportException(ImportError.NotAPackage))
 
+        onState?.invoke("正在读取配置…")
         val paramsRaw = zip.readEntry(ConfigPackageCodec.ENTRY_PARAMS)
             ?: return Result.failure(ImportException(ImportError.MissingParams))
 
@@ -677,10 +803,15 @@ object ConfigPackageManager {
         val diff = ConfigPackageCodec.compareFields(params)
 
         // 3. 处理包内字体；**必须在 decode 之前**，它会把树里的包内引用改写成本机 id
+        onState?.invoke("正在导入字体…")
         val fontOutcome = importFonts(zip, manifest, params)
 
         // 3b. 处理包内模型；**必须在 decode 之前**，它会把 modelId 改写成本地 id
+        onState?.invoke("正在导入 Live2D 模型…")
         val modelOutcome = importModel(context, manifest, zip, params)
+        /* 3c. 包内媒体资源:必须在 decode 之前改写 assetId */
+        onState?.invoke("正在准备资源…")
+        importMedia(context, manifest, zip, params)
 
         // 4. 解析成配置对象
         val parsed = JsonConfigCodec.decode(params)

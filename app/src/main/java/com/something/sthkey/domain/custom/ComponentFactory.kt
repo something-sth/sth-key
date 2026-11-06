@@ -186,6 +186,44 @@ fun createComponent(
             side = StickSide.LEFT,
             joystick = config.joystick,
         )
+
+        /*
+         * ============================================================
+         * 媒体组件（图片 / 动图 / 视频）
+         * ============================================================
+         * ⚠️ **不给默认资源**:资源必须先由用户从库里选（或现场导入）。
+         * 给一个"内置示例图片"看起来友好，实际上是让用户删掉它才能
+         * 换成自己的 —— 而且那个内置图还得随包分发。
+         *
+         * ⚠️ 尺寸用 [CustomLayout.NEW_MEDIA_WIDTH]/[NEW_MEDIA_HEIGHT]（横向矩形）:
+         * 图片/视频绝大多数是横向的，给个正方形的初始框反而每次都要手动拉。
+         */
+        ComponentType.IMAGE -> MediaComponent(
+            id = id,
+            x = baseX,
+            y = baseY,
+            width = CustomLayout.NEW_MEDIA_WIDTH,
+            height = CustomLayout.NEW_MEDIA_HEIGHT,
+            kind = MediaKind.IMAGE,
+        )
+
+        ComponentType.GIF -> MediaComponent(
+            id = id,
+            x = baseX,
+            y = baseY,
+            width = CustomLayout.NEW_MEDIA_WIDTH,
+            height = CustomLayout.NEW_MEDIA_HEIGHT,
+            kind = MediaKind.GIF,
+        )
+
+        ComponentType.VIDEO -> MediaComponent(
+            id = id,
+            x = baseX,
+            y = baseY,
+            width = CustomLayout.NEW_MEDIA_WIDTH,
+            height = CustomLayout.NEW_MEDIA_HEIGHT,
+            kind = MediaKind.VIDEO,
+        )
     }
 }
 
@@ -272,6 +310,12 @@ fun typeOf(component: CustomComponent): ComponentType = when (component) {
     is KeyComponent -> ComponentType.KEY
     is TextComponent -> ComponentType.TEXT
     is JoystickComponent -> ComponentType.of(component.source)
+    /* ⚠️ 媒体组件按 kind 反查，与摇杆同一个套路（写死三个字符串会漂） */
+    is MediaComponent -> when (component.kind) {
+        MediaKind.IMAGE -> ComponentType.IMAGE
+        MediaKind.GIF -> ComponentType.GIF
+        MediaKind.VIDEO -> ComponentType.VIDEO
+    }
 }
 
 /**
@@ -285,4 +329,5 @@ fun CustomComponent.withNewId(id: String): CustomComponent = when (this) {
     is KeyComponent -> copy(id = id)
     is TextComponent -> copy(id = id)
     is JoystickComponent -> copy(id = id)
+    is MediaComponent -> copy(id = id)
 }

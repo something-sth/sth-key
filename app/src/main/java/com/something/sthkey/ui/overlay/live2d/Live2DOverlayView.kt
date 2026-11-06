@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.view.MotionEvent
 import android.view.View
 import android.webkit.ConsoleMessage
+import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -16,8 +17,10 @@ import com.something.sthkey.capture.OverlayBounds
 import com.something.sthkey.core.log.AppLog
 import com.something.sthkey.domain.keys.KeyCodes
 import com.something.sthkey.domain.live2d.Live2DModelEntry
+import com.something.sthkey.domain.live2d.Live2DModels
 import com.something.sthkey.domain.live2d.Live2DSemantics
 import org.json.JSONObject
+
 
 /**
  * Live2D（键盘猫）悬浮层。
@@ -79,6 +82,16 @@ class Live2DOverlayView(context: Context) : FrameLayout(context) {
 
     /** 当前要加载的页面；由配置里的 `live2d.modelId` 解析而来 */
     private var pageUrl: String = DEFAULT_PAGE
+
+    /** 当前模型的 id（页面回报内容比例时要写进哪条记录） */
+    private var currentModelId: String? = null
+
+    /**
+     * 内容比例回报后的回调（宿主用它重算窗口尺寸）。
+     *
+     * ⚠️ 只更新记录不重算窗口的话，画面依旧留白 —— 见 `onContentAspect`。
+     */
+    var contentAspectChanged: ((Float) -> Unit)? = null
 
     /** 当前模型有没有右侧键帽（方向键）；影响"同侧恢复"的判定 */
     private var hasArrowSide = true
@@ -187,6 +200,7 @@ class Live2DOverlayView(context: Context) : FrameLayout(context) {
         pageUrl = model.pageUrl
         hasArrowSide = model.hasArrowSide
         supportedKeys = model.supportedKeys
+        currentModelId = model.id
         reload()
     }
 
@@ -537,6 +551,36 @@ class Live2DOverlayView(context: Context) : FrameLayout(context) {
             allowFileAccessFromFileURLs = true
             allowUniversalAccessFromFileURLs = false
         }
+
+        /*
+         * 页面把**模型内容的宽高比**回报上来（`reportContentAspect`）。
+         *
+         * ⚠️ 为什么要回报:导入模型的内容比例和固定设计尺寸 612×354 往往不一致，
+         * 老做法把内容塞进设计区域，四周就留出大片透明（用户报的"多一截空气"）。
+         * 有了这个比例，窗口才能按内容的实际比例排布。
+         *
+         * ⚠️ `addJavascriptInterface` 的回调在 **JavaBridge 线程**，
+         * 所有 UI/存储动作都要自己切主线程。
+         */
+        addJavascriptInterface(
+            object {
+                @JavascriptInterface
+                fun onContentAspect(aspect: Float) {
+                    post {
+                        val id = currentModelId ?: return@post
+                        if (!aspect.isFinite() || aspect <= 0f) return@post
+                        if (!Live2DModels.updateContentAspect(id, aspect)) return@post
+                        /*
+                         * ⚠️ 比例变了要**重算窗口尺寸** —— 只更新记录的话，
+                         * 窗口还是旧尺寸，画面依旧留白。由宿主（OverlayService）
+                         * 接到回调后走它既有的 `updateWindowSize`。
+                         */
+                        contentAspectChanged?.invoke(aspect)
+                    }
+                }
+            },
+            "SthKeyBridge",
+        )
 
         webChromeClient = object : WebChromeClient() {
             /**

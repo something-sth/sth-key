@@ -29,6 +29,7 @@ fun CustomComponent.movedTo(x: Float, y: Float): CustomComponent = when (this) {
     is KeyComponent -> copy(x = x, y = y)
     is TextComponent -> copy(x = x, y = y)
     is JoystickComponent -> copy(x = x, y = y)
+    is MediaComponent -> copy(x = x, y = y)
 }
 
 /** 平移一个组件（不改尺寸） */
@@ -75,6 +76,7 @@ fun CustomComponent.resizedTo(width: Float, height: Float): CustomComponent {
         is KeyComponent -> copy(width = w, height = h).clampedToCanvas()
         is TextComponent -> copy(width = w, height = h).clampedToCanvas()
         is JoystickComponent -> copy(width = w, height = h).clampedToCanvas()
+        is MediaComponent -> copy(width = w, height = h).clampedToCanvas()
     }
 }
 
@@ -110,6 +112,7 @@ fun CustomComponent.resizedToSide(side: Float): CustomComponent {
         is KeyComponent -> copy(width = s, height = s).clampedToCanvas()
         is TextComponent -> copy(width = s, height = s).clampedToCanvas()
         is JoystickComponent -> copy(width = s, height = s).clampedToCanvas()
+        is MediaComponent -> copy(width = s, height = s).clampedToCanvas()
     }
 }
 
@@ -205,6 +208,11 @@ fun CustomComponent.withTextStyle(style: ComponentStyle): CustomComponent {
  * **手柄**右摇杆" —— 那在 [summary] 里加前缀。
  */
 fun CustomComponent.typeLabel(): String = when (this) {
+    is MediaComponent -> when (kind) {
+        MediaKind.IMAGE -> "图片"
+        MediaKind.GIF -> "动图"
+        MediaKind.VIDEO -> "视频"
+    }
     is KeyComponent -> "按键"
     is TextComponent -> "文本"
     is JoystickComponent -> when (source) {
@@ -239,6 +247,7 @@ fun CustomComponent.typeLabel(): String = when (this) {
  * 看不出它在跟手柄，而它恰恰最需要说明。
  */
 fun CustomComponent.summary(): String = when (this) {
+    is MediaComponent -> kind.label + if (assetId.isBlank()) "（未选择资源）" else ""
     is KeyComponent -> label.ifBlank { "（无键名）" }
     is TextComponent -> text.ifBlank { "（空文本）" }
     /*
@@ -327,6 +336,8 @@ fun TextualComponent.withTextOffset(x: Float? = null, y: Float? = null): Textual
  * 文本组件上显示这个选项，这里兜住是为了"以后加了第三种组件"时不会崩。
  */
 fun CustomComponent.withCpsKeyCodes(keyCodes: List<Int>): CustomComponent = when (this) {
+    /* 媒体组件没有 CPS —— 它显示的是资源 */
+    is MediaComponent -> this
     is TextComponent -> copy(cpsKeyCodes = keyCodes)
     is KeyComponent -> this
     /* 摇杆没有 CPS 可言 —— 它显示的是摇杆位置，不是次数 */
@@ -363,6 +374,8 @@ fun CustomComponent.withCpsKeyCodesAt(index: Int, keyCodes: List<Int>): CustomCo
 /** 改监听的按键（可多个，与键位映射同一个形状） */
 fun CustomComponent.withInputKeyCodes(keyCodes: List<Int>): CustomComponent =
     when (this) {
+        /* 媒体组件不监听按键 */
+        is MediaComponent -> this
         is KeyComponent -> copy(inputKeyCodes = keyCodes)
         is TextComponent -> this
         /* 摇杆上报的是**轴**，不是键码 —— 绑键码没有意义（同键位映射那边） */

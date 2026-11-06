@@ -7,8 +7,8 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
-import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
+import android.graphics.PixelFormat
 import android.os.Build
 import android.os.IBinder
 import android.util.TypedValue
@@ -18,20 +18,20 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.CheckBox
-import android.widget.Toast
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
+import android.widget.Toast
 import com.something.sthkey.capture.accessibility.OverlayWindowHost
 import com.something.sthkey.capture.OverlayBounds
 import com.something.sthkey.core.log.AppLog
 import com.something.sthkey.data.config.ConfigStore
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.config.TouchRegion
-import com.something.sthkey.domain.config.TouchRegionGeometry
 import com.something.sthkey.domain.config.TouchRegionBinding
+import com.something.sthkey.domain.config.TouchRegionGeometry
 import com.something.sthkey.domain.config.TouchRegionSpec
 import com.something.sthkey.domain.config.TouchSettings
 import com.something.sthkey.domain.custom.CustomComponent
@@ -39,13 +39,15 @@ import com.something.sthkey.domain.custom.CustomTouchRegion
 import com.something.sthkey.domain.custom.CustomTouchRegionBinding
 import com.something.sthkey.domain.custom.JoystickComponent
 import com.something.sthkey.domain.custom.KeyComponent
+import com.something.sthkey.domain.custom.MediaComponent
 import com.something.sthkey.domain.custom.StickSide
+import com.something.sthkey.domain.custom.summary
 import com.something.sthkey.domain.custom.TextComponent
 import com.something.sthkey.domain.custom.TouchDirection
-import com.something.sthkey.domain.custom.summary
 import com.something.sthkey.domain.style.KeyLayout
 import com.something.sthkey.domain.style.StyleId
 import kotlin.math.roundToInt
+
 
 /**
  * **触摸区域编辑器**。
@@ -1351,6 +1353,7 @@ class TouchRegionEditorService : Service() {
                 ?: "文本"
             is JoystickComponent -> "摇杆（" +
                 (if (component.side == StickSide.LEFT) "移动" else "视角") + "）"
+            is MediaComponent -> component.kind.label
         }
     }
 

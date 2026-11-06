@@ -371,6 +371,45 @@ object CustomLayout {
     fun textSize(textScalePercent: Int): Float =
         textBaseSize * textScalePercent.coerceIn(TEXT_SCALE_MIN, TEXT_SCALE_MAX) / 100f
 
+    /**
+     * 文字字号（基础坐标），**组件自己的缩放 × 整体字符缩放**。
+     *
+     * ============================================================
+     * ⚠️ 为什么是"相乘"而不是"二选一"
+     * ============================================================
+     * 用户的原话:
+     *
+     * > 整体字符缩放与自定义 key 内单独组件的字符缩放共同决定最终字符缩放
+     *
+     * 两者是**独立的两层**:
+     *
+     * | 层 | 谁调 | 作用范围 |
+     * |---|---|---|
+     * | 组件 `textScalePercent` | 编辑器里逐个组件调 | 只影响那一个组件 |
+     * | 整体 [overallTextScalePercent] | 配置编辑页的一个滑块 | 影响**所有**组件的文字 |
+     *
+     * 乘起来的效果:整体设成 120%、某个组件单独设成 80%，
+     * 那个组件最终是 96%，其余都是 120% —— 这才是"整体"该有的语义。
+     *
+     * ⚠️ 两个百分比**各自**夹在自己的范围内（50..300），**乘积不夹**:
+     * 300% × 300% = 900% 是用户自己拧出来的；夹乘积会造出
+     * "我把整体调大了，可那个组件不动"这种新的困惑。
+     *
+     * @param textScalePercent 这个组件自己的文字缩放
+     * @param overallTextScalePercent 整块画布的文字缩放（配置级）
+     */
+    fun textSize(textScalePercent: Int, overallTextScalePercent: Int): Float =
+        textSize(textScalePercent) * overallTextScale(overallTextScalePercent)
+
+    /**
+     * 整体字符缩放折算成倍率（1f = 不缩放）。
+     *
+     * ⚠️ 单独抽出来是因为**漂浮窗与配置预览都要用**:
+     * 各自写一遍 `/ 100f` 迟早有一处忘掉夹取范围。
+     */
+    fun overallTextScale(overallTextScalePercent: Int): Float =
+        overallTextScalePercent.coerceIn(TEXT_SCALE_MIN, TEXT_SCALE_MAX) / 100f
+
     /*
      * ============================================================
      * 新建组件的默认几何
@@ -382,6 +421,15 @@ object CustomLayout {
     /** 新组件的默认尺寸 */
     const val NEW_KEY_SIZE = 80f
     const val NEW_TEXT_WIDTH = 120f
+
+    /*
+     * 媒体组件的初始尺寸（基础坐标）。
+     *
+     * ⚠️ 用横向矩形而不是正方形:图片/视频绝大多数是横向的，
+     * 正方形初始框每次都要手动拉一次。
+     */
+    const val NEW_MEDIA_WIDTH = 200f
+    const val NEW_MEDIA_HEIGHT = 120f
     const val NEW_TEXT_HEIGHT = 30f
 
     /** 新组件相对现有内容的落点：放到最下面那个组件之下 */
@@ -504,6 +552,8 @@ object CustomLayout {
          * 返回空列表就是"这个组件不统计任何键"，渲染层自然不会给它套 CPS 文字。
          */
         is JoystickComponent -> emptyList()
+        /* 媒体组件也不统计任何键 */
+        is MediaComponent -> emptyList()
     }
 
     /**
@@ -628,6 +678,8 @@ object CustomLayout {
          * 让它返回空是"这个组件没有文字"最省事的表达。
          */
         is JoystickComponent -> ""
+        /* 媒体组件没有文字 */
+        is MediaComponent -> ""
     }
 
     /**
