@@ -613,6 +613,24 @@ class AppPrefs private constructor(context: Context) {
 
     /*
      * ============================================================
+     * 提示与干涉
+     * ============================================================
+     */
+
+    /**
+     * 是否**不再提示**「同时开启多个悬浮窗」那个耗电提醒。
+     *
+     * ⚠️ 用户要求（2026-11-07）:高配设备开很多窗也没事，
+     * 对话框里要有一个「不再提示」，勾了就别再打扰。
+     */
+    var manyWindowsHintDisabled: Boolean
+        get() = prefs.getBoolean(KEY_MANY_WINDOWS_HINT_DISABLED, false)
+        set(value) {
+            prefs.edit().putBoolean(KEY_MANY_WINDOWS_HINT_DISABLED, value).apply()
+        }
+
+    /*
+     * ============================================================
      * FPS 显示
      * ============================================================
      */
@@ -743,6 +761,9 @@ class AppPrefs private constructor(context: Context) {
         private const val KEY_CONFIG_LIST_COLUMNS = "config_list_columns"
         private const val KEY_EXPORT_METHOD = "export_method"
     private const val KEY_FPS_MODE = "fps_mode"
+
+    /** 「不再提示多个悬浮窗」的开关（见 [manyWindowsHintDisabled]） */
+    private const val KEY_MANY_WINDOWS_HINT_DISABLED = "many_windows_hint_disabled"
 
         /* 外观（Miuix 主题与底栏样式）—— 见 `appearance` 的说明 */
         private const val KEY_APPEARANCE_COLOR_MODE = "appearance_color_mode"

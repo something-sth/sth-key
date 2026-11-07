@@ -540,6 +540,7 @@ fun OverlayContent(
                 cpsBySlot = cps,
                 /* ⚠️ 实时帧率;读不到时 FpsText 渲染成 N/A */
                 fps = fpsReading.value,
+                fpsSeed = fpsReading.seq,
                 slotIdOf = { code -> KeyLayout.codeToSlotMap(current)[code] },
                 baseWidth = windowed.bounds.width,
                 baseHeight = windowed.bounds.height,

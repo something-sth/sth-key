@@ -298,6 +298,13 @@ fun CustomKeyCanvas(
      * ⚠️ 预览传固定 120，只有悬浮窗才传实时值 —— 与 `(cps)` 预览显示 0 同一个思路。
      */
     fps: Double? = null,
+    /**
+     * 帧率对应的采样序号:占位符里的随机偏移按它派生。
+     *
+     * ⚠️ 不传的话每次重组（按一下按键就会重组）都会重抽偏移，
+     * 表现就是"按键盘刷新帧率"（用户反馈）。
+     */
+    fpsSeed: Long = 0L,
     slotIdOf: (Int) -> String? = { null },
     /** 根容器尺寸（基础坐标）；默认 = 包围盒。传定位区尺寸就是整个定位区 */
     baseWidth: Float = CustomLayout.bounds(settings.components).width,
@@ -454,6 +461,7 @@ fun CustomKeyCanvas(
                 scale,
                 cpsBySlot,
                 fps,
+                fpsSeed,
                 slotIdOf,
                 sticks,
                 mouseMotion,
@@ -494,6 +502,7 @@ fun CustomKeyCanvas(
                 fittedScale,
                 cpsBySlot,
                 fps,
+                fpsSeed,
                 slotIdOf,
                 sticks,
                 mouseMotion,
@@ -514,6 +523,7 @@ private fun CustomKeyCanvasContent(
     scale: Float,
     cpsBySlot: Map<String, Int>,
     fps: Double?,
+    fpsSeed: Long,
     slotIdOf: (Int) -> String?,
     sticks: StickState,
     mouseMotion: MouseMotion?,
@@ -586,6 +596,7 @@ private fun CustomKeyCanvasContent(
             scale = scale,
             cpsBySlot = cpsBySlot,
             fps = fps,
+            fpsSeed = fpsSeed,
             slotIdOf = slotIdOf,
             touchCpsOf = touchCpsOf,
             overallTextScalePercent = overallTextScalePercent,
@@ -1195,6 +1206,7 @@ private fun CustomComponentView(
     scale: Float,
     cpsBySlot: Map<String, Int>,
     fps: Double?,
+    fpsSeed: Long,
     slotIdOf: (Int) -> String?,
     /** ⚠️ 触摸区域那一路的 CPS，见 [CustomKeyCanvas] 的说明 */
     touchCpsOf: (String) -> Int,
@@ -1422,6 +1434,7 @@ private fun CustomComponentView(
                 val text = FpsText.render(
                     template = CustomLayout.displayTextAt(component, cpsValues),
                     fps = fps,
+                    seed = fpsSeed,
                 )
 
         /*

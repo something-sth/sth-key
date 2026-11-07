@@ -129,6 +129,12 @@ object FpsMonitor {
     private var choreographerInstalled = false
     private var sampleSeq = 0L
 
+    /** 采集启动时的 Application Context（读刷新率用） */
+    private var appContext: Context? = null
+
+    /** 屏幕刷新率，读一次缓存（Choreographer 模式的输出） */
+    private var refreshRateHz: Double? = null
+
     /* SurfaceFlinger 采样状态（跨拍保留，差量靠它） */
     private var targetPackage: String? = null
     private var targetLayer: String? = null
@@ -168,6 +174,14 @@ object FpsMonitor {
      * 所以 latency 失败时要**逐个**用帧计数器去试（FPS-Meter 也是这么做的）。
      */
     private var targetCandidates: List<String> = emptyList()
+
+    /**
+     * 这个包里"已经证明没有帧"的层（Splash Screen 最常见）。
+     *
+     * ⚠️ 不记的话，连续两拍 0 → 重新解析 → 又选中同一个 Splash 层 → 再两拍 0，
+     * 无限循环（实测官服卡了将近一分钟才碰巧选中 SurfaceView）。
+     */
+    private val rejectedLayers = mutableMapOf<String, MutableSet<String>>()
 
     /**
      * 只能靠「帧计数器」读的包（Vulkan / 自绘 surface 常见）。
@@ -790,6 +804,16 @@ object FpsMonitor {
         }
     }
 
+    /**
+     * 无需权限时的"估算上限"。
+     *
+     * ⚠️ **不要改成"读 Display.refreshRate"**（我试过一次，被要求回退了）:
+     * 那样确实稳定，但它变成死数字;而这个模式的实际用途是"看系统节拍在动"。
+     *
+     * ⚠️ 数值会随悬浮窗自己的绘制负载轻微波动 —— 这是**预期**的:
+     * 回调被推迟说明系统忙。真正应该"只在每秒刷新"的是**占位符的偏移**，
+     * 那件事在 [com.something.sthkey.domain.custom.FpsText] 里按 seed 处理。
+     */
     private fun sampleChoreographer(): Reading {
         val now = SystemClock.elapsedRealtime()
         val count = frameCounter
@@ -801,6 +825,7 @@ object FpsMonitor {
         val fps = frames * 1000.0 / elapsed
         return Reading(if (fps > 0) fps else null, Source.CHOREOGRAPHER, ++sampleSeq)
     }
+
 
     /* ============================================================
      * 常量

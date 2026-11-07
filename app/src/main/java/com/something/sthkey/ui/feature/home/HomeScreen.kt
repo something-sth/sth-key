@@ -70,6 +70,7 @@ import com.something.sthkey.capture.CaptureState
 import com.something.sthkey.capture.OverlayBounds
 import com.something.sthkey.capture.OverlayService
 import com.something.sthkey.core.log.AppLog
+import com.something.sthkey.core.prefs.AppPrefs
 import com.something.sthkey.data.permission.PermissionHelper
 import com.something.sthkey.domain.capture.CaptureCapabilities
 import com.something.sthkey.domain.config.ConfigGroup
@@ -87,6 +88,7 @@ import com.something.sthkey.ui.overlay.overlayWindowHeightPx
 import com.something.sthkey.ui.overlay.overlayWindowWidthPx
 import java.io.File
 import kotlinx.coroutines.delay
+
 
 
 
@@ -387,8 +389,10 @@ fun HomeScreen(
                              * 提示而不是拦截：低端机开多了确实会卡，
                              * 但那取决于机型与配置，硬拦会让高端机用户莫名其妙。
                              */
+                            /* ⚠️ 用户勾了「不再提示」就不再打扰（见 AppPrefs.manyWindowsHintDisabled） */
                             if (on && config.id !in enabledIds &&
-                                enabledIds.size + 1 > SUGGESTED_MAX_WINDOWS
+                                enabledIds.size + 1 > SUGGESTED_MAX_WINDOWS &&
+                                !AppPrefs.get(context).manyWindowsHintDisabled
                             ) {
                                 showManyWindowsHint = true
                             }
@@ -555,6 +559,18 @@ fun HomeScreen(
                         "开得太多会明显增加耗电，低配置设备上还可能卡顿。\n\n" +
                         "如果觉得卡，关掉用不到的那几个即可。",
                 )
+            },
+            /*
+             * ⚠️ 左下角的「不再提示」:勾了之后**永不再弹**（偏好持久化）。
+             * 高配设备开很多窗确实没影响，不该反复打扰。
+             */
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        AppPrefs.get(context).manyWindowsHintDisabled = true
+                        showManyWindowsHint = false
+                    },
+                ) { Text("不再提示") }
             },
             confirmButton = {
                 TextButton(onClick = { showManyWindowsHint = false }) { Text("知道了") }

@@ -83,21 +83,49 @@ object FpsText {
     /**
      * 把文本里的所有 `(fps…)` 换成实际数值。
      *
+     * ============================================================
+     * ⚠️ `seed` 是**关键参数**，别省
+     * ============================================================
+     * 带 `offset` 时，偏移量是**每秒随机一次**的。但这个函数会被反复调用 ——
+     * 只要界面重组（按一下按键就会重组），它就会再跑一遍。
+     *
+     * 早先这里直接用 `Range.random()`，于是**每按一次键偏移就重抽一次**，
+     * 用户看到的是"按键盘刷新帧率"（用户反馈）。裸 `(fps)` 没有随机量，
+     * 所以看不出问题 —— 这也解释了为什么只有带 `offset` 的才明显。
+     *
+     * 现在随机源由 `seed` 派生（调用方传采样序号 `Reading.seq`）:
+     * 同一秒内重组多少次，结果都**完全一样**;下一秒换 seed 才变。
+     *
      * @param fps `null` = 读不到（显示 `N/A`）
-     * @param random 随机数来源（测试可注入固定值）
+     * @param seed 随机种子（每秒变化一次）
+     * @param random 显式随机源（测试用;传了就不用 seed）
      */
     fun render(
         template: String,
         fps: Double?,
-        random: (IntRange) -> Int = { range -> range.random() },
-    ): String = PLACEHOLDER.replace(template) { match ->
+        seed: Long = 0L,
+        random: ((IntRange) -> Int)? = null,
+    ): String {
         if (fps == null) {
-            /* ⚠️ 读不到就是 N/A，不做运算 —— 与 DroidPerf 的 Zero Fabrication 一致 */
-            return@replace NA
+            /* 读不到就整体显示 N/A，不参与运算 */
+            return PLACEHOLDER.replace(template) { NA }
         }
-        val expression = parse(match.value) ?: return@replace match.value
-        apply(expression, fps, random)
+        var occurrence = 0
+        return PLACEHOLDER.replace(template) { match ->
+            val expression = parse(match.value) ?: return@replace match.value
+            /*
+             * 每个占位符各用一条随机序列:同一段文字里写两个
+             * `(fps,offset=…)` 不应该得到一模一样的抖动。
+             */
+            val source = random ?: run {
+                val rng = kotlin.random.Random(seed * 31L + occurrence)
+                occurrence++
+                { range: IntRange -> rng.nextInt(range.first, range.last + 1) }
+            }
+            apply(expression, fps, source)
+        }
     }
+
 
     /** 对一个已解析的表达式求值 */
     fun apply(
