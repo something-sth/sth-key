@@ -238,6 +238,15 @@ class StyleSpecificFieldsTest {
                 "outline" to both,
                 "shadow" to both,
                 "opacity" to both,
+                /*
+                 * ⚠️ 这四项原来**无条件写**（用户报的第二批冗余字段）:
+                 * colors / fontId / keyMappings 只有键位网格样式读;
+                 * joystick 在自定义 Key 里只在"真的放了摇杆组件"时才写（那条例外写在编码处）。
+                 */
+                "colors" to both,
+                "fontId" to both,
+                "keyMappings" to both,
+                "joystick" to both,
             ),
             parsedGateTable(),
         )

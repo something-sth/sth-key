@@ -41,9 +41,11 @@ import com.something.sthkey.data.incoming.IncomingFile
 import com.something.sthkey.data.live2d.Live2DModelImporter
 import com.something.sthkey.domain.font.bitmap.BitmapFontImporter
 import com.something.sthkey.domain.font.FontRegistry
+import com.something.sthkey.ui.feature.config.ImportReportContent
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
 
 
 
@@ -87,6 +89,9 @@ fun IncomingFileDialog(
 
     /* ⚠️ 状态机而不是几个布尔:几个布尔会出现"既在识别又在显示结果"的中间态 */
     var phase by remember(request) { mutableStateOf<Phase>(Phase.Sniffing) }
+
+    /** 是否展开「导入报告」（外部导入的配置包） */
+    var showReport by remember(request) { mutableStateOf(false) }
 
     /*
      * 识别：进来就做，不等用户点确定（他首先要知道"这文件能不能用"）。
@@ -141,6 +146,24 @@ fun IncomingFileDialog(
 
                     is Phase.Done -> Column {
                         ResultList(current.results)
+                        /*
+                         * ⚠️ **导入报告**（用户反馈:外部导入只有一行"已导入为配置"）。
+                         *
+                         * 配置页的导入有完整报告（字段差异 / 字体去向 / 版本号），
+                         * 外部导入却没有 —— 同一个包从两个入口看到的`信息量`不一样。
+                         * 这里补上，复用同一个 [ImportReportContent]。
+                         */
+                        val configReport = current.results
+                            .filterIsInstance<ItemResult.ConfigOk>()
+                            .mapNotNull { it.report }
+                            .lastOrNull()
+                        if (configReport != null) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            TextButton(onClick = { showReport = !showReport }) {
+                                Text(if (showReport) "收起导入报告" else "查看导入报告")
+                            }
+                            if (showReport) ImportReportContent(configReport)
+                        }
                         if (current.results.any { it is ItemResult.FontOk || it is ItemResult.ModelOk }) {
                             Spacer(modifier = Modifier.height(10.dp))
                             Text(
@@ -257,7 +280,7 @@ internal fun runImport(context: Context, item: SniffedItem): ItemResult {
                 if (outcome == null) {
                     ItemResult.Failed(item.displayName, describe(result.exceptionOrNull()))
                 } else {
-                    ItemResult.ConfigOk(outcome.config.name)
+                ItemResult.ConfigOk(outcome.config.name, outcome)
                 }
             }
 
@@ -353,7 +376,17 @@ internal sealed interface ItemResult {
         override val ok: Boolean get() = false
     }
 
-    data class ConfigOk(val configName: String) : ItemResult {
+    data class ConfigOk(
+        val configName: String,
+        /*
+         * ⚠️ 把**完整的导入报告**一起带回来。
+         *
+         * 用户反馈:"外部导入对话框里没有导入报告"。原来这里只传了配置名，
+         * 而字段差异 / 字体去向 / 版本号那些信息全在 [ConfigPackageManager.ImportResult]
+         * 里 —— 配置页的导入有报告，外部导入没有，同一个包看到的`信息量`不一样。
+         */
+        val report: ConfigPackageManager.ImportResult? = null,
+    ) : ItemResult {
         override val ok: Boolean get() = true
     }
 

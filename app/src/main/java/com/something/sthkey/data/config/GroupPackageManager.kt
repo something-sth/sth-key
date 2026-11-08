@@ -103,6 +103,13 @@ object GroupPackageManager {
         group: ConfigGroup,
         configs: List<KeyStrokesConfig>,
         target: Uri,
+        /**
+         * 进度回调（给「正在导出…」弹窗用）。
+         *
+         * ⚠️ 与 [ConfigPackageManager.export] 同一个口径:只在**阶段边界**回调，
+         * 因为写入走 SAF 的 OutputStream，拿不到字节级进度。
+         */
+        onState: ((String) -> Unit)? = null,
     ): ExportOutcome {
         if (configs.isEmpty() && group.memberIds.isNotEmpty()) {
             /*
@@ -111,6 +118,8 @@ object GroupPackageManager {
              */
             return ExportOutcome.Failed("组合里的配置已不存在，无法导出")
         }
+
+        onState?.invoke("正在准备组合（共 ${configs.size} 份配置）…")
 
         val resolver = context.contentResolver
         val output = runCatching {
@@ -125,6 +134,8 @@ object GroupPackageManager {
             ZipOutputStream(output.buffered()).use { zip ->
                 /* 逐条把配置打成 `.sthkey` 再塞进外层 zip */
                 configs.forEachIndexed { index, config ->
+                    /* 阶段回调:让"正在导出…"能看到它在打包第几份 */
+                    onState?.invoke("正在打包配置（${index + 1}/${configs.size}）：${config.name}…")
                     val temp = File(context.cacheDir, "group_export_${index}.sthkey")
                     try {
                         if (!ConfigPackageManager.writeTo(context, config, Uri.fromFile(temp))) {
@@ -152,6 +163,7 @@ object GroupPackageManager {
                     appVersion = BuildConfig.VERSION_NAME,
                     configs = refs,
                 )
+                onState?.invoke("正在写入组合清单…")
                 zip.putNextEntry(ZipEntry(GroupPackageCodec.ENTRY_MANIFEST))
                 zip.write(manifest.toByteArray(Charsets.UTF_8))
                 zip.closeEntry()

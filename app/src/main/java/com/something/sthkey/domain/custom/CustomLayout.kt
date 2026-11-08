@@ -102,7 +102,7 @@ object CustomLayout {
      * （组件能到 1000，8 的阴影在它上面看不见）。
      */
     const val SHADOW_SIZE_MIN = 0.5f
-    const val SHADOW_SIZE_MAX = 30f
+    const val SHADOW_SIZE_MAX = 45f
 
     /** 圆角程度范围（短边百分比） */
     const val CORNER_PERCENT_MIN = 0f

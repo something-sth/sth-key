@@ -227,12 +227,22 @@ fun rememberExportFlow(onMessage: (String) -> Unit): ExportFlow {
                         displayName = group.name,
                         fileName = group.name + GroupPackageCodec.EXTENSION,
                         write = { uri ->
-                            GroupPackageManager.export(
-                                context = context,
-                                group = group,
-                                configs = configs,
-                                target = uri,
-                            ) is GroupPackageManager.ExportOutcome.Ok
+                            /*
+                             * ⚠️ 进度写进全局状态（与单配置导出共用同一个弹窗），
+                             * 并且**必须在 finally 里清掉** —— 不清的话导出结束后
+                             * 那个「请稍候」会一直挂在屏幕上。
+                             */
+                            try {
+                                GroupPackageManager.export(
+                                    context = context,
+                                    group = group,
+                                    configs = configs,
+                                    target = uri,
+                                    onState = { ExportProgress.update(it) },
+                                ) is GroupPackageManager.ExportOutcome.Ok
+                            } finally {
+                                ExportProgress.clear()
+                            }
                         },
                     ),
                     method,

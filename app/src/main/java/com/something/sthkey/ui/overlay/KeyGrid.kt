@@ -1,57 +1,59 @@
 package com.something.sthkey.ui.overlay
 
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
-import androidx.compose.runtime.remember
-import com.something.sthkey.ui.component.bitmapSpecOf
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.BiasAlignment
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.Modifier
+import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Size
-import com.something.sthkey.domain.style.RippleGeometry
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.TextUnit
 import com.something.sthkey.domain.config.AnimationMode
-import kotlin.math.roundToInt
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.config.ShadowMode
 import com.something.sthkey.domain.style.KeyBox
 import com.something.sthkey.domain.style.KeyLayout
 import com.something.sthkey.domain.style.KeyStyleResolver
+import com.something.sthkey.domain.style.RippleGeometry
+import com.something.sthkey.ui.component.bitmapSpecOf
 import com.something.sthkey.ui.component.composeFontFamily
+import kotlin.math.roundToInt
+
 
 /**
  * 按键网格（悬浮窗与配置预览共用的那一份渲染）。
@@ -439,7 +441,7 @@ private fun OverlayKey(
          * 但这是个真的开销，键很多又想开阴影时值得知道。
          */
         val shadowSpan = if (shadowSize == null) 0f else shadowSize
-        val contentPadding = (shadowSpan * 2f).coerceAtMost(minOf(widthDp, heightDp) / 4f)
+        val contentPadding = (shadowSpan * 2f).coerceAtMost(minOf(widthDp, heightDp) / 2f)
 
         /*
          * ⚠️ 柔光半径的单位要换算：`TextStyle.Shadow.blurRadius` 吃的是 **dp**，
@@ -477,9 +479,23 @@ private fun OverlayKey(
                     .padding(contentPadding.dp),
                 contentAlignment = Alignment.Center,
             ) {
+                /*
+                 * ⚠️ **离屏图层的尺寸要比键帽大**。
+                 *
+                 * `CompositingStrategy.Offscreen` 会按**这个节点的大小**开一张离屏纹理，
+                 * 超出部分直接在纹理边界被裁掉 —— 硬阴影的位移是 `0.6 × 尺寸`，
+                 * 尺寸一大就顶出纹理，看起来就是"阴影被键帽裁掉了"（用户反馈）。
+                 *
+                 * 把这一层按 `shadowSpan` 撑大后，阴影就能完整画到键帽之外;
+                 * 父级是居中对齐，所以大出来的部分左右上下对称。
+                 */
+                val layerPad = (shadowSpan * 4f).coerceAtLeast(0f)
                 Box(
                     modifier = Modifier
-                        .matchParentSize()
+                        .requiredSize(
+                            (widthDp + layerPad * 2f).dp,
+                            (heightDp + layerPad * 2f).dp,
+                        )
                         /*
                          * 隔离图层：见上面关于 DstOut 的说明。
                          * 不隔离会把键帽底色也擦掉。
@@ -554,8 +570,13 @@ private fun OverlayKey(
 
         Box(
             modifier = Modifier
-                .matchParentSize()
-                .padding(contentPadding.dp),
+                .matchParentSize(),
+                /*
+                 * ⚠️ **正文层不留白**（阴影层才留）。
+                 *
+                 * `contentPadding = min(尺寸×2, 短边/2)`，尺寸一大可用区域就被压到 0:
+                 * 文字被挤没/被推下去（用户实测，硬阴影同样会，因为它与模式无关）。
+                 */
             contentAlignment = Alignment.Center,
         ) {
             /*

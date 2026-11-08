@@ -85,12 +85,21 @@ object FpsMonitor {
      * 不必靠猜（用户原话:"这样子搞也方便我调试"）。
      */
     enum class Mode(val id: String, val label: String) {
-        AUTO("auto", "自动"),
+        /*
+         * ⚠️ **「自动」已删除**（用户决定，2026-11-08）。
+         *
+         * 原来 AUTO = "有 Shizuku/root 走 Surfaceflinger，否则退到 Choreographer"。
+         * 但 Surfaceflinger 在不少游戏上读不到帧（表现为 N/A），用户会以为是 bug;
+         * 而 Choreographer 经过优化已经够用 —— 所以**默认 Choreographer**，
+         * Surfaceflinger 只作为"想尝鲜时手动切"的选项。
+         *
+         * ⚠️ 老配置里存着 `"auto"` 的由 [fromId] 回落，**不做迁移**（有意为之）。
+         */
         CHOREOGRAPHER("choreographer", "Choreographer"),
         SURFACE_FLINGER("surfaceflinger", "Surfaceflinger");
 
         companion object {
-            fun fromId(id: String?): Mode = entries.firstOrNull { it.id == id } ?: AUTO
+            fun fromId(id: String?): Mode = entries.firstOrNull { it.id == id } ?: CHOREOGRAPHER
         }
     }
 
@@ -117,7 +126,7 @@ object FpsMonitor {
 
     /** 当前通道;由 UI/服务写入，采样循环每秒读一次，改了立刻生效（不用重启服务） */
     @Volatile
-    var mode: Mode = Mode.AUTO
+    var mode: Mode = Mode.CHOREOGRAPHER
 
     private var scope: CoroutineScope? = null
     private var job: Job? = null
@@ -241,7 +250,6 @@ object FpsMonitor {
                  * 日志里明明有"检测到 root"，fps 却标着"估算上限"）。
                  */
                 val useSf = when (mode) {
-                    Mode.AUTO -> hasShell
                     Mode.SURFACE_FLINGER -> hasShell
                     Mode.CHOREOGRAPHER -> false
                 }

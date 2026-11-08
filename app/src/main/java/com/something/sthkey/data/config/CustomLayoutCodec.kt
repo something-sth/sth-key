@@ -287,11 +287,20 @@ object CustomLayoutCodec {
                 put("fit", component.fit.id)
                 put("opacityPercent", component.opacityPercent)
                 put("cornerRadiusPercent", component.cornerRadiusPercent)
-                /* 染色与描边（见 MediaComponent 的说明:染色照位图字体那套） */
-                put("tintColor", component.tintColor)
-                put("tintPercent", component.tintPercent)
-                put("outlineWidthPercent", component.outlineWidthPercent)
-                put("outlineColor", component.outlineColor)
+                /*
+                 * 染色与描边:**只有图片才写**（用户要求:动图/视频的配置里
+                 * 不要出现这些字段）。
+                 *
+                 * ⚠️ 编码侧不写、解码侧又有默认值 —— 两边合起来的效果就是
+                 * "非图片组件永远不携带这几个字段"，导出的 JSON 干净、也不会
+                 * 给人"视频居然能描边"的错觉。
+                 */
+                if (component.kind == MediaKind.IMAGE) {
+                    put("tintColor", component.tintColor)
+                    put("tintPercent", component.tintPercent)
+                    put("outlineWidthPercent", component.outlineWidthPercent)
+                    put("outlineColor", component.outlineColor)
+                }
                 /* 静音只对视频有意义，但照样写（与 stickSide 同理:切来切去不丢） */
             }
         }

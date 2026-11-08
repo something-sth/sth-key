@@ -146,15 +146,6 @@ fun AboutScreen(
         item {
             SettingsCard {
                 SettingItem(
-                    title = "更新公告",
-                    subtitle = "查看各版本的更新内容（可往前翻历史）",
-                    leadingIcon = Icons.Default.Campaign,
-                    onClick = { showAnnouncement = true },
-                )
-
-                CardDivider()
-
-                SettingItem(
                     title = "GitHub 开源仓库",
                     leadingIcon = Icons.Rounded.Code,
                     subtitle = "something-sth/sth-key",

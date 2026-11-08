@@ -1,6 +1,7 @@
 package com.something.sthkey.ui.feature.announcement
 
 import android.widget.Toast
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -8,10 +9,17 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.Icons
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -22,6 +30,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -35,6 +44,8 @@ import androidx.compose.ui.unit.dp
 import com.something.sthkey.data.permission.PermissionHelper
 import com.something.sthkey.ui.AppLinks
 import kotlinx.coroutines.delay
+
+
 
 
 /** 阅读倒计时：这段时间内"确认"不可点 */
@@ -74,12 +85,9 @@ fun AnnouncementDialog(
     onDismiss: (() -> Unit)?,
 ) {
     val releases = AppAnnouncement.releases
-    var index by remember {
-        mutableStateOf(
-            releases.indexOfFirst { it.version == initialVersion }.coerceAtLeast(0),
-        )
+    val release = remember(initialVersion) {
+        releases.firstOrNull { it.version == initialVersion } ?: releases.first()
     }
-    val release = releases[index]
 
     var remaining by remember { mutableStateOf(if (requireReading) READ_SECONDS else 0) }
 
@@ -94,7 +102,11 @@ fun AnnouncementDialog(
         // null = 点外部 / 按返回键都不关闭，必须走"确认"
         onDismissRequest = { onDismiss?.invoke() },
 
-        title = { Text("${AppAnnouncement.APP_NAME} v${release.version} 更新公告") },
+        /*
+         * ⚠️ 标题**不带版本号**（用户要求）:版本号在各版本卡片的表头里，
+         * 标题只说明"这是更新公告"，不随翻到哪一版变化。
+         */
+        title = { Text("${AppAnnouncement.APP_NAME} 更新公告") },
 
         text = {
             Column(
@@ -106,39 +118,22 @@ fun AnnouncementDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                PagerRow(
-                    release = release,
-                    isLatest = index == 0,
-                    hasOlder = index < releases.lastIndex,
-                    hasNewer = index > 0,
-                    onOlder = { index++ },
-                    onNewer = { index-- },
-                )
-
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-                Text(
-                    text = markdown(release.intro),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-
-                release.sections.forEach { section ->
-                    Text(
-                        text = section.title,
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(top = 8.dp),
+                /*
+                 * ============================================================
+                 * 各版本公告:**全部做成折叠卡片**，最新的一版默认展开
+                 * ============================================================
+                 * ⚠️ 用户定的设计（2026-11-08）:
+                 * - 标题不再带版本号（统一叫「sth key 更新公告」），版本号放卡片表头;
+                 * - 最新版也是卡片，只是默认展开 —— 这样"翻历史"与"看当前"是同一种操作;
+                 * - 历史版本默认收起，避免一进来滚好几屏。
+                 */
+                releases.forEach { item ->
+                    ReleaseCard(
+                        release = item,
+                        initiallyExpanded = item.version == release.version,
+                        isLatest = item.version == releases.first().version,
                     )
-
-                    section.lines.forEach { line ->
-                        Text(
-                            text = markdown("· $line"),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
                 }
-
                 HorizontalDivider(
                     color = MaterialTheme.colorScheme.outlineVariant,
                     modifier = Modifier.padding(vertical = 8.dp),
@@ -186,45 +181,124 @@ fun AnnouncementDialog(
 }
 
 /**
- * 版本翻页行：`‹ 上一版` + `v2.1.0 · 2026-09-26 · 最新` + `下一版 ›`。
+ * 一版公告的**正文**（简介 + 各分区）。
  *
- * 为什么用左右翻页而不是版本列表：公告条数少（一版一条），但每条很长 ——
- * 列表要先选再看，翻页则是"直接往前后读"，更符合"查历史"这个用途。
+ * 抽出来是因为"当前版本"和"历史版本展开后"要渲染同一套内容。
  */
 @Composable
-private fun PagerRow(
+private fun ReleaseBody(
     release: AppAnnouncement.Release,
-    isLatest: Boolean,
-    hasOlder: Boolean,
-    hasNewer: Boolean,
-    onOlder: () -> Unit,
-    onNewer: () -> Unit,
+    /*
+     * 是否在正文最上面显示"版本号 · 日期"。
+     *
+     * ⚠️ 历史版本**不显示**（它的卡片标题里已经有版本号与日期）;
+     * 当前版本是直接铺开的，不加这一行就看不到更新时间（用户反馈）。
+     */
+    showDate: Boolean = false,
 ) {
-    Row(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        TextButton(onClick = onOlder, enabled = hasOlder) {
-            // 说的是"更早的那一版"，所以标签就叫上一版
-            Text("‹ 上一版", style = MaterialTheme.typography.labelLarge)
+        if (showDate) {
+            Text(
+                text = "v${release.version} · ${release.date}",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
         }
-
         Text(
-            text = buildString {
-                append("v${release.version} · ${release.date}")
-                if (isLatest) append(" · 最新")
-            },
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.weight(1f),
+            text = markdown(release.intro),
+            style = MaterialTheme.typography.bodyMedium,
         )
 
-        TextButton(onClick = onNewer, enabled = hasNewer) {
-            Text("下一版 ›", style = MaterialTheme.typography.labelLarge)
+        release.sections.forEach { section ->
+            Text(
+                text = section.title,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+
+            section.lines.forEach { line ->
+                Text(
+                    text = markdown("· $line"),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
+
+/**
+ * 历史版本的**折叠卡片**（标题 = 版本号 + 日期，主题色）。
+ *
+ * ⚠️ 默认收起:弹窗里已经有当前版本的完整正文，历史版本一进来全展开会滚好几屏。
+ */
+@Composable
+private fun ReleaseCard(
+    release: AppAnnouncement.Release,
+    /** 是否默认展开（最新版 true；历史版 false） */
+    initiallyExpanded: Boolean = false,
+    /** 是不是最新一版（表头会标「最新」） */
+    isLatest: Boolean = false,
+) {
+    var expanded by remember(release.version) { mutableStateOf(initiallyExpanded) }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .clickable { expanded = !expanded }
+                .padding(horizontal = 8.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "v${release.version}",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            if (isLatest) {
+                Spacer(modifier = Modifier.width(6.dp))
+                /*
+                 * ⚠️ 用中文「最新」而不是英文 "Latest":
+                 * 整个界面都是中文，混一个英文标签反而更跳;
+                 * 而且这里宽度紧，中文两个字最省地方。
+                 */
+                Text(
+                    text = "最新",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(MaterialTheme.colorScheme.primaryContainer)
+                        .padding(horizontal = 5.dp, vertical = 1.dp),
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = release.date,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            Icon(
+                imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = if (expanded) "收起" else "展开",
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        }
+
+        if (expanded) {
+            Column(modifier = Modifier.padding(start = 8.dp, end = 8.dp, bottom = 4.dp)) {
+                ReleaseBody(release)
+            }
+        }
+    }
+}
+
 
 /** 一行可点击的外部链接 */
 @Composable
@@ -300,3 +374,4 @@ private fun markdown(text: String): AnnotatedString = buildAnnotatedString {
         index = close + 2
     }
 }
+

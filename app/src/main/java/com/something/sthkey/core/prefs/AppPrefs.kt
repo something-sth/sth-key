@@ -636,7 +636,7 @@ class AppPrefs private constructor(context: Context) {
      */
 
     /**
-     * FPS 读取通道。默认 [FpsMonitor.Mode.AUTO]（有 Shizuku 走 SurfaceFlinger，否则估算上限）。
+     * FPS 读取通道。默认 [FpsMonitor.Mode.CHOREOGRAPHER]（不需要权限，估算上限）。
      *
      * ⚠️ 存 **id 字符串**而不是 ordinal:枚举加成员时 ordinal 会整体错位，
      * 用户的设置会莫名其妙变成别的档位（与 `appearanceColorMode` 同一个理由）。

@@ -14,7 +14,6 @@ import com.something.sthkey.domain.config.JoystickStyle
 import com.something.sthkey.domain.config.KeyMapping
 import com.something.sthkey.domain.config.KeyOutline
 import com.something.sthkey.domain.config.KeyStrokesConfig
-import com.something.sthkey.domain.keys.KeyCodes
 import com.something.sthkey.domain.config.LIVE2D_MODEL_STANDARD
 import com.something.sthkey.domain.config.Live2DSettings
 import com.something.sthkey.domain.config.migratedOutlineColors
@@ -31,11 +30,14 @@ import com.something.sthkey.domain.config.TouchSettings
 import com.something.sthkey.domain.config.TouchStickFeel
 import com.something.sthkey.domain.config.TouchStickSettings
 import com.something.sthkey.domain.custom.CustomLayout
+import com.something.sthkey.domain.custom.JoystickComponent
+import com.something.sthkey.domain.keys.KeyCodes
 import com.something.sthkey.domain.style.KeyLayout
 import com.something.sthkey.domain.style.OverlayStyleRegistry
 import com.something.sthkey.domain.style.StyleId
 import org.json.JSONArray
 import org.json.JSONObject
+
 
 
 /**
@@ -300,6 +302,25 @@ object JsonConfigCodec {
         "outline" to KEY_GRID_STYLES,
         "shadow" to KEY_GRID_STYLES,
         "opacity" to KEY_GRID_STYLES,
+
+        /*
+         * ⚠️ 下面这几项原来**无条件写**（用户报的第二批冗余字段）:
+         *
+         * | 字段 | 谁在读 |
+         * |---|---|
+         * | colors | 只有键位网格样式（键帽/文字/描边/阴影颜色）|
+         * | fontId | 只有键位网格样式（自定义 Key 每组件各一套字体）|
+         * | keyMappings | 只有键位网格样式（自定义 Key 的键码在组件自己身上）|
+         */
+        "colors" to KEY_GRID_STYLES,
+        "fontId" to KEY_GRID_STYLES,
+        "keyMappings" to KEY_GRID_STYLES,
+
+        /*
+         * 摇杆观感:手柄/键盘/触屏会读;自定义 Key **只有在真的放了摇杆组件时**
+         * 才写（它是"新建摇杆组件时的初始观感"）—— 那条例外在编码处单独判断。
+         */
+        "joystick" to setOf(StyleId.GAMEPAD2, StyleId.KEYSTROKES, StyleId.TOUCHING),
 
         /* ── 只属于触屏样式 ── */
         "touch" to setOf(StyleId.TOUCHING),
@@ -765,7 +786,19 @@ object JsonConfigCodec {
          * 还是**新建摇杆组件时的初始观感**（见 `ComponentFactory`）。
          * 自定义 Key 里加一个摇杆组件时读的就是它。
          */
-        put("joystick", encodeJoystick(config.joystick))
+        /*
+         * ⚠️ 摇杆观感:自定义 Key **只有在真的放了摇杆组件时**才写 ——
+         * 它是"新建摇杆组件时的初始观感"，没有摇杆就没人读它。
+         * （用户报的冗余字段里最显眼的就是这一整块。）
+         */
+        if (appliesTo(config.styleId, "joystick")) {
+            put("joystick", encodeJoystick(config.joystick))
+        } else if (config.styleId == StyleId.CUSTOM_KEY &&
+            config.custom.components.any { it is JoystickComponent }
+        ) {
+            /* 自定义 Key:只有真的放了摇杆组件才写（它是新建组件的初始观感） */
+            put("joystick", encodeJoystick(config.joystick))
+        }
         if (appliesTo(config.styleId, "mouseCpsEnabled")) {
             put("mouseCpsEnabled", config.mouseCpsEnabled)
             put("mouseCpsMode", config.mouseCpsMode)
@@ -773,6 +806,7 @@ object JsonConfigCodec {
             put("cpsTextTemplateMode1", config.cpsTextTemplateMode1)
         }
 
+        if (appliesTo(config.styleId, "colors")) {
         put("colors", JSONObject().apply {
             put("keyUp", config.colors.keyUp)
             put("keyDown", config.colors.keyDown)
@@ -784,9 +818,12 @@ object JsonConfigCodec {
             put("shadowUp", config.colors.shadowUp)
             put("shadowDown", config.colors.shadowDown)
         })
+        }
 
         // 字体标识：不存的话重启后会回落到默认字体
-        put("fontId", config.fontId)
+        if (appliesTo(config.styleId, "fontId")) {
+            put("fontId", config.fontId)
+        }
         if (appliesTo(config.styleId, "bitmapFontId")) {
             put("bitmapFontId", config.bitmapFontId)
         }
@@ -911,25 +948,27 @@ object JsonConfigCodec {
             )
         }
 
-        put(
-            "keyMappings",
-            JSONArray().apply {
-                config.keyMappings.forEach { mapping ->
-                    put(
-                        JSONObject().apply {
-                            put("id", mapping.id)
-                            put("displayText", mapping.displayText)
-                            put(
-                                "inputKeyCodes",
-                                JSONArray().apply {
-                                    mapping.inputKeyCodes.forEach { put(it) }
-                                },
-                            )
-                        },
-                    )
-                }
-            },
-        )
+        if (appliesTo(config.styleId, "keyMappings")) {
+            put(
+                "keyMappings",
+                JSONArray().apply {
+                    config.keyMappings.forEach { mapping ->
+                        put(
+                            JSONObject().apply {
+                                put("id", mapping.id)
+                                put("displayText", mapping.displayText)
+                                put(
+                                    "inputKeyCodes",
+                                    JSONArray().apply {
+                                        mapping.inputKeyCodes.forEach { put(it) }
+                                    },
+                                )
+                            },
+                        )
+                    }
+                },
+            )
+        }
 
         /*
          * Live2D 设置单独一块。

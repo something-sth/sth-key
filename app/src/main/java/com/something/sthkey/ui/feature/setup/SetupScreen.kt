@@ -49,9 +49,11 @@ import com.something.sthkey.data.permission.PermissionHelper
 import com.something.sthkey.domain.capture.RootProbe
 import com.something.sthkey.ui.component.findActivity
 import com.something.sthkey.ui.component.ScreenScaffold
+import com.something.sthkey.ui.component.SectionHeader
 import com.something.sthkey.ui.component.SectionHint
 import com.something.sthkey.ui.component.SettingsCard
 import com.something.sthkey.ui.MainViewModel
+
 
 
 /**
@@ -186,50 +188,35 @@ fun SetupScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                /* ============================================================
+                 * 采集模式（三选一）
+                 * ============================================================
+                 * ⚠️ 用户定的分组（2026-11-08）:
+                 * 无障碍最省事（大多数用户）、Shizuku 次之、Root 最少人用，
+                 * 所以顺序就是 无障碍 → Shizuku → Root。
+                 *
+                 * ⚠️ **三张卡各自的勾选只看它自己**（用户报过"授一个权限三个都打勾"）:
+                 * - 无障碍:只看 `accessibilityOn`（不再因为"有 shell 能替你开"就算已授权）
+                 * - Shizuku:只看 `shizukuGranted`
+                 * - Root:只看 `rootAvailable`
+                 * 「有 shell 时无障碍会自动开」这条信息放在 summary 里说明，不参与打勾。
+                 */
+                item { SectionHeader("采集模式（三选一）") }
+
                 item {
-                    /*
-                     * ⚠️⚠️ 这张卡**取代了原来那张「悬浮窗权限」**
-                     * ============================================================
-                     * 用户拍板走 Axon 那条路之后:
-                     *
-                     * | 以前 | 现在 |
-                     * |---|---|
-                     * | 悬浮窗权限（只为画窗口） | **无障碍服务**（画窗口 + 读键盘，一举两得） |
-                     *
-                     * ⭐ 所以这里**不是加了一张卡，是换了一张** ——
-                     * 用户的总步骤数没有变多。
-                     *
-                     * ⚠️ 而且这张卡是**必需**的:换成无障碍窗口之后，
-                     * 没有它就**一个窗口都建不出来**（不只是"读不到按键"）。
-                     */
                     SetupCard(
                         icon = Icons.Default.Accessibility,
-                        title = "无障碍服务",
-                        /*
-                         * ⚠️ **有 shell 时它就"不是必填项"** —— 我们替用户开。
-                         * 这时它是"自动完成"的状态，不需要用户动手。
-                         *
-                         * 用户的原话:
-                         * > 不需要让用户已经授权 shizuku/root 的时候还单独开启无障碍
-                         */
+                        title = "无障碍授权",
                         required = !canGrantByShell,
-                        granted = accessibilityOn || canGrantByShell,
+                        granted = accessibilityOn,
                         summary = when {
                             accessibilityOn -> "已开启：可显示悬浮窗，也能直接读取键盘按键"
                             canGrantByShell ->
                                 "会自动开启（你有 root / Shizuku，启动时我们替你开）"
                             else -> "需要开启：悬浮窗要靠它显示"
                         },
-                        /*
-                         * ⚠️ 用户明确要求「权限引导页给一些声明就好了」——
-                         * 所以这里把能力边界说清楚，而不是做复杂交互。
-                         */
                         detail = "无障碍模式只支持物理键盘按键；" +
                             "鼠标、手柄摇杆与触摸读不到，那些需要 root 或 Shizuku。",
-                        /*
-                         * ⚠️ 有 shell 时**不给按钮** —— 没什么可点的，
-                         * 给了反而让用户以为"还得我手动点一下"。
-                         */
                         actionLabel = when {
                             accessibilityOn -> null
                             canGrantByShell -> "立即开启"
@@ -237,10 +224,6 @@ fun SetupScreen(
                         },
                         onAction = {
                             if (canGrantByShell) {
-                                /*
-                                 * ⚠️ 有 shell 时点一下就能开 —— 走 shell 授权，
-                                 * 而不是把用户扔去系统设置页（那一步他能省掉）。
-                                 */
                                 viewModel.grantAccessibilityByShell()
                             } else {
                                 AccessibilityGrant.openSettings(context)
@@ -251,17 +234,33 @@ fun SetupScreen(
 
                 item {
                     SetupCard(
+                        icon = Icons.Default.Key,
+                        title = "Shizuku 授权",
+                        required = false,
+                        granted = shizukuGranted,
+                        summary = if (shizukuGranted) {
+                            "已授权，可作为 root 之外的采集通道"
+                        } else {
+                            "没有 root 时用它读取按键（鼠标 / 手柄 / 触摸都能读）"
+                        },
+                        isBusy = viewModel.isProbing,
+                        actionLabel = if (shizukuGranted || viewModel.isProbing) null else "申请授权",
+                        onAction = { viewModel.requestShizukuPermission(context.findActivity()) },
+                    )
+                }
+
+                item {
+                    SetupCard(
                         icon = Icons.Default.Security,
-                        title = "输入采集通道",
-                        required = true,
-                        granted = captureReady,
-                        summary = when {
-                            rootAvailable && shizukuGranted -> "已有 root 与 Shizuku，可读取全部输入"
-                            rootAvailable -> "已有 root，可读取全部输入"
-                            shizukuGranted -> "已有 Shizuku，可读取全部输入"
-                            accessibilityOn -> "只有无障碍：能读键盘，读不到鼠标 / 手柄 / 触摸"
-                            else -> "需要无障碍服务，或 root / Shizuku 其中之一"
-                        },                        detail = buildList {
+                        title = "Root 授权",
+                        required = false,
+                        granted = rootAvailable,
+                        summary = if (rootAvailable) {
+                            "已检测到 root，可读取全部输入"
+                        } else {
+                            "没有 root 就用 Shizuku 或无障碍"
+                        },
+                        detail = buildList {
                             add("Root：" + if (rootAvailable) viewModel.capabilities.rootDetail else "不可用")
                             add("Shizuku：" + if (shizukuGranted) "已授权" else "未授权")
                             add("无障碍：" + if (accessibilityOn) "已开启（仅键盘）" else "未开启")
@@ -272,23 +271,10 @@ fun SetupScreen(
                     )
                 }
 
-                // Shizuku 单独一张卡：它的授权流程与 root 完全不同（弹窗 vs su 授权）
-                item {
-                    SetupCard(
-                        icon = Icons.Default.Key,
-                        title = "Shizuku 授权",
-                        required = false,
-                        granted = shizukuGranted,
-                        summary = if (shizukuGranted) {
-                            "已授权，可作为 root 之外的采集通道"
-                        } else {
-                            "没有 root 时用它读取按键"
-                        },
-                        isBusy = viewModel.isProbing,
-                        actionLabel = if (shizukuGranted || viewModel.isProbing) null else "申请授权",
-                        onAction = { viewModel.requestShizukuPermission(context.findActivity()) },
-                    )
-                }
+                /* ============================================================
+                 * 其它
+                 * ============================================================ */
+                item { SectionHeader("其它") }
 
                 item {
                     SetupCard(

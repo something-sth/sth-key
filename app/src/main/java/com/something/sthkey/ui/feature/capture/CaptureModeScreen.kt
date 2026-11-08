@@ -44,10 +44,12 @@ import com.something.sthkey.ui.component.CardDivider
 import com.something.sthkey.ui.component.ScrollableScreen
 import com.something.sthkey.ui.component.SectionHeader
 import com.something.sthkey.ui.component.SectionHint
+import com.something.sthkey.ui.component.SegmentedChoice
 import com.something.sthkey.ui.component.SettingItem
 import com.something.sthkey.ui.component.SettingsCard
 import com.something.sthkey.ui.MainViewModel
 import kotlinx.coroutines.launch
+
 
 
 
@@ -137,20 +139,15 @@ fun CaptureModeScreen(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                        KeyMode.entries.forEachIndexed { index, mode ->
-                            SegmentedButton(
-                                selected = pendingMode == mode,
-                                onClick = { pendingMode = mode; viewModel.applyRequestedMode(mode) },
-                                shape = SegmentedButtonDefaults.itemShape(
-                                    index = index,
-                                    count = KeyMode.entries.size,
-                                ),
-                            ) {
-                                Text(mode.label)
-                            }
-                        }
-                    }
+                    SegmentedChoice(
+                        options = KeyMode.entries,
+                        selected = pendingMode,
+                        label = { it.label },
+                        onSelect = {
+                            pendingMode = it
+                            viewModel.applyRequestedMode(it)
+                        },
+                    )
 
                     Spacer(modifier = Modifier.height(12.dp))
 
@@ -228,7 +225,10 @@ fun CaptureModeScreen(
              * 不要自己发明一种新卡 —— 用户原话:"你按那个样式做，不要自己又改个很丑的卡片"。
              *
              * ⚠️ 这一档是**调试用**的:自动判断出错时可以强制走某一条，
-             * 不必靠猜。默认「自动」:有 Shizuku 走 Surfaceflinger，否则走 Choreographer。
+ * 不必靠猜。**默认 Choreographer**（不需要权限）；Surfaceflinger 是"想尝鲜时手动切"的选项。
+ *
+ * ⚠️ 原来的「自动」已删除（用户决定）:它在有权限时偷偷走 Surfaceflinger，
+ * 而那条通道在不少游戏上读不到帧，用户会以为是我们坏了。
              */
             SettingsCard {
                 Column(modifier = Modifier.padding(16.dp)) {
@@ -240,35 +240,24 @@ fun CaptureModeScreen(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                        FpsMonitor.Mode.entries.forEachIndexed { index, mode ->
-                            SegmentedButton(
-                                selected = fpsMode == mode,
-                                onClick = {
-                                    fpsMode = mode
-                                    prefs.fpsMode = mode
-                                    FpsMonitor.mode = mode
-                                },
-                                shape = SegmentedButtonDefaults.itemShape(
-                                    index = index,
-                                    count = FpsMonitor.Mode.entries.size,
-                                ),
-                            ) {
-                                Text(mode.label)
-                            }
-                        }
-                    }
+                    SegmentedChoice(
+                        options = FpsMonitor.Mode.entries,
+                        selected = fpsMode,
+                        label = { it.label },
+                        onSelect = { mode ->
+                            fpsMode = mode
+                            prefs.fpsMode = mode
+                            FpsMonitor.mode = mode
+                        },
+                    )
 
                     Spacer(modifier = Modifier.height(12.dp))
 
                     Text(
                         text = when (fpsMode) {
-                            FpsMonitor.Mode.AUTO ->
-                                "有 Shizuku/root 时读 Surfaceflinger（游戏真实帧率）；" +
-                                    "没有权限时退到 Choreographer（屏幕节拍上限，不是游戏帧率）。"
-
                             FpsMonitor.Mode.CHOREOGRAPHER ->
-                                "只测屏幕节拍上限，不需要任何权限。数值不代表游戏真实帧率。"
+                                "默认通道:测屏幕节拍上限，不需要任何权限。" +
+                                    "数值代表「屏幕能跑多快」，不是游戏真实帧率。"
 
                             FpsMonitor.Mode.SURFACE_FLINGER ->
                                 "强制读 Surfaceflinger。没有 Shizuku/root 时**不显示数字**（N/A），" +

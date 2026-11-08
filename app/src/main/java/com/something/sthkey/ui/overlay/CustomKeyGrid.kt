@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.material3.Text
@@ -80,6 +81,7 @@ import com.something.sthkey.ui.component.bitmapSpecOf
 import com.something.sthkey.ui.component.composeFontFamily
 import com.something.sthkey.ui.overlay.gamepad.baseOffset
 import com.something.sthkey.ui.overlay.gamepad.JoystickSlot
+
 
 
 
@@ -1468,10 +1470,16 @@ private fun CustomComponentView(
 
         if (text.isNotEmpty()) {
             val shadowSpan = shadowSize ?: 0f
+            /*
+             * 诊断日志:阴影相关参数写进调试页。
+             *
+             * 目的是确认"阴影到底是没打开、还是颜色透明、还是画了看不见"。
+             * 每秒最多一条（组件多时不然会刷屏）。
+             */
             val contentPadding = if (shadowSpan <= 0f) {
                 0.dp
             } else {
-                (shadowSpan * 2f).coerceAtMost(minOf(widthDp, heightDp) / 4f).dp
+                (shadowSpan * 2f).coerceAtMost(minOf(widthDp, heightDp) / 2f).dp
             }
 
             /*
@@ -1508,9 +1516,19 @@ private fun CustomComponentView(
                         .offset(x = textOffsetXDp, y = textOffsetYDp),
                     contentAlignment = Alignment.Center,
                 ) {
+                    /*
+                     * ⚠️ **离屏图层要比组件大**（与 KeyGrid 同一个道理）:
+                     * `CompositingStrategy.Offscreen` 按节点大小开纹理，
+                     * 超过就裁掉 —— 硬阴影位移是 `0.6 × 尺寸`，尺寸一大就被裁，
+                     * 看起来就是"阴影被边框裁了"。
+                     */
+                    val layerPad = (shadowSpan * 4f).coerceAtLeast(0f)
                     Box(
                         modifier = Modifier
-                            .matchParentSize()
+                            .requiredSize(
+                                (widthDp + layerPad * 2f).dp,
+                                (heightDp + layerPad * 2f).dp,
+                            )
                             .graphicsLayer {
                                 compositingStrategy = CompositingStrategy.Offscreen
                             }
@@ -1584,7 +1602,13 @@ private fun CustomComponentView(
             Box(
                 modifier = Modifier
                     .matchParentSize()
-                    .padding(contentPadding)
+                    /*
+                     * ⚠️ **正文层不再留白**（阴影层才留）。
+                     *
+                     * `contentPadding = min(尺寸×2, 短边/2)` —— 尺寸一拉大，
+                     * 可用区域就被压到 0:文字被挤没，只剩外面那圈光（用户实测）。
+                     * 阴影像素溢出由外层阴影层负责，正文不需要预留空间。
+                     */
                     .offset(x = textOffsetXDp, y = textOffsetYDp),
                 contentAlignment = Alignment.Center,
             ) {

@@ -2089,7 +2089,17 @@ class TouchRegionEditorService : Service() {
      * ============================================================
      */
 
-    private fun formatSize(size: Float): String = "%.0f%%".format(size * 100f)
+    /*
+     * 尺寸显示:**保留一位小数**。
+     *
+     * ⚠️ 用户反馈:"实际可达到带小数的精确数值，而显示的数值只能显示整数"。
+     * 滑块的内部值本来就是小数（`progressToSize` 是连续映射），
+     * 只有显示被 `%.0f` 四舍五入掉了 —— 于是拖一点点数字不变，感觉像"锁死"。
+     *
+     * 用 `Locale.US` 固定小数点:某些地区格式会用逗号，和后面的 `%` 混在一起更怪。
+     */
+    private fun formatSize(size: Float): String =
+        String.format(java.util.Locale.US, "%.1f%%", size * 100f)
 
     private fun sizeToProgress(size: Float): Int {
         val t = (size - TouchRegionSpec.SIZE_MIN) /
