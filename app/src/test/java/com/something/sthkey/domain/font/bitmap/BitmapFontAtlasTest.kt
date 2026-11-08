@@ -330,7 +330,7 @@ class BitmapFontAtlasTest {
     }
 
     @Test
-    fun `透明图应当被判为透明度模式`() {
+    fun `透明图应当被判为不透明度模式`() {
         assertEquals(MaskMode.ALPHA, guessMaskMode(buildKnownWidthAtlas()))
     }
 
@@ -378,7 +378,7 @@ class BitmapFontAtlasTest {
 
     /** 低于阈值的杂点不该被当成墨迹 */
     @Test
-    fun `极低透明度的杂点被忽略`() {
+    fun `极低不透明度的杂点被忽略`() {
         val b = AtlasBuilder()
         val (column, row) = cellOf(0x21)
         // 一个 alpha=3 的点在最右边 + 一条真正可见的墨迹

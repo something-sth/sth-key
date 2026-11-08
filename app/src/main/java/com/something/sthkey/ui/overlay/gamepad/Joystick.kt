@@ -36,7 +36,7 @@ import kotlinx.coroutines.awaitCancellation
  * ============================================================
  * ⚠️ 外观全部来自 [JoystickStyle]，不在这里写死
  * ============================================================
- * 颜色 / 圆角 / 透明度 / 描边 / 摇杆帽 / 平滑都是配置项 ——
+ * 颜色 / 圆角 / 不透明度 / 描边 / 摇杆帽 / 平滑都是配置项 ——
  * 见 `JoystickStyle` 的说明。
  *
  * ============================================================
@@ -520,7 +520,7 @@ fun Joystick(
              * "'摇杆'栏需要加一下描边，你忘记加了"。我第一版只加了内圆，
              * 把底盘本身的轮廓线整个漏了（而按键样式里也有描边，摇杆不该少）。
              *
-             * ⚠️ 线宽为 0 或透明度为 0 时**不画** —— 那是"隐藏描边"的做法。
+             * ⚠️ 线宽为 0 或不透明度为 0 时**不画** —— 那是"隐藏描边"的做法。
              * 不判断的话 `Stroke(width = 0f)` 在部分设备上会画成一像素细线。
              */
             val strokeWidth = sideBase * style.strokeWidthRatio * pxPerBase
@@ -663,7 +663,7 @@ fun Joystick(
                 cornerRadius = knobCornerRadius,
             )
 
-            /* 帽的描边（透明度为 0 时不画） */
+            /* 帽的描边（不透明度为 0 时不画） */
             val knobStrokeWidth = knobDiameter * style.knobStrokeWidthRatio * pxPerBase
             if (knobStrokeWidth > 0f && style.knobStrokeOpacity > 0f) {
                 drawRoundRect(
@@ -749,7 +749,7 @@ private const val MAX_SPRING_VELOCITY_PER_SECOND = 20f
  *
  * 配置页的颜色控件 [com.something.sthkey.ui.component.HexColorRow]
  * 只处理 **RGB**（内部 `formatHexDigits` 里 `and 0xFFFFFF` 截掉 alpha），
- * 而且项目里所有颜色字段本来就只存 RGB、透明度由独立字段管。
+ * 而且项目里所有颜色字段本来就只存 RGB、不透明度由独立字段管。
  *
  * 于是带 alpha 的默认值（`0xB3000000`）一旦进过配置页就被抹成 `0x00xxxxxx`，
  * 渲染时 `0 × 1.0 = 0` → **全透明 → 摇杆消失**，而且写进了存档。

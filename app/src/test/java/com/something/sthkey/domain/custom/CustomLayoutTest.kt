@@ -407,7 +407,7 @@ class CustomLayoutTest {
      */
 
     @Test
-    fun `颜色与透明度分开合成`() {
+    fun `颜色与不透明度分开合成`() {
         val style = ComponentStyle(
             fillUp = 0xFF0000,
             fillOpacityUp = 50,
@@ -420,7 +420,7 @@ class CustomLayoutTest {
     }
 
     @Test
-    fun `按下态用按下那一套颜色与透明度`() {
+    fun `按下态用按下那一套颜色与不透明度`() {
         val style = ComponentStyle(
             fillUp = 0x000000,
             fillDown = 0xFFFFFF,

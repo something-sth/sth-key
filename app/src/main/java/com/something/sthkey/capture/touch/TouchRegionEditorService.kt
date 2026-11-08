@@ -2151,7 +2151,7 @@ class TouchRegionEditorService : Service() {
          * 常量也一并删掉:留着会让人以为还有那条交互。
          */
 
-        /** 填充透明度（0..255）—— 淡一点才看得清底下的游戏画面 */
+        /** 填充不透明度（0..255）—— 淡一点才看得清底下的游戏画面 */
         private const val ALPHA_FILL = 60
 
         private val COLOR_JOYSTICK = Color.parseColor("#4DA3FF")

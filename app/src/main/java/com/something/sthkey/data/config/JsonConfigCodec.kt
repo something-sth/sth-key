@@ -196,7 +196,7 @@ object JsonConfigCodec {
      * > 刚刚发现的一些漏洞，**触屏配置有些东西没做配置持久化**，
      * > 我就不一一列出了你自己排查
      *
-     * ⚠️ 排查结果:触屏的**外观**（文字缩放/圆角/描边/阴影/透明度/字体）、
+     * ⚠️ 排查结果:触屏的**外观**（文字缩放/圆角/描边/阴影/不透明度/字体）、
      * **CPS**、**按键高度与间距**、**文字偏移与字间距**……
      * **全都没被编码**，于是每次重启应用都回到默认值。
      *
@@ -272,7 +272,7 @@ object JsonConfigCodec {
          *
          * | 字段 | 自定义 Key 里的对应物 |
          * |---|---|
-         * | 文字缩放 / 圆角 / 动画 / 描边 / 阴影 / 透明度 / 字体 | **每个组件自己的 `ComponentStyle`** |
+         * | 文字缩放 / 圆角 / 动画 / 描边 / 阴影 / 不透明度 / 字体 | **每个组件自己的 `ComponentStyle`** |
          * | 文字偏移 / 字间距 | **每个组件自己的字段**（`textOffsetX` 等） |
          * | 键高 / 键间距 | 画布尺寸来自**组件包围盒**（`CustomLayout.bounds`） |
          * | CPS 开关与模板 | 由**文本里的 `(cps)` / `(cps2)` 占位符**决定 |
@@ -501,7 +501,7 @@ object JsonConfigCodec {
         "colors" to "颜色",
         "outline" to "描边",
         "shadow" to "文字阴影",
-        "opacity" to "透明度",
+        "opacity" to "不透明度",
         "fontId" to "字体",
         "animationMode" to "按键动画",
         "animationDurationSec" to "动画时长",
@@ -511,7 +511,7 @@ object JsonConfigCodec {
         "mouseCpsMode" to "CPS 显示模式",
         "cpsTextTemplate" to "CPS 文本（模式 2）",
         "cpsTextTemplateMode1" to "CPS 文本（模式 1）",
-        "customOpacityPercent" to "自定义 Key 的整体透明度",
+        "customOpacityPercent" to "自定义 Key 的整体不透明度",
         "keyMappings" to "键位映射",
         "live2d" to "Live2D 设置",
         "custom" to "自定义 Key 布局",
@@ -867,7 +867,7 @@ object JsonConfigCodec {
             )
         }
 
-        /* ⚠️ 描边 / 阴影 / 透明度都是"键帽级"的外观 —— 只有键位网格样式读它们 */
+        /* ⚠️ 描边 / 阴影 / 不透明度都是"键帽级"的外观 —— 只有键位网格样式读它们 */
         if (appliesTo(config.styleId, "outline")) {
             put(
                 "outline",
@@ -957,7 +957,7 @@ object JsonConfigCodec {
         }
 
         /*
-         * 自定义 Key 的**整体透明度**。
+         * 自定义 Key 的**整体不透明度**。
          *
          * ⚠️ 同样只写给自定义样式。原来写的是"换样式时不该把它丢掉
          * （用户可能只是临时切走看一眼，再切回来）" —— 但**切不了**。
@@ -1425,7 +1425,7 @@ object JsonConfigCodec {
      * ============================================================
      * 外观字段：全部委托给 [AppearanceCodec]
      * ============================================================
-     * 颜色 / 透明度 / 阴影（含老数据迁移）的规则都在那个纯 Kotlin 文件里，
+     * 颜色 / 不透明度 / 阴影（含老数据迁移）的规则都在那个纯 Kotlin 文件里，
      * 因为它必须能被单元测试直接调 —— 这里的 `org.json` 在本地测试里是空壳。
      *
      * 下面这些只是把 `JSONObject` 适配成 [AppearanceCodec.Reader]，

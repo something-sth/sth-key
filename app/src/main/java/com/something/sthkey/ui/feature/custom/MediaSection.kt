@@ -5,10 +5,10 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -26,9 +26,11 @@ import com.something.sthkey.domain.custom.MediaComponent
 import com.something.sthkey.domain.custom.MediaFit
 import com.something.sthkey.domain.custom.MediaKind
 import com.something.sthkey.domain.media.CustomMediaStore
+import com.something.sthkey.ui.component.HexColorRow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
 
 /**
  * 媒体组件的「内容」栏:选资源 + 铺满方式 + 不透明度 + 圆角 + 静音。
@@ -153,6 +155,59 @@ internal fun MediaSection(
         onChange = { value ->
             onComponentChange(component.copy(cornerRadiusPercent = value.toInt()), false)
         },
+    )
+
+    /*
+     * ============================================================
+     * 染色
+     * ============================================================
+     * ⚠️ 与位图字体同一套:`Modulate` 按亮度相乘，保留明暗与纹理，
+     * 不会把整张图刷成纯色。`染色程度` 控制混多少进去。
+     *
+     * ⚠️ 颜色只填 6 位 RGB（不带透明度）—— 透明度由上面的「不透明度」管，
+     * 两个都放进颜色里只会让人分不清哪个在生效（与颜色编辑器里的约定一致）。
+     */
+    HexColorRow(
+        label = "染色颜色",
+        value = component.tintColor,
+        onValueChange = { onComponentChange(component.copy(tintColor = it), true) },
+    )
+
+    SliderRow(
+        label = "染色程度",
+        value = component.tintPercent.toFloat(),
+        range = 0f..100f,
+        display = "${component.tintPercent}%",
+        onBegin = onBeginContinuous,
+        onEnd = onEndContinuous,
+        onChange = { value ->
+            onComponentChange(component.copy(tintPercent = value.toInt()), false)
+        },
+    )
+
+    /*
+     * ============================================================
+     * 描边
+     * ============================================================
+     * ⚠️ 图片/动图是**轮廓描边**（沿不透明区域走，透明背景的文字图会贴着字形描边）；
+     * 视频只能画矩形边框（`TextureView` 拿不到像素）。
+     */
+    SliderRow(
+        label = "描边粗细",
+        value = component.outlineWidthPercent.toFloat(),
+        range = 0f..20f,
+        display = if (component.outlineWidthPercent <= 0) "关" else "${component.outlineWidthPercent}%",
+        onBegin = onBeginContinuous,
+        onEnd = onEndContinuous,
+        onChange = { value ->
+            onComponentChange(component.copy(outlineWidthPercent = value.toInt()), false)
+        },
+    )
+
+    HexColorRow(
+        label = "描边颜色",
+        value = component.outlineColor,
+        onValueChange = { onComponentChange(component.copy(outlineColor = it), true) },
     )
 
     /*

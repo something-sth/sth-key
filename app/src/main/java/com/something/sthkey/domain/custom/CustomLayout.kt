@@ -306,7 +306,7 @@ object CustomLayout {
      * ============================================================
      * 外观取值
      * ============================================================
-     * 颜色 + 透明度 → ARGB。规则与 [com.something.sthkey.domain.style.KeyStyleResolver]
+     * 颜色 + 不透明度 → ARGB。规则与 [com.something.sthkey.domain.style.KeyStyleResolver]
      * 一致，但作用对象是组件自己的 [ComponentStyle] 而不是整份配置。
      */
 

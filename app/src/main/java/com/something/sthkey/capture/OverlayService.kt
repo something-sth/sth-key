@@ -1185,7 +1185,7 @@ runCatching { if (old.host.parent != null) windowManager.removeView(old.host) }
     /**
      * 把配置应用到已经存在的视图上（不重建）。
      *
-     * 只处理**能在既有视图上生效**的改动：Live2D 的模型页与整层透明度
+     * 只处理**能在既有视图上生效**的改动：Live2D 的模型页与整层不透明度
      * 都可以直接改，不必重建 WebView（重建要重新解析模型，几百毫秒）。
      */
     private fun applyConfigToView(view: View, config: KeyStrokesConfig) {
@@ -1812,7 +1812,7 @@ runCatching { if (old.host.parent != null) windowManager.removeView(old.host) }
          *
          * 调试页用它和"哪几个开关开着"做对比：
          * - 开着的 id 不在这个列表里 → 窗口没建起来（服务没收到通知 / 权限没了）
-         * - 列表里有、屏幕上却看不到 → 位置出屏或透明度为 0
+         * - 列表里有、屏幕上却看不到 → 位置出屏或不透明度为 0
          *
          * @return 按创建顺序排列的标签；服务未运行或没有窗口时返回空列表
          */

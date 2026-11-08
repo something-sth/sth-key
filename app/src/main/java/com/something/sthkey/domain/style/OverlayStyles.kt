@@ -176,7 +176,7 @@ object OverlayStyleRegistry {
                  * 落到"未知样式"的兜底分支上。
                  */
                 label = "键盘",
-                description = "按键显示：可自定义键位、颜色、透明度、圆角",
+                description = "按键显示：可自定义键位、颜色、不透明度、圆角",
                 enabled = true,
                 iconKey = ICON_KEYBOARD,
                 category = StyleCategory.KEYBOARD,

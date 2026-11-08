@@ -20,7 +20,7 @@ import com.something.sthkey.domain.keys.KeyCodes
  * - [KeyComponent]：监听按键，按下时变色 —— 这才是"按键显示"；
  * - [TextComponent]：只显示一段文字，可以当水印，也可以单独显示 CPS。
  *
- * 两者共用 [ComponentStyle]（颜色/透明度/描边/圆角/字体），
+ * 两者共用 [ComponentStyle]（颜色/不透明度/描边/圆角/字体），
  * 各自只加自己特有的东西 —— 这样以后加"图片组件"时，
  * 主题那部分不用再重复一遍。
  *
@@ -101,7 +101,7 @@ sealed interface TextualComponent : CustomComponent {
      */
     val textScalePercent: Int
 
-    /** 主题（颜色 / 透明度 / 描边 / 圆角 / 字体） */
+    /** 主题（颜色 / 不透明度 / 描边 / 圆角 / 字体） */
     val style: ComponentStyle
 
     /** 文字在边框内的偏移（基础坐标）；只挪文字，不影响边框与吸附 */
@@ -113,11 +113,11 @@ sealed interface TextualComponent : CustomComponent {
  * 键帽 + 文字的外观（两种组件共用）。
  *
  * ============================================================
- * 为什么颜色和透明度分开存
+ * 为什么颜色和不透明度分开存
  * ============================================================
  * 与 [com.something.sthkey.domain.config.ColorSet] 同一个理由：
- * 颜色只存 24 位 RGB、透明度单独存百分比，各自只有一个真源。
- * 混在一个 ARGB 里的话，"改颜色把透明度也改了"这种耦合迟早出现。
+ * 颜色只存 24 位 RGB、不透明度单独存百分比，各自只有一个真源。
+ * 混在一个 ARGB 里的话，"改颜色把不透明度也改了"这种耦合迟早出现。
  */
 data class ComponentStyle(
     /** 未按下时的底色 */
@@ -138,7 +138,7 @@ data class ComponentStyle(
     /**
      * 按下时的键帽不透明度百分比。
      *
-     * 与 [fillOpacityUp] 分开是需求里点名的"透明度区分（按下与未按下）"。
+     * 与 [fillOpacityUp] 分开是需求里点名的"不透明度区分（按下与未按下）"。
      */
     val fillOpacityDown: Int = 100,
 
@@ -445,8 +445,33 @@ data class MediaComponent(
     val opacityPercent: Int = 100,
     /** 圆角百分比（相对短边）；0 = 不裁圆角 */
     val cornerRadiusPercent: Int = 0,
-) : CustomComponent
+    /*
+     * ============================================================
+     * 染色与描边（用户要求:媒体组件也要能调外观）
+     * ============================================================
+     *
+     * ⚠️ 染色照**位图字体**那一套:`ColorFilter.tint(color, BlendMode.Modulate)`
+     * —— 它按亮度相乘，不是把整张图刷成纯色（那会丢掉所有细节）。
+     * `tintPercent` 再和原图按比例混合，0 = 不染色、100 = 完全染色。
+     */
 
+    /** 染色颜色（24 位 RGB）；配合 [tintPercent] 生效 */
+    val tintColor: Long = 0xFFFFFF,
+
+    /** 染色程度百分比 0..100；0 = 不染色（默认） */
+    val tintPercent: Int = 0,
+
+    /**
+     * 描边粗细（相对短边的百分比）；0 = 不描边。
+     *
+     * ⚠️ 图片/动图走**轮廓描边**（沿不透明区域，透明处不描）；
+     * 视频只能画**矩形边框**（`TextureView` 拿不到像素）。
+     */
+    val outlineWidthPercent: Int = 0,
+
+    /** 描边颜色（24 位 RGB） */
+    val outlineColor: Long = 0x000000,
+) : CustomComponent
 /**
  * **轮盘区域**里的方向。
  *
@@ -508,7 +533,7 @@ const val LEGACY_CPS_SLOT_RIGHT = "RMB"
  * **同一个类型**才能真正保证"相同"，各写一份迟早会漂移
  * （改了一边忘了另一边，两处摇杆长得不一样）。
  *
- * ⚠️ 这也意味着摇杆的外观**不属于**组件自己的"颜色/透明度"那几组，
+ * ⚠️ 这也意味着摇杆的外观**不属于**组件自己的"颜色/不透明度"那几组，
  * 属性面板为它单独开「摇杆 / 摇杆帽 / 摇杆手感」三组。
  */
 data class JoystickComponent(

@@ -45,8 +45,8 @@ import com.something.sthkey.ui.feature.config.JOYSTICK_SMOOTHING_MAX
  * ⚠️⚠️ **按"属性种类"分组，不按"零件"分组**
  * ============================================================
  * 用户的原话:"标准样式里那么做是为了区分，自定义是单独配置的，
- * 应该把圆角，透明度，描边这些分出来，而不是把摇杆，摇杆帽分出来，
- * 标题应该是圆角，透明度，颜色这些"。
+ * 应该把圆角，不透明度，描边这些分出来，而不是把摇杆，摇杆帽分出来，
+ * 标题应该是圆角，不透明度，颜色这些"。
  *
  * 所以这里**没有**"摇杆组"和"摇杆帽组"，而是填进已有的那几组:
  *
@@ -55,7 +55,7 @@ import com.something.sthkey.ui.feature.config.JOYSTICK_SMOOTHING_MAX
  * | 位置与尺寸 | X / Y / 宽 / 高 + 摇杆缩放 / 摇杆帽缩放 |
  * | 外观 | 圆角（底盘 + 帽）、底盘描边、帽描边、内圆粗细 |
  * | 颜色 | 摇杆 / 底盘描边 / 内圆 / 摇杆帽 / 帽描边 |
- * | 透明度 | 同「颜色」的五项 |
+ * | 不透明度 | 同「颜色」的五项 |
  * | 摇杆手感 | 死区 / 灵敏度 / 平滑·精准 |
  *
  * ⚠️ 组的**标题与顺序**与按键/文本组件完全一致 ——
@@ -305,8 +305,8 @@ internal fun JoystickScaleSliders(
 /**
  * 「外观」组里摇杆填的内容:**形状与线条**（圆角 / 描边 / 内圆粗细）。
  *
- * ⚠️ 颜色与透明度**不在这一组**（见 [JoystickColorSection] / [JoystickOpacitySection]）——
- * 与按键/文本组件同一套分工:外观管形状，颜色管色，透明度管透。
+ * ⚠️ 颜色与不透明度**不在这一组**（见 [JoystickColorSection] / [JoystickOpacitySection]）——
+ * 与按键/文本组件同一套分工:外观管形状，颜色管色，不透明度管透。
  */
 @Composable
 internal fun JoystickLookSection(
@@ -462,11 +462,11 @@ internal fun JoystickColorSection(
         onComponentChange = onComponentChange,
     ) { s, c -> s.copy(knobStrokeColor = c) }
 
-    JoystickHint("颜色只填 6 位十六进制（例如 FF8800），透明度用「透明度」那一组单独调。")
+    JoystickHint("颜色只填 6 位十六进制（例如 FF8800），不透明度用「不透明度」那一组单独调。")
 }
 
 /**
- * 「透明度」组里摇杆填的内容。
+ * 「不透明度」组里摇杆填的内容。
  *
  * ⚠️ 顺序与 [JoystickColorSection] **完全一致** —— 两个分组之间对照时不用重新找。
  */
@@ -1034,7 +1034,7 @@ private fun GamepadJoystickFeel(
  * 滑块工作在显示单位上，进出各换算一次，两边的数字自然一致。
  */
 
-/** 摇杆的一个颜色行（只存 24 位 RGB，透明度由独立滑块管 —— 与项目其它地方一致） */
+/** 摇杆的一个颜色行（只存 24 位 RGB，不透明度由独立滑块管 —— 与项目其它地方一致） */
 @Composable
 private fun JoystickColorRow(
     label: String,

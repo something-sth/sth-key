@@ -20,8 +20,8 @@ import org.junit.Test
  * | 字段 | 旧 | 新 |
  * |---|---|---|
  * | 描边颜色 | `outline.color` 一个值 | `colors.outlineUp` / `outlineDown` |
- * | 透明度 | `key` / `text` / `outline` 三项 | 四个元素 × 两种状态 = 八项 |
- * | 文字阴影 | 没有 | 开关 + 形态 + 尺寸 + 两个颜色 + 两个透明度 |
+ * | 不透明度 | `key` / `text` / `outline` 三项 | 四个元素 × 两种状态 = 八项 |
+ * | 文字阴影 | 没有 | 开关 + 形态 + 尺寸 + 两个颜色 + 两个不透明度 |
  *
  * **迁移写错的后果是用户升级后外观被改掉** —— 他们只会觉得"我的配置坏了"，
  * 而我们很难从一句抱怨里反推出是哪个字段读错了。
@@ -200,12 +200,12 @@ class AppearanceMigrationTest {
 
     /*
      * ============================================================
-     * 透明度迁移
+     * 不透明度迁移
      * ============================================================
      */
 
     @Test
-    fun `老配置的三项透明度填给两个状态`() {
+    fun `老配置的三项不透明度填给两个状态`() {
         val opacity = AppearanceCodec.opacity(
             reader("key" to 55, "text" to 88, "outline" to 33),
         )
@@ -219,7 +219,7 @@ class AppearanceMigrationTest {
     }
 
     @Test
-    fun `老配置的阴影透明度用默认值`() {
+    fun `老配置的阴影不透明度用默认值`() {
         val opacity = AppearanceCodec.opacity(reader("key" to 55))
         val defaults = Opacity()
 
@@ -253,7 +253,7 @@ class AppearanceMigrationTest {
      * "我明明拉到 0 了它却自己跳回去"这种问题最难查。
      */
     @Test
-    fun `透明度 0 不会被抬高`() {
+    fun `不透明度 0 不会被抬高`() {
         val opacity = AppearanceCodec.opacity(reader("textUp" to 0, "outlineUp" to 0))
 
         assertEquals(0, opacity.textUp)
@@ -261,7 +261,7 @@ class AppearanceMigrationTest {
     }
 
     @Test
-    fun `透明度超范围会被夹住`() {
+    fun `不透明度超范围会被夹住`() {
         val opacity = AppearanceCodec.opacity(reader("textUp" to 999, "outlineUp" to -50))
 
         assertEquals(Opacity.MAX, opacity.textUp)
@@ -331,7 +331,7 @@ class AppearanceMigrationTest {
      *
      * 旧版的事实：
      * - 描边色没设过时显示白色 → 迁移后应当是未按下文字色（默认白）；
-     * - 透明度三项 → 每个状态都用同一个值。
+     * - 不透明度三项 → 每个状态都用同一个值。
      */
     @Test
     fun `典型老配置读出来的外观与旧版一致`() {

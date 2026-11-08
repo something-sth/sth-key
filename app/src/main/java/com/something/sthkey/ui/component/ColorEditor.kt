@@ -39,11 +39,11 @@ import androidx.compose.ui.unit.dp
  * 十六进制颜色工具。
  *
  * 约定：颜色只有 **6 位 RGB（`#RRGGBB`）**，**不包含透明度**。
- * 透明度由配置页的"透明度"分区用滑块单独控制
+ * 不透明度由配置页的"不透明度"分区用滑块单独控制
  * （见 [com.something.sthkey.domain.config.Opacity]）。
  *
- * 为什么拆开：颜色和透明度混在同一个输入框里时，用户只想调颜色，
- * 却可能因为少写两位把透明度改成 0 或 255，非常反直觉；
+ * 为什么拆开：颜色和不透明度混在同一个输入框里时，用户只想调颜色，
+ * 却可能因为少写两位把不透明度改成 0 或 255，非常反直觉；
  * 拆开后两者各有一个真源，互不干扰。
  */
 
@@ -73,8 +73,8 @@ fun formatHexDigits(rgb: Long): String = "%06X".format(rgb and 0xFFFFFF)
 /**
  * 颜色小方块。
  *
- * @param alphaPercent 预览用透明度（0..100）。颜色本身不含透明度，
- *   但预览时按真实透明度渲染，用户才能看出最终观感。
+ * @param alphaPercent 预览用不透明度（0..100）。颜色本身不含 alpha，
+ *   但预览时按真实不透明度渲染，用户才能看出最终观感。
  */
 @Composable
 fun ColorSwatch(
@@ -255,7 +255,7 @@ fun HexColorDialog(
                 )
 
                 Text(
-                    text = "透明度请到「透明度」分区用滑块单独调整。",
+                    text = "不透明度请到「不透明度」分区用滑块单独调整。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

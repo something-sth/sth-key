@@ -35,12 +35,15 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.something.sthkey.core.log.AppLog
@@ -51,6 +54,8 @@ import com.something.sthkey.domain.media.CustomMediaStore
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
+
 
 
 
@@ -106,21 +111,38 @@ internal fun MediaComponentView(
             .clip(corner),
     ) {
         val file = CustomMediaStore.fileOfId(component.assetId)
+        /*
+         * ⚠️ 目标尺寸要按**像素**算:窗口里的 dp 与真实像素差一个 density
+         * （这台机器 2.975）。早先直接把 dp 当像素传，解码出来的图只有
+         * 需要的 1/3，细笔画的透明文字就糊成一团。
+         *
+         * ⚠️ 还要把尺寸**分档**当 produceState 的 key:悬浮窗首次组合时
+         * `scale` 往往还没定下来（先 1.0，随后按屏幕自适应放大），
+         * 只按文件路径做 key 的话会一直用第一帧那张小图 ——
+         * 表现就是"偶尔糊，重开窗口又正常"（用户实测）。
+         */
+        val density = LocalDensity.current.density
+        val targetPx = (widthDp.value * density).toInt().coerceAtLeast(1)
+        val sizeBucket = (targetPx / 64).coerceAtLeast(1)
 
         when {
             file == null -> MediaPlaceholder(component)
 
             component.kind == MediaKind.IMAGE -> {
-                val bitmap by produceState<Bitmap?>(initialValue = null, file.absolutePath) {
-                    value = withContext(Dispatchers.IO) { decodeSampled(file, widthDp.value, heightDp.value) }
+                val bitmap by produceState<Bitmap?>(initialValue = null, file.absolutePath, sizeBucket) {
+                    value = withContext(Dispatchers.IO) { decodeSampled(file, targetPx) }
                 }
                 val image = bitmap
                 if (image != null) {
-                    Image(
-                        bitmap = image.asImageBitmap(),
-                        contentDescription = null,
+                    /* 染色 + 轮廓描边见 [MediaArtwork] */
+                    MediaArtwork(
+                        bitmap = image,
                         contentScale = fit,
-                        modifier = Modifier.fillMaxSize(),
+                        tintColor = component.tintColor,
+                        tintPercent = component.tintPercent,
+                        outlineColor = component.outlineColor,
+                        outlineWidthDp = minOf(widthDp.value, heightDp.value) *
+                            component.outlineWidthPercent / 100f,
                     )
                 } else {
                     MediaPlaceholder(component)
@@ -134,9 +156,9 @@ internal fun MediaComponentView(
                  * 做法:按首帧解码成静态位图 —— 既不占解码线程，也不会在
                  * 一屏几十个组件时把 CPU 拉满。
                  */
-                val firstFrame by produceState<Bitmap?>(initialValue = null, file.absolutePath) {
+                val firstFrame by produceState<Bitmap?>(initialValue = null, file.absolutePath, sizeBucket) {
                     value = withContext(Dispatchers.IO) {
-                        decodeSampled(file, widthDp.value, heightDp.value)
+                        decodeSampled(file, targetPx)
                     }
                 }
                 val frame = firstFrame
@@ -262,7 +284,7 @@ internal fun MediaComponentView(
              * 几十个组件时会明显发热。
              */
             component.kind == MediaKind.VIDEO && staticPreview -> {
-                val firstFrame by produceState<Bitmap?>(initialValue = null, file.absolutePath) {
+                val firstFrame by produceState<Bitmap?>(initialValue = null, file.absolutePath, sizeBucket) {
                     value = withContext(Dispatchers.IO) { videoFirstFrame(file) }
                 }
                 val frame = firstFrame
@@ -299,6 +321,75 @@ internal fun MediaComponentView(
     }
 }
 
+/**
+ * 带**染色**与**轮廓描边**的位图绘制（图片 / 动图的静态首帧都走这里）。
+ *
+ * ⚠️ 染色用 `BlendMode.Modulate`（与位图字体同一套）:按亮度相乘，
+ * 保留明暗与纹理;`SrcIn` 会把图变成纯色剪影，细节全丢。
+ * `tintPercent` 控制混多少进去。
+ *
+ * ⚠️ 轮廓描边 = 同一张图按圆周偏移复制 8 份，每份 `tint(描边色, SrcIn)`
+ * （保留 alpha → 透明处不描），再盖上原图 → "贴纸描边"。
+ *
+ * ⚠️ 颜色必须补 `0xFF000000` 的 alpha:`Color(0xFFFFFF)` 会被当成
+ * `0xAARRGGBB`，高 8 位是 0 → 全透明（踩过这个坑，画了但看不见）。
+ */
+@Composable
+private fun MediaArtwork(
+    bitmap: Bitmap,
+    contentScale: ContentScale,
+    tintColor: Long,
+    tintPercent: Int,
+    outlineColor: Long,
+    outlineWidthDp: Float,
+) {
+    val image = remember(bitmap) { bitmap.asImageBitmap() }
+    val tint = Color(0xFF000000L or (tintColor and 0xFFFFFF))
+    val outline = Color(0xFF000000L or (outlineColor and 0xFFFFFF))
+    val strength = tintPercent.coerceIn(0, 100) / 100f
+    val outlineWidth = outlineWidthDp.coerceAtLeast(0f)
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        if (outlineWidth > 0f) {
+            repeat(OUTLINE_STEPS) { index ->
+                val angle = 2.0 * Math.PI * index / OUTLINE_STEPS
+                Image(
+                    bitmap = image,
+                    contentDescription = null,
+                    contentScale = contentScale,
+                    colorFilter = ColorFilter.tint(outline, BlendMode.SrcIn),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .offset(
+                            x = (Math.cos(angle) * outlineWidth).toFloat().dp,
+                            y = (Math.sin(angle) * outlineWidth).toFloat().dp,
+                        ),
+                )
+            }
+        }
+
+        Image(
+            bitmap = image,
+            contentDescription = null,
+            contentScale = contentScale,
+            modifier = Modifier.fillMaxSize(),
+        )
+
+        if (strength > 0f) {
+            Image(
+                bitmap = image,
+                contentDescription = null,
+                contentScale = contentScale,
+                alpha = strength,
+                colorFilter = ColorFilter.tint(tint, BlendMode.Modulate),
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+    }
+}
+
+/** 轮廓描边复制的份数:8 份在屏幕上已看不出断口，再多只是白花性能 */
+private const val OUTLINE_STEPS = 8
 /** 还没选资源 / 文件丢了 / 该类型尚未实现时的占位框 */
 @Composable
 private fun MediaPlaceholder(component: MediaComponent) {
@@ -324,15 +415,24 @@ private fun MediaPlaceholder(component: MediaComponent) {
  *
  * ⚠️ 直接 `decodeFile` 一张 4K 图 = 几十 MB，悬浮窗里放几张就 OOM。
  */
-private fun decodeSampled(file: File, widthDp: Float, heightDp: Float): Bitmap? {
+/**
+ * 把图片解码成**够用**的位图。
+ *
+ * @param targetWidthPx 组件在屏幕上占的**像素**宽度（调用方已乘过 density）
+ *
+ * ⚠️ 两条硬要求:
+ * 1. **按像素算**，不是 dp:dp→px 差一个 density（这台机器 2.975），
+ *    把 dp 当像素直接损失约 2/3 的细节 —— 细笔画的透明文字就是那时糊掉的。
+ * 2. `inSampleSize` 只能取 2 的幂:取值时**宁可偏大**（分辨率高一点），
+ *    缩小显示比放大清晰得多。
+ */
+private fun decodeSampled(file: File, targetWidthPx: Int): Bitmap? {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeFile(file.absolutePath, bounds)
     if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
 
-    /* ⚠️ 悬浮窗的 dp 与像素差一个密度；这里只求"够用"，多留一倍余量给高 DPI */
-    val targetWidth = (widthDp * 2f).toInt().coerceAtLeast(1)
     var sample = 1
-    while (bounds.outWidth / (sample * 2) >= targetWidth) sample *= 2
+    while (bounds.outWidth / (sample * 2) >= targetWidthPx) sample *= 2
 
     return BitmapFactory.decodeFile(
         file.absolutePath,

@@ -8,7 +8,7 @@ package com.something.sthkey.domain.config
  * ============================================================
  * 摇杆和"按键"不是一回事 —— 按键只有"按下 / 没按下"，
  * 而摇杆有底盘、内圆（摇杆帽）、拇指三层结构，每层各有颜色 / 圆角 /
- * 透明度 / 描边。
+ * 不透明度 / 描边。
  *
  * 混在 `KeyStrokesConfig` 里会有两个问题:
  *
@@ -89,7 +89,7 @@ data class JoystickStyle(
     /**
      * 底盘填充色（**ARGB，但 alpha 必须是不透明的 `0xFF`**）。
      *
-     * ⚠️ 透明度**只由 [opacity] 表达** —— 颜色里不要再藏 alpha，
+     * ⚠️ 不透明度**只由 [opacity] 表达** —— 颜色里不要再藏 alpha，
      * 否则会在配置页被 [com.something.sthkey.ui.component.HexColorRow]
      * 抹掉（那个控件只处理 RGB），表现是"滑到摇杆那一栏摇杆就不见了"。
      * 完整经过见 [Companion] 里那段说明。
@@ -107,7 +107,7 @@ data class JoystickStyle(
      * | [ringColor] / [ringOpacity] / [ringWidthRatio] | 底盘上那个**圆**（活动轨道） |
      *
      * 用户的原话:"'摇杆'栏需要加一下描边，你忘记加了，别漏掉颜色
-     * 透明度粗细这类的，细心一点"。
+     * 不透明度粗细这类的，细心一点"。
      *
      * ⚠️ 我第一版只加了"内圆"那一套（用户管它叫"内接圆边"），
      * 把**底盘本体的描边**整个漏了 —— 而按键样式里也有描边
@@ -280,7 +280,7 @@ data class JoystickStyle(
          * 它内部 `formatHexDigits()` 里有一句 `and 0xFFFFFF`，
          * 会把 alpha **截掉**。而项目里所有颜色字段
          * （`keyUpColor` / `keyDownColor` …）本来就是纯 RGB，
-         * 透明度由**独立的 opacity 字段**管。
+         * 不透明度由**独立的 opacity 字段**管。
          *
          * 第一版这里给了带 alpha 的默认值（`0xB3000000` 半透明黑），
          * 于是:
@@ -292,22 +292,22 @@ data class JoystickStyle(
          * 5. **摇杆的底盘与内圆直接消失**，而且写进了存档 ——
          *    "除了重新创建一个配置，无法恢复"。
          *
-         * ⚠️ 所以:**透明度只由 [opacity] / [ringOpacity] / [knobOpacity]
+         * ⚠️ 所以:**不透明度只由 [opacity] / [ringOpacity] / [knobOpacity]
          * 那三个字段表达**，颜色里不要再藏 alpha。
          * 两者相乘会让"改颜色把摇杆改没了"这种事再发生一次。
          */
         const val DEFAULT_JOYSTICK_COLOR = 0xFF000000.toInt()
 
-        /** 默认内圆圆环色（纯白，透明度看 [ringOpacity]） */
+        /** 默认内圆圆环色（纯白，不透明度看 [ringOpacity]） */
         const val DEFAULT_RING_COLOR = 0xFFFFFFFF.toInt()
 
-        /** 默认摇杆帽色（纯白，透明度看 [knobOpacity]） */
+        /** 默认摇杆帽色（纯白，不透明度看 [knobOpacity]） */
         const val DEFAULT_KNOB_COLOR = 0xFFFFFFFF.toInt()
 
-        /** 默认摇杆帽描边色（纯黑，透明度看 [knobStrokeOpacity]） */
+        /** 默认摇杆帽描边色（纯黑，不透明度看 [knobStrokeOpacity]） */
         const val DEFAULT_KNOB_STROKE_COLOR = 0xFF000000.toInt()
 
-        /** 默认底盘描边色（纯白，透明度看 [strokeOpacity]，默认 0 = 不画） */
+        /** 默认底盘描边色（纯白，不透明度看 [strokeOpacity]，默认 0 = 不画） */
         const val DEFAULT_STROKE_COLOR = 0xFFFFFFFF.toInt()
 
         /*

@@ -1,6 +1,7 @@
 package com.something.sthkey.domain.custom
 
 import kotlin.math.roundToInt
+import com.something.sthkey.domain.media.CustomMediaStore
 
 
 /**
@@ -147,7 +148,7 @@ fun CustomComponent.centeredOnCanvas(): CustomComponent = movedTo(
  * （三层结构，见 [JoystickComponent] 的说明），所以它**不在这里** ——
  * 硬给它一个 `copy(style = …)` 只会得到一个改了没反应的入口。
  *
- * 属性面板也因此**不为摇杆显示**颜色/透明度/圆角/描边那几组，
+ * 属性面板也因此**不为摇杆显示**颜色/不透明度/圆角/描边那几组，
  * 而是显示它自己的「摇杆 / 摇杆帽 / 摇杆手感」。
  */
 fun TextualComponent.withStyle(style: ComponentStyle): TextualComponent = when (this) {
@@ -247,31 +248,67 @@ fun CustomComponent.typeLabel(): String = when (this) {
  * 看不出它在跟手柄，而它恰恰最需要说明。
  */
 fun CustomComponent.summary(): String = when (this) {
-    is MediaComponent -> kind.label + if (assetId.isBlank()) "（未选择资源）" else ""
+    /*
+     * ⚠️ 媒体组件这里返回**资源名**，不是类型名。
+     *
+     * 早先返回 `kind.label`（"图片"），列表里就成了「图片·图片」——
+     * 类型名在 [typeLabel] 里已经有了，摘要再说一遍纯属占地方。
+     * 现在显示成「图片 · combat.png」;没选资源时由 [displayName] 接管。
+     */
+    is MediaComponent -> if (assetId.isBlank()) {
+        ""
+    } else {
+        runCatching { CustomMediaStore.displayNameOf(assetId) }.getOrDefault("")
+    }
     is KeyComponent -> label.ifBlank { "（无键名）" }
     is TextComponent -> text.ifBlank { "（空文本）" }
     /*
-     * ⚠️ **按来源分**:键盘/鼠标摇杆没有"左/右"可言，
-     * 报 `side.label` 就是那个"都显示左摇杆"的 bug。
+     * ⚠️ 摇杆摘要**只写"区分信息"**，不重复类型名:
+     *
+     * | 类型名 | 摘要 | 显示 |
+     * |---|---|---|
+     * | 手柄摇杆 | 左摇杆 | 手柄摇杆 · 左摇杆 |
+     * | 键盘摇杆 | WASD | 键盘摇杆 · WASD |
+     * | 鼠标摇杆 | 指针位移 | 鼠标摇杆 · 指针位移 |
+     * | 触屏移动摇杆 | 触摸区域 | 触屏移动摇杆 · 触摸区域 |
+     * | 触屏视角摇杆 | 全屏滑动 | 触屏视角摇杆 · 全屏滑动 |
      */
     is JoystickComponent -> when (source) {
-        JoystickSource.GAMEPAD -> "手柄${side.label}"
+        JoystickSource.GAMEPAD -> side.label
         JoystickSource.KEYBOARD -> "WASD"
-        JoystickSource.MOUSE -> "鼠标位移"
-        /*
-         * ⚠️ 触屏摇杆的摘要要写清**它在吃什么** ——
-         * 这正是用户区分"移动 / 视角"的唯一地方（画布上它们长得一样）:
-         *
-         * | 摇杆 | 吃什么 |
-         * |---|---|
-         * | 移动 | **触摸区域**里的触摸 |
-         * | 视角 | **全屏**滑动（没有区域） |
-         */
+        JoystickSource.MOUSE -> "指针位移"
         JoystickSource.TOUCH -> when (side) {
-            StickSide.LEFT -> "触屏移动（吃触摸区域）"
-            StickSide.RIGHT -> "触屏视角（吃全屏滑动）"
+            StickSide.LEFT -> "触摸区域"
+            StickSide.RIGHT -> "全屏滑动"
         }
     }
+}
+
+/**
+ * 列表/标签上显示的**完整名字**。
+ *
+ * ============================================================
+ * ⚠️ 为什么要有这个函数
+ * ============================================================
+ * 早先各处自己拼 `typeLabel() + "·" + summary()`，于是出现了:
+ *
+ * | 组件 | 旧显示 | 问题 |
+ * |---|---|---|
+ * | 图片（没选资源） | `图片·图片（未选择资源）` | 类型名说了两遍 |
+ * | 图片（选了图） | `图片·图片` | 同样重复 |
+ * | 触屏移动摇杆 | `触屏移动摇杆·触屏移动（吃触摸区域）` | 又是一遍 |
+ *
+ * 现在规则只有三条:
+ * 1. 摘要为空 → 只显示类型名
+ * 2. 媒体组件没选资源 → `图片（未选择资源）`（括号而不是分隔点）
+ * 3. 其余 → `类型 · 摘要`
+ */
+fun CustomComponent.displayName(): String {
+    if (this is MediaComponent && assetId.isBlank()) {
+        return typeLabel() + "（未选择资源）"
+    }
+    val extra = summary()
+    return if (extra.isBlank()) typeLabel() else typeLabel() + " · " + extra
 }
 
 /*

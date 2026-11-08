@@ -51,7 +51,7 @@ import org.json.JSONObject
  * 别人（或更新版本）导出的配置包、以及用户手工改过的文件。
  *
  * - 缺字段 → 用默认值；
- * - 越界值 → clamp（缩放、透明度、圆角、动画时长）；
+ * - 越界值 → clamp（缩放、不透明度、圆角、动画时长）；
  * - **不认识的组件类型 → 跳过那一个组件**，而不是整份布局读失败 ——
  *   新版加了"图片组件"，旧版读到时应该少一个组件，而不是丢掉整个布局；
  * - 数字被写成字符串之类的脏数据 → 用 `optXxx` 兜住，不抛异常。
@@ -287,6 +287,11 @@ object CustomLayoutCodec {
                 put("fit", component.fit.id)
                 put("opacityPercent", component.opacityPercent)
                 put("cornerRadiusPercent", component.cornerRadiusPercent)
+                /* 染色与描边（见 MediaComponent 的说明:染色照位图字体那套） */
+                put("tintColor", component.tintColor)
+                put("tintPercent", component.tintPercent)
+                put("outlineWidthPercent", component.outlineWidthPercent)
+                put("outlineColor", component.outlineColor)
                 /* 静音只对视频有意义，但照样写（与 stickSide 同理:切来切去不丢） */
             }
         }
@@ -795,7 +800,12 @@ object CustomLayoutCodec {
                             fit = MediaFit.fromId(item.optString("fit")) ?: MediaFit.COVER,
                             opacityPercent = item.optInt("opacityPercent", 100).coerceIn(0, 100),
                             cornerRadiusPercent = item.optInt("cornerRadiusPercent", 0)
-                                .coerceIn(0, 50),
+                            .coerceIn(0, 50),
+                            /* 老配置没有这几个字段 → 默认不染色、不描边 */
+                            tintColor = item.optLong("tintColor", 0xFFFFFF) and 0xFFFFFF,
+                            tintPercent = item.optInt("tintPercent", 0).coerceIn(0, 100),
+                            outlineWidthPercent = item.optInt("outlineWidthPercent", 0).coerceIn(0, 50),
+                            outlineColor = item.optLong("outlineColor", 0x000000) and 0xFFFFFF,
                         ),
                     )
                 }
@@ -1003,7 +1013,7 @@ object CustomLayoutCodec {
                 .coerceIn(CustomLayout.OUTLINE_WIDTH_MIN, CustomLayout.OUTLINE_WIDTH_MAX),
             outlineUp = outlineUp,
             outlineDown = outlineDown,
-            // 老配置只有一个描边透明度 → 两个状态都用它
+            // 老配置只有一个描边不透明度 → 两个状态都用它
             outlineOpacityUp = percent(json, "outlineOpacityUp", legacyOutlineOpacity),
             outlineOpacityDown = percent(json, "outlineOpacityDown", legacyOutlineOpacity),
             // 阴影是本版新增的，老组件没有 → 用默认值（关闭）

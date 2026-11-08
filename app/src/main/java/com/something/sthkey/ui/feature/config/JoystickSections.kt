@@ -42,8 +42,8 @@ import com.something.sthkey.ui.component.SettingsCard
  * ============================================================
  * | 组 | 内容 |
  * |---|---|
- * | 摇杆 | 缩放、圆角、透明度、颜色、底盘描边、内圆（颜色/透明度/粗细） |
- * | 摇杆帽 | 缩放、圆角、颜色、透明度、描边 |
+ * | 摇杆 | 缩放、圆角、不透明度、颜色、底盘描边、内圆（颜色/不透明度/粗细） |
+ * | 摇杆帽 | 缩放、圆角、颜色、不透明度、描边 |
  * | 手感（**仅显示**） | 死区、灵敏度、平滑·精准 |
  *
  * ⚠️ **底盘描边**与**内圆**是两回事（用户专门提过）:
@@ -145,7 +145,7 @@ internal fun LazyListScope.joystickStyleSections(
             CardDivider()
 
             SliderRow(
-                label = "透明度",
+                label = "不透明度",
                 value = js.opacity,
                 valueRange = 0f..1f,
                 display = "${(js.opacity * 100f).toInt()}%",
@@ -171,7 +171,7 @@ internal fun LazyListScope.joystickStyleSections(
         SettingsCard {
             /*
              * ⚠️ 用户的原话:"'摇杆'栏需要加一下描边，你忘记加了，
-             * 别漏掉颜色透明度粗细这类的，细心一点"。
+             * 别漏掉颜色不透明度粗细这类的，细心一点"。
              *
              * 三项一个都不能少 —— 只有颜色没法隐藏描边，
              * 只有粗细没法调成半透明。
@@ -187,7 +187,7 @@ internal fun LazyListScope.joystickStyleSections(
             CardDivider()
 
             SliderRow(
-                label = "描边透明度",
+                label = "描边不透明度",
                 value = js.strokeOpacity,
                 valueRange = 0f..1f,
                 display = if (js.strokeOpacity <= 0f) {
@@ -236,7 +236,7 @@ internal fun LazyListScope.joystickStyleSections(
             CardDivider()
 
             SliderRow(
-                label = "内圆透明度",
+                label = "内圆不透明度",
                 value = js.ringOpacity,
                 valueRange = 0f..1f,
                 display = if (js.ringOpacity <= 0f) {
@@ -330,7 +330,7 @@ internal fun LazyListScope.joystickStyleSections(
             CardDivider()
 
             SliderRow(
-                label = "摇杆帽透明度",
+                label = "摇杆帽不透明度",
                 value = js.knobOpacity,
                 valueRange = 0f..1f,
                 display = "${(js.knobOpacity * 100f).toInt()}%",
@@ -354,7 +354,7 @@ internal fun LazyListScope.joystickStyleSections(
             CardDivider()
 
             SliderRow(
-                label = "摇杆帽描边透明度",
+                label = "摇杆帽描边不透明度",
                 value = js.knobStrokeOpacity,
                 valueRange = 0f..1f,
                 display = if (js.knobStrokeOpacity <= 0f) {

@@ -8,20 +8,20 @@ import com.something.sthkey.domain.config.TextShadow
  *
  * 为什么单独抽出来：
  * 同一套规则有三个使用方 —— 配置页的预览、以后的悬浮窗绘制层、以及将来的其它样式。
- * 如果各写一遍，很容易出现"预览里是圆角、实际悬浮窗是直角""预览透明度 70% 实际 100%"
+ * 如果各写一遍，很容易出现"预览里是圆角、实际悬浮窗是直角""预览不透明度 70% 实际 100%"
  * 这类对不上的问题。这里只放**纯计算**，不碰任何 Android 绘制 API，
  * 因此可以被预览和悬浮窗共同使用，也能直接写单元测试。
  */
 object KeyStyleResolver {
 
-    /** 键帽底色：颜色 + 透明度百分比 → 0xAARRGGBB */
+    /** 键帽底色：颜色 + 不透明度百分比 → 0xAARRGGBB */
     fun keyColor(config: KeyStrokesConfig, pressed: Boolean): Int {
         val rgb = if (pressed) config.colors.keyDown else config.colors.keyUp
         val alpha = if (pressed) config.opacity.keyDown else config.opacity.keyUp
         return argb(rgb, alpha)
     }
 
-    /** 按键文字颜色：颜色 + 文字透明度百分比 → 0xAARRGGBB */
+    /** 按键文字颜色：颜色 + 文字不透明度百分比 → 0xAARRGGBB */
     fun textColor(config: KeyStrokesConfig, pressed: Boolean): Int {
         val rgb = if (pressed) config.colors.textDown else config.colors.textUp
         val alpha = if (pressed) config.opacity.textDown else config.opacity.textUp
@@ -78,7 +78,7 @@ object KeyStyleResolver {
         return shortSideDp * percent
     }
 
-    /** 把 6 位 RGB 与透明度百分比合成为 ARGB */
+    /** 把 6 位 RGB 与不透明度百分比合成为 ARGB */
     private fun argb(rgb: Long, opacityPercent: Int): Int {
         val alpha = opacityPercent.coerceIn(0, 100) * 255 / 100
         return ((alpha shl 24) or (rgb.toInt() and 0xFFFFFF))

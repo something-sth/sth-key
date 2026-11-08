@@ -158,7 +158,7 @@ fun ConfigPreview(
                 slotIdOf = { code -> KeyLayout.codeToSlotMap(config)[code] },
                 baseWidth = windowed.bounds.width,
                 baseHeight = windowed.bounds.height,
-                /* 预览要跟着显示整体透明度 —— 否则预览与实际不一致 */
+                /* 预览要跟着显示整体不透明度 —— 否则预览与实际不一致 */
                 overallAlpha = config.customOpacityPercent.coerceIn(0, 100) / 100f,
                 /* ⚠️ 整体字符缩放（与每个组件自己的文字缩放相乘） */
                 overallTextScalePercent = config.customTextScalePercent,
