@@ -3,7 +3,9 @@ package com.something.sthkey.ui.feature.debug
 import android.content.ClipboardManager
 import android.content.ClipData
 import android.content.Context
+import android.text.format.DateFormat
 import android.widget.Toast
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -22,6 +24,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Warning
@@ -37,6 +40,7 @@ import androidx.compose.material.icons.rounded.Straighten
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.TouchApp
 import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -50,6 +54,7 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -70,10 +75,16 @@ import com.something.sthkey.capture.gamepad.ShizukuGamepadLauncher
 import com.something.sthkey.capture.OverlayService
 import com.something.sthkey.capture.shizuku.ShizukuShell
 import com.something.sthkey.capture.touch.TouchCapture
+import com.something.sthkey.capture.touch.TouchRegionContainerService
 import com.something.sthkey.core.log.AppLog
 import com.something.sthkey.core.log.CrashLogger
 import com.something.sthkey.core.log.LogLevel
 import com.something.sthkey.core.prefs.AppPrefs
+import com.something.sthkey.data.config.ConfigExporters
+import com.something.sthkey.data.config.ConfigStore
+import com.something.sthkey.data.config.ExportMethod
+import com.something.sthkey.data.config.exportTextToDownloads
+import com.something.sthkey.data.config.TextExportRequest
 import com.something.sthkey.domain.style.StyleId
 import com.something.sthkey.ui.component.CardDivider
 import com.something.sthkey.ui.component.EmptyHint
@@ -84,6 +95,7 @@ import com.something.sthkey.ui.component.SectionHint
 import com.something.sthkey.ui.component.SettingItem
 import com.something.sthkey.ui.component.SettingsCard
 import com.something.sthkey.ui.component.SwitchItem
+import com.something.sthkey.ui.feature.config.ExportMethodDialog
 import com.something.sthkey.ui.MainViewModel
 import com.something.sthkey.ui.overlay.cpsDiagnosticReport
 import com.something.sthkey.ui.overlay.keyLayoutDiagnosticReport
@@ -91,7 +103,14 @@ import com.something.sthkey.ui.overlay.liveWindowPickerHint
 import com.something.sthkey.ui.overlay.noLiveWindowReport
 import com.something.sthkey.ui.theme.monoSmall
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+
+
+
+
 
 
 /**
@@ -115,6 +134,9 @@ fun DebugScreen(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+
+    /* P1 预览:选哪个触屏配置（不再依赖"活动配置"，那个概念已删除） */
+    var showContainerPicker by remember { mutableStateOf(false) }
     val prefs = remember { AppPrefs.get(context) }
 
     // 订阅日志计数以触发刷新；这里只观察计数，不承载日志内容本身
@@ -140,7 +162,43 @@ fun DebugScreen(
     }
 
     val records = remember(logVersion, minLevelName, query) {
+        /* UI 仍倒序展示：最新一条在最上方 */
         AppLog.recent(limit = AppLog.DISPLAY_LIMIT, minLevel = minLevel, query = query).asReversed()
+    }
+    val filteredRecords = remember(logVersion, minLevelName, query) {
+        AppLog.recent(limit = AppLog.DISPLAY_LIMIT, minLevel = minLevel, query = query)
+    }
+    /* 导出严格用当前筛选结果；recent() 是时间正序，文件可从头读到尾 */
+    val filteredLogText = remember(filteredRecords) {
+        filteredRecords.joinToString("\n") { it.toLine() }
+    }
+    var showLogExport by remember { mutableStateOf(false) }
+    var showAllLogs by remember { mutableStateOf(false) }
+
+    /* 日志导出用:文件名（时间戳）与协程作用域、手动保存的 launcher */
+    val logFileName = remember {
+        "log-" + java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+            .format(java.util.Date()) + ".log"
+    }
+    val logScope = rememberCoroutineScope()
+    val logManualLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.CreateDocument("text/plain"),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        logScope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openOutputStream(uri, "wt")?.use {
+                        it.write(filteredLogText.toByteArray(Charsets.UTF_8))
+                    } ?: error("系统未提供文件输出流")
+                }.isSuccess
+            }
+            Toast.makeText(
+                context,
+                if (ok) "日志已导出：$logFileName" else "日志导出失败",
+                Toast.LENGTH_LONG,
+            ).show()
+        }
     }
 
     /*
@@ -273,6 +331,79 @@ fun DebugScreen(
             }
         }
 
+        /*
+         * ============================================================
+         * P1 临时入口:单容器触摸区域预览
+         * ============================================================
+         * ⚠️ 这是改造触摸区域编辑器（见 `docs/touch-region-editor-redesign.md`）
+         * 的**验证入口**,只做一件事:把"新容器画出来的框"和"旧实现的多窗口"
+         * 摆在一起对比位置。
+         *
+         * ⚠️ P4 有了圆球入口之后，**删掉这一段**。
+         */
+        item { SectionHeader("触摸区域容器（P1 预览）") }
+        item {
+            SettingsCard {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FilledTonalButton(
+                        onClick = {
+                            showContainerPicker = true
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("打开容器")
+                    }
+                    OutlinedButton(
+                        onClick = { TouchRegionContainerService.stop(context) },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("关闭容器")
+                    }
+                }
+                Text(
+                    text = "选一个触屏配置，把它的区域框画一遍（只读）。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 14.dp),
+                )
+            }
+        }
+        item {
+            if (showContainerPicker) {
+                val touchConfigs = ConfigStore.get(context).all()
+                    .filter { it.styleId == StyleId.TOUCHING }
+                AlertDialog(
+                    onDismissRequest = { showContainerPicker = false },
+                    title = { Text("选择要预览的触屏配置") },
+                    text = {
+                        if (touchConfigs.isEmpty()) {
+                            Text("还没有触屏样式的配置")
+                        } else {
+                            Column {
+                                touchConfigs.forEach { cfg ->
+                                    TextButton(
+                                        onClick = {
+                                            showContainerPicker = false
+                                            TouchRegionContainerService.start(context, cfg.id)
+                                        },
+                                    ) {
+                                        Text(cfg.name)
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { showContainerPicker = false }) { Text("取消") }
+                    },
+                )
+            }
+        }
         /*
          * ============================================================
          * Shizuku 诊断
@@ -881,9 +1012,21 @@ fun DebugScreen(
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(
                             onClick = {
-                                copyLogs(context)
-                                Toast.makeText(context, "日志已复制到剪贴板", Toast.LENGTH_SHORT).show()
+                                if (filteredLogText.isBlank()) {
+                                    Toast.makeText(context, "当前筛选没有日志可导出", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    showLogExport = true
+                                }
                             },
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Icon(Icons.Default.FileDownload, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("导出")
+                        }
+
+                        OutlinedButton(
+                            onClick = { showAllLogs = true },
                             modifier = Modifier.weight(1f),
                         ) {
                             Icon(Icons.Default.ContentCopy, contentDescription = null)
@@ -921,69 +1064,133 @@ fun DebugScreen(
         } else {
             items(records, key = { it.seq }) { record ->
                 LogRow(
-                    timeText = record.timeText,
-                    levelLabel = record.level.label,
-                    tag = record.tag,
-                    message = record.message,
+                    record = record,
+                    onLongClick = {
+                        copyText(context, record.toLine())
+                        Toast.makeText(context, "已复制这条日志", Toast.LENGTH_SHORT).show()
+                    },
                 )
             }
         }
 
         item {
             SectionHint(
-                text = "日志时间戳精确到毫秒。排查「按键无反应」时，" +
-                    "请先确认采集模式是否为预期模式，再看是否有打开设备失败的记录。",
+                text = "日志时间戳精确到毫秒。长按任意一行可复制单条日志；导出只包含当前级别与关键字筛选结果。",
             )
         }
 
         item { Spacer(modifier = Modifier.height(16.dp)) }
     }
+
+    /*
+     * 日志导出:**复用配置导出的那个方式选择框**（用户明确要求）。
+     *
+     * 与配置导出唯一的区别:
+     * - 「导出到目录」写到 `下载/sthkeylogs/`（配置是 `下载/sthkeyconfigs/`）;
+     * - 分享时 MIME 用 `text/plain`（配置是 zip）。
+     *
+     * ⚠️ 不要在这里另写一套对话框 —— 用户嫌丑，而且会丢「分享」这一项。
+     */
+    if (showLogExport) {
+        ExportMethodDialog(
+            configName = logFileName,
+            downloadSubtitle = "下载/sthkeylogs",
+            onPick = { method, _ ->
+                showLogExport = false
+                when (method) {
+                    ExportMethod.DOWNLOAD -> logScope.launch {
+                        val result = withContext(Dispatchers.IO) {
+                            exportTextToDownloads(
+                                context,
+                                TextExportRequest(logFileName, "sthkeylogs", filteredLogText),
+                            )
+                        }
+                        val message = when (result) {
+                            is ConfigExporters.ExportResult.Ok ->
+                                "已导出「${result.displayName}」到 下载/sthkeylogs"
+                            is ConfigExporters.ExportResult.Failed ->
+                                "日志导出失败：${result.reason}"
+                        }
+                        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                    }
+
+                    ExportMethod.MANUAL, ExportMethod.ASK -> logManualLauncher.launch(logFileName)
+
+                    ExportMethod.SHARE -> logScope.launch {
+                        val intent = withContext(Dispatchers.IO) {
+                            ConfigExporters.buildShareIntent(
+                                context = context,
+                                displayName = logFileName,
+                                fileName = logFileName,
+                                write = { uri ->
+                                    context.contentResolver.openOutputStream(uri, "wt")?.use {
+                                        it.write(filteredLogText.toByteArray(Charsets.UTF_8))
+                                        true
+                                    } ?: false
+                                },
+                                mimeType = "text/plain",
+                            )
+                        }
+                        if (intent == null) {
+                            Toast.makeText(context, "准备分享失败", Toast.LENGTH_SHORT).show()
+                        } else {
+                            runCatching {
+                                context.startActivity(
+                                    android.content.Intent.createChooser(intent, "分享日志"),
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            onDismiss = { showLogExport = false },
+        )
+    }
+
+    if (showAllLogs) {
+        AlertDialog(
+            onDismissRequest = { showAllLogs = false },
+            title = { Text("复制全部日志") },
+            text = {
+                Text("当前级别与关键字筛选匹配 ${filteredRecords.size} 条，将复制这部分日志。")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showAllLogs = false
+                        copyText(context, filteredLogText)
+                        Toast.makeText(context, "筛选后的日志已复制", Toast.LENGTH_SHORT).show()
+                    },
+                ) { Text("复制") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAllLogs = false }) { Text("取消") }
+            },
+        )
+    }
 }
 
-/** 单条日志：时间戳 + 级别 + 来源 + 内容 */
+/** 单条日志纯文本行；长按复制，不再做每条一张卡片。 */
 @Composable
 private fun LogRow(
-    timeText: String,
-    levelLabel: String,
-    tag: String,
-    message: String,
-    modifier: Modifier = Modifier,
+    record: com.something.sthkey.core.log.LogRecord,
+    onLongClick: () -> Unit,
 ) {
-    val levelColor = when (levelLabel) {
-        "E" -> MaterialTheme.colorScheme.error
-        "W" -> MaterialTheme.colorScheme.tertiary
-        "I" -> MaterialTheme.colorScheme.primary
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    val color = when (record.level) {
+        LogLevel.ERROR -> MaterialTheme.colorScheme.error
+        LogLevel.WARN -> MaterialTheme.colorScheme.tertiary
+        LogLevel.INFO -> MaterialTheme.colorScheme.onSurface
+        LogLevel.DEBUG -> MaterialTheme.colorScheme.onSurfaceVariant
     }
-
-    SettingsCard(modifier = modifier) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = timeText,
-                    style = monoSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = levelLabel,
-                    style = monoSmall.copy(fontFamily = FontFamily.Monospace),
-                    color = levelColor,
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = tag,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = message,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-    }
+    Text(
+        text = record.toLine(),
+        style = monoSmall.copy(fontFamily = FontFamily.Monospace),
+        color = color,
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(onClick = {}, onLongClick = onLongClick)
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+    )
 }
 
 /**

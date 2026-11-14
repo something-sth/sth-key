@@ -254,6 +254,17 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="触屏区域编辑：在编辑页显示可拖动的触摸区域方块" />
         </service>
+
+        <!--
+         * P1 **单容器**触摸区域编辑器（只读预览）。
+         *
+         * ⚠️ 它只是 P1 的验证入口:一块铺满可用区域的窗口，区域按百分比画进去，
+         * 用来对比"新容器里的框"与"旧实现的多窗口"位置是否一致。
+         * P2 接交互、P4 换成圆球入口后，这个服务会被正式的编辑器替换。
+         -->
+        <service
+            android:name=".capture.touch.TouchRegionContainerService"
+            android:exported="false" />
     </application>
 
 </manifest>

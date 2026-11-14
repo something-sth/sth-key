@@ -724,12 +724,8 @@ data class TouchInputState(
         val (x, y) = moveByRegion[regionId] ?: return false
         /* ⚠️ 死区之内一律不算 —— 防"刚按下就四个方向全亮" */
         if (kotlin.math.hypot(x, y) <= TOUCH_DIRECTION_DEAD_ZONE) return false
-        return when (direction) {
-            TouchDirection.FRONT -> y < 0f
-            TouchDirection.BACK -> y > 0f
-            TouchDirection.LEFT -> x < 0f
-            TouchDirection.RIGHT -> x > 0f
-        }
+        /* ⚠️ 与 TouchFrameTracker 共用同一套 8 向判定（45° 扇区） */
+        return TouchDirection.resolve(x, y) == direction
     }
 }
 

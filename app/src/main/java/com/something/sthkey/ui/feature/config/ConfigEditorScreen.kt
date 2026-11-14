@@ -60,6 +60,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.something.sthkey.capture.accessibility.AccessibilityGrant
 import com.something.sthkey.capture.accessibility.SthKeyAccessibilityService
+import com.something.sthkey.capture.touch.TouchRegionContainerService
 import com.something.sthkey.capture.touch.TouchRegionEditorService
 import com.something.sthkey.core.log.AppLog
 import com.something.sthkey.data.permission.PermissionHelper
@@ -110,6 +111,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
 
 
 
@@ -243,17 +245,19 @@ fun ConfigEditorScreen(
             return
         }
 
-        when (val reason = TouchRegionEditorService.refuseReason(editable.id)) {
-            null -> TouchRegionEditorService.start(context, editable.id)
+        /*
+         * ⚠️ **触摸区域编辑改用新实现**（单容器 + 胶囊，见
+         * `docs/touch-region-editor-redesign.md`）。
+         *
+         * 旧的 [TouchRegionEditorService]（每个区域一个悬浮窗）**暂时保留**:
+         * 用户要求"先把触屏配置修好，旧编辑器本体先不删" —— 留着方便对比/回退。
+         *
+         * ⚠️ 新实现同样是"再按一次 = 关闭"的语义，所以这里保留 ALREADY_OPEN 分支。
+         */
+        when (val reason = TouchRegionContainerService.refuseReason(editable.id)) {
+            null -> TouchRegionContainerService.start(context, editable.id)
 
-            /*
-             * ⚠️ 同一个配置再按一次 = **不保存关闭**。
-             *
-             * ⚠️ 用户给过"双击关闭"这个备选，我选了"再按一次" ——
-             * 那个按钮是普通按钮，双击是隐藏手势，而单击已经
-             * 能表达"收起"（面板里也有「不保存退出」那条明路）。
-             */
-            TouchRegionEditorService.ALREADY_OPEN -> TouchRegionEditorService.stop(context)
+            TouchRegionContainerService.ALREADY_OPEN -> TouchRegionContainerService.stop(context)
 
             else -> Toast.makeText(context, reason, Toast.LENGTH_LONG).show()
         }

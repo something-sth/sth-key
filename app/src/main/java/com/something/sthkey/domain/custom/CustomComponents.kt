@@ -495,11 +495,57 @@ enum class TouchDirection(val id: String, val label: String) {
     BACK("back", "后"),
     LEFT("left", "左"),
     RIGHT("right", "右"),
+
+    /*
+     * ⚠️ **8 向**（用户定的）:斜向是**独立方向**，不再是"两个方向同时成立"。
+     *
+     * | 旧（4 向） | 现在（8 向） |
+     * |---|---|
+     * | 斜推时"前"和"左"同时亮 | 斜推只命中 `FRONT_LEFT` |
+     *
+     * ⚠️ id 沿用"前后左右"这套语系（`front_left` 而不是 `up_left`），
+     * 与已有的 `front/back` 保持一致;旧配置里的 `front/back/left/right`
+     * **不需要迁移**，语义不变。
+     */
+    FRONT_LEFT("front_left", "左上"),
+    FRONT_RIGHT("front_right", "右上"),
+    BACK_LEFT("back_left", "左下"),
+    BACK_RIGHT("back_right", "右下"),
     ;
 
     companion object {
         /** 不认识的值当作**没有方向**（返回 null）—— 老配置或手改的 JSON 不该崩 */
         fun fromId(id: String?): TouchDirection? = entries.firstOrNull { it.id == id }
+
+        /**
+         * 由**摇杆向量**判出唯一方向（8 个 45° 扇区）。
+         *
+         * ⚠️ 为什么要有这个函数:
+         * 以前两个地方（`TouchFrameTracker` 与 `CustomKeyGrid`）各写一份
+         * `when (direction) { FRONT -> y < 0 … }`，那是"看符号"的 4 向判据,
+         * 斜推会同时命中两个方向。扩成 8 向后必须**统一**成"算角度"，
+         * 否则两处迟早不一致（而且两处都要维护 8 个分支）。
+         *
+         * 坐标系:与渲染一致（y **向下为正**），所以"前/上"是 `y < 0`。
+         *
+         * @return `null` 表示向量为 0（没有方向）
+         */
+        fun resolve(x: Float, y: Float): TouchDirection? {
+            if (x == 0f && y == 0f) return null
+            val degrees = Math.toDegrees(kotlin.math.atan2(y, x).toDouble())
+            /* 0° = 右、+90° = 下、180° = 左、-90° = 上;每 45° 一个扇区 */
+            val index = (((degrees + 22.5 + 360.0) % 360.0) / 45.0).toInt().coerceIn(0, 7)
+            return when (index) {
+                0 -> RIGHT
+                1 -> BACK_RIGHT
+                2 -> BACK
+                3 -> BACK_LEFT
+                4 -> LEFT
+                5 -> FRONT_LEFT
+                6 -> FRONT
+                else -> FRONT_RIGHT
+            }
+        }
     }
 }
 

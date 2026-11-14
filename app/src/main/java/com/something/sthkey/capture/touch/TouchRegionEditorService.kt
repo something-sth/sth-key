@@ -718,6 +718,20 @@ class TouchRegionEditorService : Service() {
         val measuredX = loc[0] - sample.params.x
         val measuredY = loc[1] - sample.params.y
 
+        /*
+         * ⚠️ P1 对照诊断:首次测量就记旧编辑器真实偏移，不要求"它发生变化"才记。
+         * 用户这次的日志里有容器原点 y=141，但没有旧窗口 offset；两边都拿到后
+         * 才能判断容器究竟应该减多少，而不是再凭状态栏高度猜。
+         */
+        if (measureAttempts == 0) {
+            AppLog.i(
+                TAG,
+                "P1 对照:旧窗口屏幕位置=(${loc[0]},${loc[1]}) " +
+                    "params=(${sample.params.x},${sample.params.y}) " +
+                    "windowOffset=($measuredX,$measuredY)",
+            )
+        }
+
         val changed = measuredX != windowOffsetX || measuredY != windowOffsetY
         if (changed) {
             /*

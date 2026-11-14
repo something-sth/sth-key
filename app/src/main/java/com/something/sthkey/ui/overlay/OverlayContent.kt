@@ -828,6 +828,29 @@ private fun customTouchInput(
             .mapTo(mutableSetOf()) { it.id },
     )
 
+    /*
+     * ⚠️ **自定义 Key 摇杆诊断（临时）**：
+     *
+     * 用户报"自定义 Key 的移动摇杆没反应"。摇杆要动，必须满足：
+     * 1. 区域 `kind == MOVE_STICK`（否则不进 `moveSlotIds`）；
+     * 2. 该区域的 `bindings[].componentId` 能对上**真实存在的组件 id**。
+     *
+     * 这条日志把三样东西打出来：区域 → 绑定 → 组件 id。
+     * 只要有一边对不上，就能一眼看出来。
+     */
+    LaunchedEffect(touchRegions, components) {
+        if (touchRegions.isEmpty()) return@LaunchedEffect
+        val componentIds = components.joinToString(",") { it.id }
+        val detail = touchRegions.joinToString(" | ") { region ->
+            "${region.id}[${region.kind.id}]->" +
+                region.bindings.joinToString(",") { it.componentId }
+        }
+        com.something.sthkey.core.log.AppLog.i(
+            "TouchDiag",
+            "自定义区域: $detail ｜ 现有组件: $componentIds",
+        )
+    }
+
     DisposableEffect(tracker) {
         onDispose { tracker.reset() }
     }

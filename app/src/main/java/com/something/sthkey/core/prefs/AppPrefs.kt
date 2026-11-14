@@ -623,6 +623,24 @@ class AppPrefs private constructor(context: Context) {
      * ⚠️ 用户要求（2026-11-07）:高配设备开很多窗也没事，
      * 对话框里要有一个「不再提示」，勾了就别再打扰。
      */
+    /*
+     * 触摸区域编辑器**收起态小球**的位置（屏幕像素）。
+     *
+     * ⚠️ -1 表示"还没放过"，由服务端在第一次显示时给一个默认位置（右下偏上）。
+     * ⚠️ 存像素而不是比例:小球是个"手感位置"，用户拖到哪就是哪，
+     * 转屏后越界会被 clamp 回来，不需要按比例重算。
+     */
+    var touchPanelX: Int
+        get() = prefs.getInt(KEY_TOUCH_PANEL_X, -1)
+        set(value) {
+            prefs.edit().putInt(KEY_TOUCH_PANEL_X, value).apply()
+        }
+
+    var touchPanelY: Int
+        get() = prefs.getInt(KEY_TOUCH_PANEL_Y, -1)
+        set(value) {
+            prefs.edit().putInt(KEY_TOUCH_PANEL_Y, value).apply()
+        }
     var manyWindowsHintDisabled: Boolean
         get() = prefs.getBoolean(KEY_MANY_WINDOWS_HINT_DISABLED, false)
         set(value) {
@@ -763,6 +781,8 @@ class AppPrefs private constructor(context: Context) {
     private const val KEY_FPS_MODE = "fps_mode"
 
     /** 「不再提示多个悬浮窗」的开关（见 [manyWindowsHintDisabled]） */
+    private const val KEY_TOUCH_PANEL_X = "touch_panel_x"
+    private const val KEY_TOUCH_PANEL_Y = "touch_panel_y"
     private const val KEY_MANY_WINDOWS_HINT_DISABLED = "many_windows_hint_disabled"
 
         /* 外观（Miuix 主题与底栏样式）—— 见 `appearance` 的说明 */

@@ -701,12 +701,12 @@ internal class TouchFrameTracker {
             val (x, y) = move
             /* ⚠️ 死区之内一律不算 —— 防"刚按下就四个方向全亮" */
             if (kotlin.math.hypot(x, y) <= deadZone) return false
-            return when (direction) {
-                com.something.sthkey.domain.custom.TouchDirection.FRONT -> y < 0f
-                com.something.sthkey.domain.custom.TouchDirection.BACK -> y > 0f
-                com.something.sthkey.domain.custom.TouchDirection.LEFT -> x < 0f
-                com.something.sthkey.domain.custom.TouchDirection.RIGHT -> x > 0f
-            }
+            /*
+             * ⚠️ 8 向判定**统一**走 `TouchDirection.resolve`（45° 扇区）。
+             * 不再"看符号":以前斜推会同时命中"前"和"左"，
+             * 现在斜推只命中 `FRONT_LEFT` 这类独立方向。
+             */
+            return com.something.sthkey.domain.custom.TouchDirection.resolve(x, y) == direction
         }
     }
 

@@ -53,6 +53,8 @@ import com.something.sthkey.data.config.ExportMethod
  * 而那个选择本来每次都该一样。
  *
  * @param configName 要导出的配置名（显示在标题与文件名提示里）
+ * @param downloadSubtitle 「导出到目录」那行的副标题，说明文件会存到哪。
+ *   日志导出复用一个传 `下载/sthkeylogs`，配置导出保持默认。
  * @param onPick 用户选了某种方式；`remember` 表示"设为默认导出方式"被勾上了
  */
 @Composable
@@ -60,6 +62,7 @@ fun ExportMethodDialog(
     configName: String,
     onPick: (method: ExportMethod, remember: Boolean) -> Unit,
     onDismiss: () -> Unit,
+    downloadSubtitle: String = "下载/sthkeyconfigs",
 ) {
     var remember by remember { mutableStateOf(false) }
 
@@ -83,7 +86,7 @@ fun ExportMethodDialog(
                      * 副标题说清"会存到哪" —— 用户最怕的就是
                      * "点完了不知道文件去哪了"。
                      */
-                    subtitle = "下载/sthkeyconfigs",
+                    subtitle = downloadSubtitle,
                     onClick = { onPick(ExportMethod.DOWNLOAD, remember) },
                 )
 

@@ -355,6 +355,13 @@ object ConfigExporters {
         displayName: String,
         fileName: String,
         write: PackageWriter,
+        /**
+         * 分享时声明的 MIME。
+         *
+         * ⚠️ 配置包用 [SHARE_MIME_TYPE]（zip），日志这类纯文本要传 `text/plain` ——
+         * 否则接收方会当成 zip，打开就报「文件已损坏」。
+         */
+        mimeType: String = SHARE_MIME_TYPE,
     ): Intent? {
         /*
          * ⚠️ 用块体而不是 `= try { … }`：表达式体里**不能用 `return`**
@@ -393,7 +400,7 @@ object ConfigExporters {
                  * 因为 MediaStore 会按 MIME 给 `.sthkey` 补后缀。
                  * 两处的要求正好相反，别互相"统一"。
                  */
-                type = SHARE_MIME_TYPE
+                type = mimeType
                 putExtra(Intent.EXTRA_STREAM, uri)
                 putExtra(Intent.EXTRA_SUBJECT, displayName)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
