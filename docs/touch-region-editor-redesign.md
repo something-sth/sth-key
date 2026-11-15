@@ -378,6 +378,9 @@ Button("打开单容器编辑器（P1 预览）") { startContainerService(config
 ```
 ⚠️ 明确标注 **P1 临时入口**，P4 有圆球后删掉。
 
+> **2026-11-15 更新**：调试页的 P1 临时入口已删除；触摸区域容器现在由
+> 配置页「触屏设置」里的正式入口打开（`ConfigEditorScreen`），不再需要调试预览。
+
 ### 14.6 验收标准（P1 唯一目标）
 
 1. 竖屏:*容器里画出来的框* 与 *旧编辑器的区域窗口* 位置**逐个对齐**（允许 1px 误差）
@@ -487,3 +490,118 @@ default:           out.x = x;      out.y = y;
 ⚠️ 唯一前提:容器必须真的铺满。若某台设备仍然内缩（厂商定制），
 两者会**同时**按同一基准偏移 —— 但因为我们不再做像素补偿，
 它最多表现为"整体等比缩放"，不会出现"卡在左边过不去"。
+
+---
+
+## 17. 默认触摸区域生效（2026-11-15）
+
+### 17.1 问题
+
+用户反馈:
+
+> 新建的触屏配置现在不会有反应，默认的触摸区域位置没有实际作用，
+> 开启时会显示"这个配置还没有配置"，按键不会亮……
+> 修改为：默认的触摸区域位置也起效果，但是 toast 依然存在，只是换个说法
+
+原来的链路:
+
+| 环节 | 事实 |
+|---|---|
+| 打开悬浮窗 | `OverlayContent` 把 `touch.activeRegions` 喂给 tracker |
+| 新建配置 | `touch.regions` 是**空的** → `activeRegions` 也是空的 |
+| 编辑器 | 却会给**每个槽位画一块默认位置的方块**（占位，不碰不写盘）|
+| 结果 | 编辑器里看得到方块，悬浮窗上**一块区域都没有** → 按键不亮、碰哪都没反应 |
+
+### 17.2 决定
+
+**没配过的槽位 = 用默认坐标**（与编辑器画出来的那一套完全同一个函数）。
+
+| 区域 | 默认 |
+|---|---|
+| 轮盘 | `TouchRegionSpec.MOVE_DEFAULT`（左下）|
+| 按键槽位 | `TouchRegionSpec.defaultCenterFor(index)`（右上阶梯排开）|
+| 尺寸 | `TouchRegionSpec.SIZE_DEFAULT` |
+
+统一入口:`domain/style/TouchEffectiveRegions.kt` 的
+`touchEffectiveRegions(config)` = **用户配过的（pinned）+ 没配过的默认坐标**。
+三个消费方**全部**改成它:
+
+1. 悬浮窗（`OverlayContent`）—— 真正喂给 tracker 的那份；
+2. 区域编辑器（`TouchRegionContainerService`）—— 画出来的就是生效的；
+3. 触屏 → 自定义转换器（`TouchToCustomConverter`）—— 转换搬的是"实际行为"。
+
+⚠️ `TouchSettings.activeRegions` **仍然只表示"用户配过的"**:
+它继续用来判断 toast、配置页摘要，不要拿去喂渲染。
+
+### 17.3 交互约定
+
+- 新建触屏配置开启悬浮窗:轮盘在左下、LMB/RMB/SPACE/SHIFT 在右上，
+  碰了就有反应。
+- toast 判据不变（`activeRegions.isEmpty()`），只换措辞:
+  「还没有配置触摸区域：已使用默认触摸区域坐标（轮盘在左下、按键在右上），
+  可在「触摸区域编辑」里调整」。
+- 配置页摘要改成「未配置 · 使用默认触摸区域坐标 / 按键区域 N 块 · 轮盘使用默认坐标」，
+  不再说"还没有配置"。
+- 用户拖动某块后保存 → 那块变成 `pinned` 写入配置;没动过的**不写**，
+  下次仍用默认坐标（配置里不会凭空多出一堆区域）。
+- 当前布局里**不存在的槽位**不会生成区域（老配置/手改 JSON 留下的野槽位）。
+- 转换器会把默认区域一起转过去，并在说明里写「其中 N 块没有配置过的区域
+  使用了默认触摸区域坐标」。
+
+### 17.4 验证
+
+- 单元测试 6 条:
+  - `TouchEffectiveRegionsTest`(5):全新配置、pinned、几何优先、忽略占位、忽略野槽位；
+  - `TouchToCustomConverterTest` 新增 1 条:零配置也能转出 5 块可用区域。
+- 全量单测 740 条通过。
+- 真机:
+  1. 新建触屏配置 → 直接开悬浮窗 → 按 LMB 区域键亮、推轮盘区域摇杆动；
+     toast 是"已使用默认触摸区域坐标…"。
+  2. 进编辑器拖一下轮盘 → 保存退出 → 再开悬浮窗，轮盘在**新位置**；
+     没拖过的按键仍在默认位置。
+  3. 配置页摘要显示"未配置 · 使用默认…"，而不是"还没有配置"。
+
+---
+
+## 18. 旧编辑器已删除（2026-11-15）
+
+### 18.1 删了什么
+
+| 项 | 说明 |
+|---|---|
+| `capture/touch/TouchRegionEditorService.kt` | **整份删除**（约 2118 行）：每块区域一个独立悬浮窗、自己算屏幕像素、自带绑定对话框 |
+| `AndroidManifest.xml` 里的 `<service …TouchRegionEditorService>` | 整段删除（含 `foregroundServiceType="specialUse"` 与 `PROPERTY_SPECIAL_USE_FGS_SUBTYPE`）|
+| `ConfigEditorScreen` 里的 import 与旧注释 | 删除/改成指向新实现 |
+| 旧类自己的通知渠道 `sthkey_touch_region_editor` | 只由旧类创建，随类一起消失（已建过的渠道留在系统里无害）|
+
+⚠️ 删除前已备份:
+`D:\Project\_backup\1115-old-editor-removed\`（源码 + 删除前的 Manifest / 入口页 + README 恢复步骤）。
+git 里也还能取回：`git show 2d97a18:app/src/main/java/com/something/sthkey/capture/touch/TouchRegionEditorService.kt`。
+
+### 18.2 为什么现在能删
+
+| 判据 | 事实 |
+|---|---|
+| 入口 | `ConfigEditorScreen.openTouchRegionEditor()` **早已只走** `TouchRegionContainerService`（旧实现只是"留着方便对比/回退"）|
+| 覆盖范围 | 新实现同时处理「触屏」与「自定义 Key」两种样式（C1–C3 都已完成）|
+| 引用 | 全项目没有任何代码引用旧类（只有 Manifest 声明、几处注释）；无反射 |
+| 真机 | 触屏全部测试通过，旧版本用不了的用户也确认可用 |
+
+### 18.3 保留的共享代码（不是残留）
+
+| 文件 | 为什么留 |
+|---|---|
+| `domain/config/TouchRegionGeometry.kt` | 新容器 `rectOf` 与采集命中判定**共用**的几何换算 |
+| `capture/touch/TouchRotation.kt` | 采集侧坐标系旋转 |
+| `capture/OverlayBounds.kt` | 屏幕尺寸 / 可用区域 |
+| `capture/accessibility/OverlayWindowHost.kt` | 无障碍窗口类型 |
+
+⚠️ 唯一编辑器现在是:
+`TouchRegionContainerService`（服务）+ `TouchRegionContainerView`（方块层）+
+`TouchEditorPanel`（胶囊/绑定页）。**没有隐藏开关、没有第二套代码**。
+
+### 18.4 验证
+
+- `TouchRegionEditorService` 在 `app/src` 中只剩注释里的历史说明，无代码/Manifest 引用。
+- 全量单测 740 条通过。
+- release 包重新构建并验签（见交付说明）。

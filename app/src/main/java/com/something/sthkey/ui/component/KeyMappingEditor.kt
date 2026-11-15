@@ -40,6 +40,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.something.sthkey.domain.config.KeyMapping
+import com.something.sthkey.domain.custom.StickDirectionCodes
+import com.something.sthkey.domain.custom.StickSide
+import com.something.sthkey.domain.custom.TouchDirection
+import com.something.sthkey.domain.custom.directionArrow
 import com.something.sthkey.domain.keys.AvailableKey
 import com.something.sthkey.domain.keys.KeyCodes
 
@@ -217,7 +221,7 @@ private fun KeyMappingRow(
                             AssistChip(
                                 onClick = {},
                                 label = {
-                                    Text("${KeyCodes.displayName(code)} · $code")
+                                    Text(KeyCodes.labelWithCode(code))
                                 },
                             )
                         }
@@ -275,6 +279,20 @@ fun MultiKeyPickerDialog(
     onDismiss: () -> Unit,
     onConfirm: (List<Int>) -> Unit,
     emptyHint: String = "当前未选择任何按键",
+    /**
+     * 要不要提供「手柄摇杆八段式」入口。
+     *
+     * ============================================================
+     * ⚠️ 只有**按键组件**与**文本组件**传 true
+     * ============================================================
+     * | 调用方 | 是否允许 | 为什么 |
+     * |---|---|---|
+     * | 按键组件「监听的键」 | ✅ | 推方向时按键亮；CPS 也跟着数 |
+     * | 文本组件「CPS 统计的键」 | ✅ | 推方向时 CPS 加 |
+     * | 摇杆组件的四向键位 | ❌ | 拿摇杆推摇杆没有语义 |
+     * | Key/Gamepad 样式的键位映射 | ❌ | 那是"槽位 ↔ 物理键"，方向没有槽位 |
+     */
+    allowStickDirections: Boolean = false,
 ) {
     var codes by remember(initialCodes) { mutableStateOf(initialCodes) }
     var picking by remember { mutableStateOf(false) }
@@ -287,6 +305,12 @@ fun MultiKeyPickerDialog(
      * 合成一个的话"从搜索返回大类"这种回退很难表达。
      */
     var pickingGroup by remember { mutableStateOf<KeyCodes.PickerGroup?>(null) }
+
+    /**
+     * 正在选手柄摇杆的哪一边（`null` = 没在选方向）。
+     * ⚠️ 非 null 时把"按键列表"暂时换成"八方向九宫格"。
+     */
+    var pickingStickSide by remember { mutableStateOf<StickSide?>(null) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -308,7 +332,15 @@ fun MultiKeyPickerDialog(
                     codes.forEach { code ->
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = "${KeyCodes.displayName(code)}（code=$code）",
+                                /*
+                                 * ⚠️ 摇杆方向不显示内部码 —— 那是只活在内存里的
+                                 * 保留值，对用户没有意义（"左摇杆 ↑" 已经说清了）。
+                                 */
+                                text = if (KeyCodes.isStickDirection(code)) {
+                                    KeyCodes.displayName(code)
+                                } else {
+                                    "${KeyCodes.displayName(code)}（code=$code）"
+                                },
                                 style = MaterialTheme.typography.bodyMedium,
                                 modifier = Modifier.weight(1f),
                             )
@@ -351,30 +383,70 @@ fun MultiKeyPickerDialog(
         KeyGroupPickerDialog(
             onDismiss = { picking = false },
             onPicked = { group -> pickingGroup = group },
+            /*
+             * ⚠️ **不显示「触屏」这一项**（2026-11-15）。
+             *
+             * 触摸区域现在是**配置级数据**，在配置编辑页的「触屏设置」里
+             * 新建与绑定组件；这个对话框只负责"键码"（物理键 + 摇杆方向）。
+             * 继续显示「触屏」会点进一个空列表 —— 那是死路。
+             */
+            allowTouch = false,
         )
     }
 
-    pickingGroup?.let { group ->
-        KeyPickerDialog(
-            title = "选择按键 · ${group.label}",
-            group = group,
-            onDismiss = {
-                /*
-                 * ⚠️ 返回时回到**大类选择**，而不是直接关掉整个流程。
-                 *
-                 * 用户选了"手柄"进去发现没有自己要的键（比如想绑键盘的 A），
-                 * 直接关掉的话要重新点"添加一个按键"再走一遍 ——
-                 * 回到大类那一层只需要再点一下。
-                 */
+    val stickSide = pickingStickSide
+    if (stickSide != null) {
+        /*
+         * ⚠️ 方向选择是"按键列表"的**下一层**，不是新窗口:
+         * 从九宫格返回时回到按键列表（`pickingGroup` 还留着）。
+         */
+        StickDirectionPickerDialog(
+            side = stickSide,
+            selectedCodes = codes,
+            onDismiss = { pickingStickSide = null },
+            onPick = { direction ->
+                val code = StickDirectionCodes.codeOf(stickSide, direction)
+                /* 去重:同一方向加两次没有意义，CPS 求和会重复计 */
+                if (code !in codes) codes = codes + code
+                /* 选完一整条链路关掉（大类 → 按键列表 → 方向） */
+                pickingStickSide = null
                 pickingGroup = null
-            },
-            onPicked = { key ->
-                // 去重：同一个键加两次没有意义，而且会让"CPS 求和"重复计一次
-                if (key.keyCode !in codes) codes = codes + key.keyCode
                 picking = false
-                pickingGroup = null
             },
         )
+    } else {
+        pickingGroup?.let { group ->
+            KeyPickerDialog(
+                title = "选择按键 · ${group.label}",
+                group = group,
+                /*
+                 * ⚠️ 摇杆八段式只在**手柄分类**里出现，而且只有按键/文本组件
+                 * 的调用方会传 `allowStickDirections = true`（见参数说明）。
+                 */
+                allowStickDirections = allowStickDirections,
+                onPickStickSide = if (allowStickDirections) {
+                    { side -> pickingStickSide = side }
+                } else {
+                    null
+                },
+                onDismiss = {
+                    /*
+                     * ⚠️ 返回时回到**大类选择**，而不是直接关掉整个流程。
+                     *
+                     * 用户选了"手柄"进去发现没有自己要的键（比如想绑键盘的 A），
+                     * 直接关掉的话要重新点"添加一个按键"再走一遍 ——
+                     * 回到大类那一层只需要再点一下。
+                     */
+                    pickingGroup = null
+                },
+                onPicked = { key ->
+                    // 去重：同一个键加两次没有意义，而且会让"CPS 求和"重复计一次
+                    if (key.keyCode !in codes) codes = codes + key.keyCode
+                    picking = false
+                    pickingGroup = null
+                },
+            )
+        }
     }
 }
 
@@ -473,6 +545,10 @@ internal fun KeyGroupPickerDialog(
  *
  * 直接返回原始键码，不做任何 UI 侧转换 —— 保证"选中的键"与"设备上报的键"
  * 始终是同一个数值体系（Linux evdev）。
+ *
+ * ⚠️ 唯一的例外是**手柄摇杆八段式**（2026-11-15）:它没有 evdev 键码，
+ * 通过 [onPickStickSide] 另开一层九宫格，返回的是内部保留码
+ * （见 `StickDirectionCodes` / `KeyIds` 的 `JOYSTICK_*`）。
  */
 @Composable
 fun KeyPickerDialog(
@@ -486,16 +562,48 @@ fun KeyPickerDialog(
      * 不经大类那一步的）行为完全不变，不需要跟着改。
      */
     group: KeyCodes.PickerGroup = KeyCodes.PickerGroup.ALL,
+    /** 是否在「手柄」分类顶部显示两个摇杆八段式入口（只有按键/文本组件传 true） */
+    allowStickDirections: Boolean = false,
+    /** 点「左/右摇杆」时回调，由调用方弹九宫格 */
+    onPickStickSide: ((StickSide) -> Unit)? = null,
 ) {
     var query by remember { mutableStateOf("") }
     val results = remember(query, group) { KeyCodes.searchIn(query, group) }
     val focusManager = LocalFocusManager.current
+    val pickStickSide = onPickStickSide
+    val showStickEntries = allowStickDirections && pickStickSide != null &&
+        group == KeyCodes.PickerGroup.GAMEPAD
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
             Column {
+                if (showStickEntries) {
+                    Text(
+                        text = "摇杆八段式",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    StickSideEntry(
+                        title = "左摇杆（八段式）",
+                        subtitle = "推方向时按键亮 / 文本 CPS 加",
+                        onClick = { pickStickSide(StickSide.LEFT) },
+                    )
+                    StickSideEntry(
+                        title = "右摇杆（八段式）",
+                        subtitle = "推方向时按键亮 / 文本 CPS 加",
+                        onClick = { pickStickSide(StickSide.RIGHT) },
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "普通手柄按键",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
@@ -562,4 +670,128 @@ fun KeyPickerDialog(
             TextButton(onClick = onDismiss) { Text("关闭") }
         },
     )
+}
+
+/**
+ * 「手柄」分类顶部的两个入口之一（左/右摇杆）。
+ *
+ * ⚠️ 它本身**不是**一个键码行，点它会再开一层九宫格
+ * （见 [StickDirectionPickerDialog]）—— 摇杆方向要先选"哪一边"再选"哪个方向"。
+ */
+@Composable
+private fun StickSideEntry(
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Text(
+            text = "选择方向 ›",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+        )
+    }
+}
+
+/**
+ * 摇杆八段式方向选择（3×3，中间空着）。
+ *
+ * ⚠️ 方向是**八段式独立扇区**（与触屏一致）:
+ * 推右上只触发"右上"，不会同时触发"上"和"右"。
+ *
+ * ⚠️ 选中一个方向就回到**已选列表**；要加多个方向就再点一次"添加一个按键"。
+ * 已选中的方向带 ✓，再点一次只是回到列表（不会重复添加，也不误删）。
+ */
+@Composable
+private fun StickDirectionPickerDialog(
+    side: StickSide,
+    selectedCodes: List<Int>,
+    onDismiss: () -> Unit,
+    onPick: (TouchDirection) -> Unit,
+) {
+    val rows = listOf(
+        listOf(TouchDirection.FRONT_LEFT, TouchDirection.FRONT, TouchDirection.FRONT_RIGHT),
+        listOf(TouchDirection.LEFT, null, TouchDirection.RIGHT),
+        listOf(TouchDirection.BACK_LEFT, TouchDirection.BACK, TouchDirection.BACK_RIGHT),
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (side == StickSide.LEFT) "左摇杆方向" else "右摇杆方向") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = "推到该方向时触发。斜向是独立方向（八段式），" +
+                        "不会同时触发两个正向。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                rows.forEach { row ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        row.forEach { direction ->
+                            if (direction == null) {
+                                Spacer(modifier = Modifier.weight(1f))
+                            } else {
+                                val selected = StickDirectionCodes.codeOf(side, direction) in selectedCodes
+                                TextButton(
+                                    onClick = { onPick(direction) },
+                                    modifier = Modifier.weight(1f),
+                                ) {
+                                    Text(
+                                        text = (if (selected) "✓ " else "") +
+                                            directionArrow(direction) + " " +
+                                            stickDirectionLabel(direction),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "选完会回到已选列表；要继续加别的方向，再点「添加一个按键」。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("返回") }
+        },
+    )
+}
+
+/**
+ * 摇杆方向的**界面用**中文名。
+ *
+ * ⚠️ 不用 [TouchDirection.label] —— 那是轮盘的"前/后"，而摇杆用户说的是"上/下"。
+ */
+private fun stickDirectionLabel(direction: TouchDirection): String = when (direction) {
+    TouchDirection.FRONT -> "上"
+    TouchDirection.BACK -> "下"
+    TouchDirection.LEFT -> "左"
+    TouchDirection.RIGHT -> "右"
+    TouchDirection.FRONT_LEFT -> "左上"
+    TouchDirection.FRONT_RIGHT -> "右上"
+    TouchDirection.BACK_LEFT -> "左下"
+    TouchDirection.BACK_RIGHT -> "右下"
 }

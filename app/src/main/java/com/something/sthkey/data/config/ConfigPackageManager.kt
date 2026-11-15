@@ -295,7 +295,16 @@ object ConfigPackageManager {
              *
              * 顺序因此是：编码 params → 扫树收集 → 改写 params → 写盘。
              */
-            val params = JsonConfigCodec.encode(config)
+            /*
+             * ⚠️ 导出时在 params 顶部加一段人读说明（`_comment`）。
+             *
+             * 只在导出加，本地存储不加（见 `ConfigJsonComments` 的说明）。
+             * 解析器只读认识的字段，`_comment` 会被忽略；旧版本也能安全读。
+             */
+            val params = ConfigJsonComments.withParamsComment(
+                params = JsonConfigCodec.encode(config),
+                styleId = config.styleId,
+            )
             onState?.invoke("正在收集字体…")
             val fonts = collectFonts(params)
             /* 媒体资源（图片/动图/视频），只打**被引用**的那些 */

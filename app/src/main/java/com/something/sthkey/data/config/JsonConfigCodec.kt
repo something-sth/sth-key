@@ -339,7 +339,7 @@ object JsonConfigCodec {
          * | `scalePercent` | 规格里明写"唯一仍然共用的是它" |
          * | `colors` / `fontId` | ⚠️ 它们是**新建组件时的初始值来源** —— `ComponentFactory` 会读它给新组件定初始颜色与字体。删了的话用户新建的按键组件颜色就回默认了 |
          * | `joystick` | 同理:新建摇杆组件时拿它当初始观感 |
-         * | `keyMappings` | 自定义 Key 的 CPS 占位符要靠它把键码解析到槽位（`KeyLayout.codeToSlotMap`） |
+         * | `keyMappings` | 自定义 Key 的 CPS：能翻成槽位的码仍靠它解析（`KeyLayout.codeToSlotMap`）；翻不出来的码按键码本身记（见 `CpsCounter.cpsBucketOf`） |
          */
     )
 
@@ -960,7 +960,7 @@ object JsonConfigCodec {
                                 put(
                                     "inputKeyCodes",
                                     JSONArray().apply {
-                                        mapping.inputKeyCodes.forEach { put(it) }
+                                        KeyCodeJson.putList(this, mapping.inputKeyCodes)
                                     },
                                 )
                             },
@@ -1545,15 +1545,15 @@ object JsonConfigCodec {
                 if (id.isBlank()) continue
 
                 val codes = item.optJSONArray("inputKeyCodes")
-                val codeList = if (codes == null) {
-                    emptyList()
-                } else {
-                    buildList {
-                        for (codeIndex in 0 until codes.length()) {
-                            add(codes.optInt(codeIndex))
-                        }
-                    }
-                }
+                /*
+                 * ⚠️ 数字（老配置）与明文 ID（新配置）都收 —— 见 `KeyCodeJson`。
+                 *
+                 * ⚠️ 摇杆八段式方向码要过滤掉:键位映射是"槽位 ↔ 物理键"，
+                 * 摇杆方向不是物理键，也没有槽位可落。它只属于自定义 Key 的
+                 * 按键/文本组件（界面本来就不提供，这里防手改 JSON）。
+                 */
+                val codeList = KeyCodeJson.readList(codes)
+                    .filterNot { KeyCodes.isStickDirection(it) }
 
                 add(
                     KeyMapping(

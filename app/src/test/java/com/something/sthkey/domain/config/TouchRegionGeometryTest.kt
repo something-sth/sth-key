@@ -21,7 +21,7 @@ import org.junit.Test
  *
  * | 谁 | 在哪 |
  * |---|---|
- * | 编辑器画方块 | `TouchRegionEditorService.syncRegionGeometry` |
+ * | 编辑器画方块 | `TouchRegionContainerView.rectOf`（走 `TouchRegionGeometry.bounds`） |
  * | 命中判定 | `TouchInput.regionContains` |
  *
  * 而且**已经差了一处**:编辑器给窗口加了"最小 32dp"的下限，

@@ -541,8 +541,11 @@ object CustomLayout {
      *   **每项对应一个占位符**（见 [cpsPlaceholders]）。
      *
      * 都用**输入键码**而不是槽位 id：翻译成槽位是渲染层的事
-     * （`CpsCounter.slotOf` / `KeyLayout.codeToSlotMap`），
+     * （`CpsCounter.cpsBucketOf` / `KeyLayout.codeToSlotMap`），
      * 这一层只回答"数哪些键"。
+     *
+     * ⚠️ 自定义 Key 里某些码（手柄按键等）在 `keyMappings` 里没有，
+     * 渲染层会用 `@code:<码>` 兜底 —— 见 `CpsCounter.cpsBucketOf`。
      */
     fun cpsKeyCodesOf(component: CustomComponent): List<Int> = when (component) {
         is KeyComponent -> component.inputKeyCodes

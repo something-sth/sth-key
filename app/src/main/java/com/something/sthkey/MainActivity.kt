@@ -572,6 +572,17 @@ private fun SthKeyApp(
         request = incomingRequest,
         onFinished = onIncomingHandled,
         /*
+         * ⚠️ 外部导入成功后**立刻**让界面重读配置/组合。
+         *
+         * 外部导入不经过配置页的 launcher，`ConfigStore` 已经写进去了，
+         * 但主页/配置页都是按 `configVersion` / `groupsVersion` 重取的 ——
+         * 不通知的话要等下次进页面或重启才看得到（用户报的那个 bug）。
+         */
+        onImported = {
+            viewModel.reloadConfigs()
+            viewModel.reloadGroups()
+        },
+        /*
          * ⚠️ 图片字体要确认名字:先把统一导入对话框关掉再弹命名窗口，
          * 两个 AlertDialog 同时开着时部分 ROM 会把先弹的顶掉。
          */

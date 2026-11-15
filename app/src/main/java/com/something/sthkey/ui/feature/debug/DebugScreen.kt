@@ -75,17 +75,14 @@ import com.something.sthkey.capture.gamepad.ShizukuGamepadLauncher
 import com.something.sthkey.capture.OverlayService
 import com.something.sthkey.capture.shizuku.ShizukuShell
 import com.something.sthkey.capture.touch.TouchCapture
-import com.something.sthkey.capture.touch.TouchRegionContainerService
 import com.something.sthkey.core.log.AppLog
 import com.something.sthkey.core.log.CrashLogger
 import com.something.sthkey.core.log.LogLevel
 import com.something.sthkey.core.prefs.AppPrefs
 import com.something.sthkey.data.config.ConfigExporters
-import com.something.sthkey.data.config.ConfigStore
 import com.something.sthkey.data.config.ExportMethod
 import com.something.sthkey.data.config.exportTextToDownloads
 import com.something.sthkey.data.config.TextExportRequest
-import com.something.sthkey.domain.style.StyleId
 import com.something.sthkey.ui.component.CardDivider
 import com.something.sthkey.ui.component.EmptyHint
 import com.something.sthkey.ui.component.findActivity
@@ -135,8 +132,6 @@ fun DebugScreen(
 ) {
     val context = LocalContext.current
 
-    /* P1 预览:选哪个触屏配置（不再依赖"活动配置"，那个概念已删除） */
-    var showContainerPicker by remember { mutableStateOf(false) }
     val prefs = remember { AppPrefs.get(context) }
 
     // 订阅日志计数以触发刷新；这里只观察计数，不承载日志内容本身
@@ -331,79 +326,6 @@ fun DebugScreen(
             }
         }
 
-        /*
-         * ============================================================
-         * P1 临时入口:单容器触摸区域预览
-         * ============================================================
-         * ⚠️ 这是改造触摸区域编辑器（见 `docs/touch-region-editor-redesign.md`）
-         * 的**验证入口**,只做一件事:把"新容器画出来的框"和"旧实现的多窗口"
-         * 摆在一起对比位置。
-         *
-         * ⚠️ P4 有了圆球入口之后，**删掉这一段**。
-         */
-        item { SectionHeader("触摸区域容器（P1 预览）") }
-        item {
-            SettingsCard {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    FilledTonalButton(
-                        onClick = {
-                            showContainerPicker = true
-                        },
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text("打开容器")
-                    }
-                    OutlinedButton(
-                        onClick = { TouchRegionContainerService.stop(context) },
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text("关闭容器")
-                    }
-                }
-                Text(
-                    text = "选一个触屏配置，把它的区域框画一遍（只读）。",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 14.dp),
-                )
-            }
-        }
-        item {
-            if (showContainerPicker) {
-                val touchConfigs = ConfigStore.get(context).all()
-                    .filter { it.styleId == StyleId.TOUCHING }
-                AlertDialog(
-                    onDismissRequest = { showContainerPicker = false },
-                    title = { Text("选择要预览的触屏配置") },
-                    text = {
-                        if (touchConfigs.isEmpty()) {
-                            Text("还没有触屏样式的配置")
-                        } else {
-                            Column {
-                                touchConfigs.forEach { cfg ->
-                                    TextButton(
-                                        onClick = {
-                                            showContainerPicker = false
-                                            TouchRegionContainerService.start(context, cfg.id)
-                                        },
-                                    ) {
-                                        Text(cfg.name)
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    confirmButton = {
-                        TextButton(onClick = { showContainerPicker = false }) { Text("取消") }
-                    },
-                )
-            }
-        }
         /*
          * ============================================================
          * Shizuku 诊断

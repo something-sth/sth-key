@@ -26,6 +26,7 @@ import com.something.sthkey.domain.capture.KeyMode
 import com.something.sthkey.domain.capture.RootProbe
 import com.something.sthkey.domain.capture.ShizukuBridge
 import com.something.sthkey.domain.capture.resolveCaptureMode
+import com.something.sthkey.domain.custom.StickDirectionCodes
 import com.something.sthkey.domain.keys.KeyCodes
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import kotlinx.coroutines.CoroutineScope
@@ -414,6 +415,7 @@ object CaptureController {
         keyState.clear()
         CaptureSession.clearKeys()
         /* 手柄的轴状态也要清 —— 否则悬浮窗上会留着"最后推到的位置" */
+        activeStickCodes = emptySet()
         CaptureSession.clearSticks()
         CaptureSession.updateChannel(null)
         CaptureSession.updateState(CaptureState.IDLE, "未监听")
@@ -1007,7 +1009,49 @@ object CaptureController {
 
     /** 手柄断开:清掉它留下的轴状态（按键由 [GamepadNativeMonitor] 自己发 UP） */
     fun clearGamepadAxes() {
+        activeStickCodes = emptySet()
         CaptureSession.clearSticks()
+    }
+
+    /* ============================================================
+     * 手柄摇杆八段式
+     * ============================================================ */
+
+    /**
+     * 上一次已经触发过的摇杆方向码。
+     *
+     * ⚠️ 只有**变化**时才记 CPS —— 每帧都记的话按住一秒就是几十次假 CPS。
+     * 与真实按键的边沿计数是同一个语义。
+     */
+    @Volatile
+    private var activeStickCodes: Set<Int> = emptySet()
+
+    /**
+     * 按**当前完整摇杆状态**重算八段式方向；有新增方向就记一次 CPS。
+     *
+     * ⚠️ 由 [GamepadNativeMonitor.onStickFrame] 在**一帧的轴都到齐之后**调用，
+     * 不能按单轴调用（否则斜推会产生"右 → 右上"两个假方向）。
+     *
+     * ⚠️ CPS 走 `recordCpsClick` —— 它内部用 `cpsBucketOf`：
+     * 自定义 Key 会把摇杆方向记进 `@code:<内部码>` 桶，与显示侧同一个函数。
+     */
+    private fun refreshStickDirections() {
+        val s = CaptureSession.sticks.value
+        val next = StickDirectionCodes.activeCodes(s.lx, s.ly, s.rx, s.ry)
+        if (next == activeStickCodes) return
+
+        val added = next - activeStickCodes
+        activeStickCodes = next
+        CaptureSession.setStickDirections(next)
+
+        if (added.isEmpty()) return
+        val ctx = appContext ?: return
+        added.forEach { code ->
+            /* 与物理键同一条路:按配置的 CPS 桶记，全局计数器也同步维护 */
+            recordCpsClick(ctx, code).forEach { bucket ->
+                CaptureSession.cps.recordClick(bucket)
+            }
+        }
     }
 
     /* ============================================================
@@ -1091,6 +1135,8 @@ object CaptureController {
             },
             onButton = ::setGamepadButton,
             onAxis = ::setGamepadStick,
+            /* ⚠️ 一帧的轴都到齐后再算八段式方向（见 refreshStickDirections） */
+            onStickFrame = ::refreshStickDirections,
         )
 
         val error = monitor.start()

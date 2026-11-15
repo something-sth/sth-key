@@ -257,7 +257,41 @@ Uri 有效，而 content Uri 的路径常常是一串数字 id。
 
 ---
 
-## 5. 兼容与容错
+## 5. 导出文件里的说明（`_comment`）
+
+JSON **标准不支持注释**，而本项目用 `org.json` 解析 —— 写 `//` / `/* */`
+会让导入直接失败。所以导出时在 `params.json` / `manifest.json` 顶部写一个
+**合法的元数据字段**：
+
+```json
+{
+  "_comment": [
+    "本文件是 sth key 的配置参数（params.json）。程序读取时会忽略本段。",
+    "键位绑定为明文 ID（如 KEY_A、MOUSE_LMB、GAMEPAD_A、JOYSTICK_LEFT_UP）……",
+    "  scalePercent（整体缩放）：百分比，100 = 原大小。"
+  ],
+  "schemaVersion": 1,
+  ...
+}
+```
+
+规则：
+
+- `_comment` 是**字符串数组**，一行一条；`toString(2)` 输出后天然可读；
+- 只加在**导出**里，`ConfigStore` 的本地 JSON 不加（省体积）；
+- 字段说明按**实际写出的字段 + 样式**生成（`ConfigJsonComments`），
+  不是一份万能文案；`ConfigJsonCommentsTest` 会检查每个预期字段都有说明；
+- 解析器只读认识的字段，`_comment` 自动忽略；旧版本 App 也能安全读；
+- **所有以 `_` 开头的顶层键**都是元数据，`ConfigPackageCodec.compareFields`
+  在算导入字段差异时会过滤掉它们，不会报成"未识别字段"。
+
+manifest / 组合 manifest 同样带 `_comment`，说明 `format` / `formatVersion` /
+`appVersion` / `exportedAt` / `name` / `styleId` / `fonts` / `live2d` / `media`
+（组合包是 `configs`）这些字段。
+
+---
+
+## 6. 兼容与容错
 
 - **格式标识**：`manifest.json` 里的 `format` 不是 `sthkey-config` 就报
   "这不是 sth key 的配置包"，而不是尝试解析。
@@ -267,13 +301,14 @@ Uri 有效，而 content Uri 的路径常常是一串数字 id。
   ⚠️ 它是**推导**出来的（把探针配置编码一遍看写出哪些键），
   所以任何"条件写入"的字段都可能不在清单里而被误报成"未识别"。
   **新增字段一律无条件写。**
+  ⚠️ 以 `_` 开头的键（目前是 `_comment`）是元数据，**不参与**这个比较。
 - **字体/模型缺失**：回落默认值，在导入报告里**按名字列出**缺了哪些。
   ⚠️ 是列表而不是一个布尔：自定义 Key 里每个组件都能有自己的字体，
   只报"有字体缺失"的话用户不知道该去改哪个组件。
 
 ---
 
-## 6. 打包时怎么找到要带的资源
+## 7. 打包时怎么找到要带的资源
 
 字体从 **params 树**里收集，不是从 config 对象 —— 因为自定义 Key 的每个组件
 都有自己的 `style.fontId` / `style.bitmapFontId`，从 `config.fontId` 取只能拿到
@@ -286,10 +321,11 @@ Uri 有效，而 content Uri 的路径常常是一串数字 id。
 
 ---
 
-## 7. 相关文件
+## 8. 相关文件
 
 ```
 data/config/ConfigPackageCodec.kt     包结构、manifest 读写
+data/config/ConfigJsonComments.kt     导出文件里的 `_comment` 说明
 data/config/ConfigPackageManager.kt   导出 / 导入 / 资源落盘
 data/config/ConfigExporters.kt        两种"不用挑位置"的导出：下载目录（MediaStore）/ 分享（FileProvider）
 data/config/ExportMethod.kt           导出方式的枚举

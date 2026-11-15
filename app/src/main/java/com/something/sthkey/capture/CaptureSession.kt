@@ -86,6 +86,30 @@ object CaptureSession {
     /** 当前摇杆 / 方向键状态 */
     val sticks: StateFlow<StickState> = _sticks.asStateFlow()
 
+    /**
+     * **手柄摇杆八段式**这一刻触发的内部码（`KeyCodes.STICK_*`）。
+     *
+     * ============================================================
+     * ⚠️ 与 [pressedKeys] 分开
+     * ============================================================
+     * 摇杆方向不是设备上报的键，而是由 [sticks] 每帧算出来的。
+     * 塞进 [pressedKeys] 会污染"物理键"那条路（键位映射、设备记账、
+     * 调试页都按真实键码理解它）。所以单开一条流，只给自定义 Key 的
+     * 按键/文本组件用。
+     *
+     * ⚠️ 更新时机在**一帧的所有轴都到齐之后**（见 `GamepadNativeMonitor.onStickFrame`）——
+     * 按单轴更新会先得到"右"、再得到"右上"，CPS 会多记一次。
+     */
+    private val _stickDirections = MutableStateFlow<Set<Int>>(emptySet())
+
+    /** 当前触发的摇杆方向内部码 */
+    val stickDirections: StateFlow<Set<Int>> = _stickDirections.asStateFlow()
+
+    /** 采集层算完之后写这里；同一份集合不重复发 */
+    fun setStickDirections(codes: Set<Int>) {
+        if (_stickDirections.value != codes) _stickDirections.value = codes
+    }
+
     /** 写左摇杆 */
     fun setLeftStick(x: Float, y: Float) {
         _sticks.value = _sticks.value.copy(lx = x, ly = y)
@@ -104,6 +128,8 @@ object CaptureSession {
     /** 清空模拟量（停止采集、设备断开时用） */
     fun clearSticks() {
         _sticks.value = StickState()
+        /* ⚠️ 摇杆归零时方向也必须清 —— 不清的话松手后按键还亮着 */
+        _stickDirections.value = emptySet()
     }
 
     /** 采集状态（未监听 / 启动中 / 监听中 / 失败） */
@@ -338,9 +364,14 @@ fun recordCpsClick(context: android.content.Context, code: Int): List<String> {
 
     val recorded = mutableListOf<String>()
     targets.forEach { config ->
-        CpsCounter.slotOf(config, code)?.let { slotId ->
-            CaptureSession.recordCpsClick(config.id, slotId)
-            recorded += slotId
+        /*
+         * ⚠️ 用 `cpsBucketOf`（不是 `slotOf`）:
+         * 自定义 Key 的组件可以绑手柄/任意键码，那些码不在 `keyMappings` 里，
+         * 但必须按键码本身记一份（`@code:<码>`）—— 见那边"用户报的 bug"那段。
+         */
+        CpsCounter.cpsBucketOf(config, code)?.let { bucket ->
+            CaptureSession.recordCpsClick(config.id, bucket)
+            recorded += bucket
         }
     }
     return recorded

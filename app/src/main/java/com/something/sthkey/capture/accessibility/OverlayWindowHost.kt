@@ -11,7 +11,7 @@ import com.something.sthkey.core.log.AppLog
  * ⚠️⚠️ 这个类存在的原因（一句话）
  * ============================================================
  * `TYPE_ACCESSIBILITY_OVERLAY` **只能由 `AccessibilityService` 的 context 建**。
- * 而我们的窗口代码在 `OverlayService` / `TouchRegionEditorService` 里（普通 Service）——
+ * 而我们的窗口代码在 `OverlayService` / `TouchRegionContainerService` 里（普通 Service）——
  * 拿它们的 context 去建会抛:
  *
  * ```

@@ -214,6 +214,8 @@ object ConfigPackageCodec {
         live2d: Live2DFileInfo?,
         mediaFiles: List<MediaFileInfo> = emptyList(),
     ): String = JSONObject().apply {
+        /* ⚠️ 说明放第一个字段：导出文件打开就能看到（程序读取时忽略） */
+        ConfigJsonComments.putManifestComment(this, ConfigJsonComments.manifest())
         put("format", FORMAT_ID)
         put("formatVersion", FORMAT_VERSION)
         put("appVersion", appVersion)
@@ -438,7 +440,16 @@ object ConfigPackageCodec {
      * 取不到时回落到默认样式。
      */
     fun compareFields(params: JSONObject): FieldDiff {
-        val present = params.keys().asSequence().toSet()
+        /*
+         * ⚠️ **以 `_` 开头的是元数据，不参与字段差异**（2026-11-15）。
+         *
+         * 导出时会在 params 顶部写 `_comment`（人读说明，见 `ConfigJsonComments`）。
+         * 不过滤的话，每导入一次自家导出的包，导入报告都会多一条
+         * "未识别字段：_comment" —— 把正常情况报成异常。
+         */
+        val present = params.keys().asSequence()
+            .filterNot { it.startsWith("_") }
+            .toSet()
         val expected = JsonConfigCodec.expectedKeysFor(params.optString("styleId")) -
             MANIFEST_OWNED_KEYS
 

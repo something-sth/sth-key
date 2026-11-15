@@ -131,6 +131,71 @@ CPS 才可能绑到键盘键上。
    否则调试页按得再欢 CPS 也是 0，看起来像功能坏了；
 2. 刷新循环的判据见 2.4 —— 不是看 Key 样式的那个开关。
 
+### 2.3.1 自定义 Key 的任意键码：`@code:` 桶（2026-11-15）
+
+用户报的:
+
+> 手柄在自定义 key 中，文本组件带有 cps 占位符时，绑定的手柄按键不起效果
+> ……这个 cps 值不会动，始终是 0
+
+**根因**：自定义 Key 的 `keyMappings` 是键盘/鼠标默认值
+（W / A / S / D / SPACE / SHIFT / LMB / RMB），**没有手柄键码**。
+而记录（`recordCpsClick`）与显示（`CustomLayout.cpsAt`）都走
+`KeyLayout.codeToSlotMap`，于是两边都"翻译不出来"：
+一个桶都没记、查也查不到。
+
+**修法**：`CpsCounter.cpsBucketOf(config, code)`
+
+| 情况 | 桶名 |
+|---|---|
+| 能翻成槽位（如 W） | 槽位 id（`W`）—— 同一个物理键仍共享一份计数 |
+| 自定义 Key 里翻不出来（手柄 A、键盘 Q…） | `@code:<码>` |
+| 其它样式翻不出来 | 不记（保持原样） |
+
+⚠️ **记录与显示必须用同一个函数**。只改一边的话，现象是
+"其实记下来了，但屏幕上还是 0"——比完全没记更难查。
+调试页的 CPS 自诊断也走它，否则诊断说"翻译不出来、数值 0"，
+而屏幕上其实是正常的。
+
+### 2.3.2 手柄摇杆八段式绑定（2026-11-15）
+
+让「推手柄摇杆」也能点亮按键 / 给文本 CPS 计数，等价于触屏的八段式区域。
+
+**存储**：明文 ID（见 `docs/key-id-format.md`）：
+
+```json
+"inputKeyCodes": ["KEY_W", "JOYSTICK_LEFT_UP"]
+```
+
+- `JOYSTICK_LEFT_UP` / `JOYSTICK_RIGHT_DOWN_LEFT` … 共 16 个；
+- 内部用保留码 `KeyCodes.STICK_*`（0x400 区间），**只活在内存**；
+- 摇杆组件的四向键位、Key/Gamepad 样式的 `keyMappings` 解码时会过滤掉它们。
+
+**运行时**：
+
+```
+StickState(lx, ly, rx, ry)
+  → 推杆长度 >= 0.5（StickDirectionCodes.ENTER_MAGNITUDE）
+  → TouchDirection.resolve 的 45° 八扇区
+  → 内部码放进 CaptureSession.stickDirections
+  → 自定义 Key 悬浮窗把它并进 pressedCodes
+```
+
+| 点 | 做法 |
+|---|---|
+| 什么时候算 | **一帧的所有轴都到齐之后**（`GamepadNativeMonitor.onStickFrame`）|
+| 为什么不能按单轴 | 斜推会先出现"右"、再出现"右上" → CPS 多记一次假方向 |
+| 点亮 | `pressedKeys + stickDirections`，`KeyComponent.isPressed` 本来就是 OR |
+| CPS | 方向**进入**时记一次（边沿），走 `recordCpsClick` 的 `@code:` 桶 |
+| 松手 | `stickDirections` 清空 → 按键灭；CPS 不回落（1 秒窗口）|
+
+**UI**：添加按键 → 选分类「手柄」→ 列表顶部「左摇杆（八段式）/ 右摇杆（八段式）」→
+3×3 九宫格选方向。**只有按键组件与文本组件**有这个入口；摇杆组件的四向键位、
+Key/Gamepad 样式的键位映射都没有（拿摇杆推摇杆没有语义）。
+
+**阈值**：固定 0.5，不走 `JoystickStyle.deadZone`（那是显示死区，默认 0，太低）。
+真机若发现临界抖动，再加"进入 0.5 / 离开 0.35"的滞回。
+
 ### 2.4 CPS 必须**按配置隔离**，且刷新判据不能只看 Key 样式的字段
 
 这两个都是真机上暴露出来的，一起说。
@@ -146,8 +211,8 @@ CPS 才可能绑到键盘键上。
 ```
 recordCpsClick(context, code)
   → 取「开着悬浮窗的配置」（一份都没开时退回第一份）
-  → 逐个用**该配置自己的**键位映射查槽位
-  → CaptureSession.recordCpsClick(configId, slotId)
+  → 逐个用 CpsCounter.cpsBucketOf 查桶（槽位 / @code:码）
+  → CaptureSession.recordCpsClick(configId, 桶名)
 显示时 → CaptureSession.cpsSnapshotOf(config.id)
 ```
 
@@ -884,12 +949,20 @@ Slider 的手势完全不插手。
 
 **多选（这一块是新交互，重点验）**：
 
-32. 按键组件的「监听的键」显示成一排芯片（名字 · 键码）+ 右边一个笔形按钮
+32. 按键组件的「监听的键」显示成一排芯片（名字 · 键码；摇杆方向只显示名字，如「左摇杆 ↑」）+ 右边一个笔形按钮
 33. 点笔形按钮 → 多选对话框：能"添加一个按键"、能逐个移除、点取消**不生效**
 34. 给一个按键组件同时绑左 Shift(42) 与右 Shift(54) → 按**任意一边**都亮
 35. 文本内容含 `(cps)` 时出现「CPS 统计的键」，同样支持多选
 36. 把左右 Shift 都选进 CPS → 按任意一边 CPS 都加 1，
     **不是加 2**（同一个键位共享计数，求和前会去重）
+
+**手柄摇杆八段式（2026-11-15 新增）**：
+
+- 按键组件监听「左摇杆 ↑」→ 推左摇杆向上亮；斜推右上只亮「↗」绑定的那个（八段式独立）
+- 文本 `(cps)` 统计「右摇杆 ←」→ 推右摇杆向左，数字每秒刷新 +1
+- 摇杆组件的四向键位对话框里**没有**摇杆八段式入口（只有按键/文本组件有）
+- 配置 JSON 里出现的是 `JOYSTICK_LEFT_UP`，**不是** `1024` 这类数字
+- 把摇杆推回中心 → 按键灭；CPS 在 1 秒窗口内自然回落
 
 **CPS（这一块规则换了，要重新验）**：
 

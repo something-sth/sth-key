@@ -956,7 +956,7 @@ private fun KeyCodesField(
                             onClick = onEdit,
                             label = {
                                 Text(
-                                    text = "${KeyCodes.displayName(code)} · $code",
+                                    text = KeyCodes.labelWithCode(code),
                                     style = MaterialTheme.typography.labelSmall,
                                 )
                             },

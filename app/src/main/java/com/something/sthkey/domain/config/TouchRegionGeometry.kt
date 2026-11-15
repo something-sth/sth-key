@@ -15,7 +15,7 @@ package com.something.sthkey.domain.config
  *
  * | 谁 | 算什么 | 在哪 |
  * |---|---|---|
- * | 编辑器 | 方块窗口的 `x/y/宽/高`（像素） | `TouchRegionEditorService.syncRegionGeometry` |
+ * | 编辑器 | 归一化 → 屏幕像素（方块矩形） | `TouchRegionContainerView.rectOf` |
  * | 采集 | 命中判定的边界（归一化） | `TouchInput.regionContains` |
  *
  * 两者**当时恰好一致**，但没有任何东西保证以后也一致 ——

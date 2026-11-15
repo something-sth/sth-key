@@ -5,6 +5,7 @@ import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.config.TouchRegion
 import com.something.sthkey.domain.config.TouchSettings
 import com.something.sthkey.domain.style.KeyLayout
+import com.something.sthkey.domain.style.touchEffectiveRegions
 
 /**
  * 把「触屏样式」的配置**转成**「自定义 Key 样式」。
@@ -127,7 +128,20 @@ object TouchToCustomConverter {
             .filterNot { it.startsWith("转换后不再有") }
             .toMutableList()
 
-        val touchRegions = config.touch.activeRegions
+        /*
+         * ⚠️ 取**生效区域**（用户配过的 + 没配过的槽位按默认坐标补齐），
+         * 不是 `config.touch.activeRegions`。
+         *
+         * ⚠️ 新建的触屏配置 `activeRegions` 是**空的**，但悬浮窗现在
+         * 会用默认坐标把那几块区域铺上（见 `touchEffectiveRegions`）——
+         * 转换要搬的是"用户实际看到的那个行为"，不是"配置文件里存了什么"。
+         * 只搬 `activeRegions` 的话，新配置转出来会是一堆按了不亮的方块。
+         */
+        val touchRegions = touchEffectiveRegions(config)
+        val configuredSlots = config.touch.regions
+            .filter { it.pinned }
+            .mapTo(mutableSetOf()) { it.slotId }
+        val defaultedCount = touchRegions.count { it.slotId !in configuredSlots }
 
         /* ② 逐个组件:摇杆换来源、给手感（区域不再挂在组件上） */
         val components = base.custom.components.map { component ->
@@ -193,7 +207,29 @@ object TouchToCustomConverter {
              * 转出来的）—— 不加方向，因为摇杆上报的是**轴**。
              */
             val targetSlot = binding.slotId
-            val target = components.firstOrNull { slotIdOf(it) == targetSlot }
+            /*
+             * ============================================================
+             * ⚠️⚠️ `@move` 是**虚拟槽位**，它对应的不是同名组件
+             * ============================================================
+             * 触屏样式里"推动移动摇杆"的区域用的槽位是
+             * [TouchSettings.JOYSTICK_SLOT_ID]（`@move`）—— 而它在布局里
+             * 实际占的是 **`JOYSTICK_LEFT`** 那个摇杆槽位，
+             * 转出来的组件 id 是 `conv_joystick_left_N`。
+             *
+             * ⚠️ 之前直接拿 `"@move"` 去比 id 前缀，**永远匹配不到**，
+             * 于是轮盘区域转出来是**空绑定** —— 转换后的移动摇杆
+             * 怎么推都不动。用户报的"自定义 Key 摇杆无反应"就是这个根因
+             * （见方案文档 §10 的"未解决"那一条）。
+             *
+             * ⚠️ 同理 **左右两个摇杆槽位**都可能出现:区域里带的是
+             * `JOYSTICK_RIGHT` 时按槽位正常匹配（视角摇杆本来就不吃区域，
+             * 它只是被一并转过来）。
+             */
+            val target = if (targetSlot == TouchSettings.JOYSTICK_SLOT_ID) {
+                components.firstOrNull { slotIdOf(it) == KeyLayout.Id.JOYSTICK_LEFT }
+            } else {
+                components.firstOrNull { slotIdOf(it) == targetSlot }
+            }
 
             CustomTouchRegion(
                 id = "${targetSlot}_$index",
@@ -210,6 +246,7 @@ object TouchToCustomConverter {
         notes += buildNotes(
             attached = converted.count { it.bindings.isNotEmpty() },
             hasMove = touchRegions.any { it.slotId == TouchSettings.JOYSTICK_SLOT_ID },
+            defaulted = defaultedCount,
         )
 
         return Result(
@@ -297,14 +334,20 @@ object TouchToCustomConverter {
      * ⚠️ 这些不是"客套话" —— 用户按了确认之后就**退不回去**了，
      * 所以必须如实告诉他"哪些东西变成了什么"。
      */
-    private fun buildNotes(attached: Int, hasMove: Boolean): List<String> = buildList {
+    private fun buildNotes(attached: Int, hasMove: Boolean, defaulted: Int): List<String> = buildList {
         if (attached > 0) {
             add("$attached 块触摸区域已挂到对应的按键组件上（位置与大小原样保留）")
         } else {
-            add(
-                "这个配置还没有配过按键触摸区域 —— 转出来的按键不会因为触摸而亮，" +
-                    "要在自定义编辑器里给它们加区域",
-            )
+            add("这个配置里没有能挂上的按键组件 —— 转出来的按键不会因为触摸而亮")
+        }
+
+        /*
+         * ⚠️ 必须如实说:这些区域**不是**用户摆的，是默认坐标。
+         * 不说的话用户会在自定义编辑器里看到几块"不是自己放"的区域，
+         * 以为是转换器乱塞的。
+         */
+        if (defaulted > 0) {
+            add("其中 $defaulted 块没有配置过的区域使用了默认触摸区域坐标（与触屏样式开启时一致）")
         }
 
         if (hasMove) {

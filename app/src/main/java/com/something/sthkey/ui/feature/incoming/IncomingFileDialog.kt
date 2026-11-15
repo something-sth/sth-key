@@ -81,6 +81,20 @@ fun IncomingFileDialog(
     request: IncomingFile.Request?,
     onFinished: () -> Unit,
     onNeedBitmapNaming: (BitmapFontImporter.Source) -> Unit,
+    /**
+     * 有配置/配置组合真的落库之后回调一次。
+     *
+     * ============================================================
+     * ⚠️ 为什么必须有它（外部导入列表不刷新）
+     * ============================================================
+     * 配置页里的导入走 `ConfigListScreen` 的 launcher，那边导入成功后会
+     * 调 `viewModel.reloadConfigs()`；而外部分享/打开进来的导入走这里，
+     * `ConfigStore` 虽然已经 `upsert`，但界面是**按版本号**驱动的 ——
+     * 不通知的话列表要等下次进页面/重启才看得到。
+     *
+     * 所以这里只负责"通知存储变了"，具体刷新哪些版本号由宿主决定。
+     */
+    onImported: () -> Unit,
 ) {
     if (request == null) return
 
@@ -187,12 +201,23 @@ fun IncomingFileDialog(
                             }
 
                             /*
+                             * ⚠️ **先通知刷新，再处理图片字体命名**。
+                             *
+                             * 命名回调会让宿主清空 `incomingRequest`，本对话框
+                             * 随之从组合里移除、这个协程也可能被取消 ——
+                             * 放在命名之后再通知的话，"配置 + 图片字体"同批导入
+                             * 就漏刷新。刷新失败的表现与用户报的那个 bug 一样。
+                             */
+                            if (resultsNeedConfigRefresh(results)) {
+                                onImported()
+                            }
+
+                            /*
                              * ⚠️ 图片字体要确认名字:先把这一批里有名字需求的交出去，
                              * 再显示结果。宿主会在 onFinished() 之后弹命名窗口。
                              */
                             results.filterIsInstance<ItemResult.NeedsNaming>()
                                 .forEach { onNeedBitmapNaming(it.source) }
-
 
                             phase = Phase.Done(results)
                         }
@@ -360,6 +385,15 @@ internal fun runImport(context: Context, item: SniffedItem): ItemResult {
 /* ============================================================
  * 内部类型
  * ============================================================ */
+
+/**
+ * 这一批导入结果里有没有**配置/组合**落库。
+ *
+ * ⚠️ 抽成纯函数是为了能单测:
+ * 字体、模型是全局资源，不该触发配置列表刷新；只有配置/组合才需要。
+ */
+internal fun resultsNeedConfigRefresh(results: List<ItemResult>): Boolean =
+    results.any { it is ItemResult.ConfigOk || it is ItemResult.GroupOk }
 
 private sealed interface Phase {
     data object Sniffing : Phase

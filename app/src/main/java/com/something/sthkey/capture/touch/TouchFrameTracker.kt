@@ -439,9 +439,11 @@ internal class TouchFrameTracker {
     /**
      * 显示密度 —— 命中判定要用它把 `TouchRegionGeometry.MIN_SIDE_DP` 换成像素。
      *
-     * ⚠️ **必须与编辑器用同一个密度值**:`TouchRegionEditorService` 用的是
-     * `resources.displayMetrics.density`。两处不一致的话，"最小 32dp"
-     * 在两边的像素数就不同 → 又是"画的与判定的不一样"。
+     * ⚠️ **必须与编辑器用同一个密度值**:编辑器
+     * （`TouchRegionContainerView`）用的是 `resources.displayMetrics.density`，
+     * 悬浮窗那边传的是 `LocalDensity` —— 同一台设备上两者相等。
+     * 两处不一致的话，"最小 32dp"在两边的像素数就不同 →
+     * 又是"画的与判定的不一样"。
      *
      * ⚠️ 默认 `0f` = 不加下限（纯按 `size` 算）。单测用这个默认值，
      * 免得每条用例都得编一个密度。

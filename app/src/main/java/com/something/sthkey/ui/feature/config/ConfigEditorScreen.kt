@@ -61,7 +61,6 @@ import androidx.compose.ui.unit.dp
 import com.something.sthkey.capture.accessibility.AccessibilityGrant
 import com.something.sthkey.capture.accessibility.SthKeyAccessibilityService
 import com.something.sthkey.capture.touch.TouchRegionContainerService
-import com.something.sthkey.capture.touch.TouchRegionEditorService
 import com.something.sthkey.core.log.AppLog
 import com.something.sthkey.data.permission.PermissionHelper
 import com.something.sthkey.domain.config.ANIMATION_DURATION_MAX
@@ -213,7 +212,7 @@ fun ConfigEditorScreen(
      * | 有**悬浮窗权限** | `addView` 抛 `BadTokenException`，看着像"编辑器打不开" |
      * | 没有**别的配置**在编辑 | 两套方块同时开着，屏幕上全是框 |
      *
-     * ⚠️ 第三条的判断在 [TouchRegionEditorService.refuseReason] 里
+     * ⚠️ 第三条的判断在 [TouchRegionContainerService.refuseReason] 里
      * **只有一份**（"谁的悬浮窗在开着"这个状态只有服务知道），
      * 这里只是把结果翻译成界面动作。
      */
@@ -246,11 +245,11 @@ fun ConfigEditorScreen(
         }
 
         /*
-         * ⚠️ **触摸区域编辑改用新实现**（单容器 + 胶囊，见
-         * `docs/touch-region-editor-redesign.md`）。
+         * 触摸区域编辑（单容器 + 胶囊，见 `docs/touch-region-editor-redesign.md`）。
          *
-         * 旧的 [TouchRegionEditorService]（每个区域一个悬浮窗）**暂时保留**:
-         * 用户要求"先把触屏配置修好，旧编辑器本体先不删" —— 留着方便对比/回退。
+         * ⚠️ 旧的「每块区域一个悬浮窗」实现（`TouchRegionEditorService`）
+         * 已于 2026-11-15 删除，这里没有回退分支了。
+         * 备份在 `D:\Project\_backup\1115-old-editor-removed`。
          *
          * ⚠️ 新实现同样是"再按一次 = 关闭"的语义，所以这里保留 ALREADY_OPEN 分支。
          */

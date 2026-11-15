@@ -79,6 +79,8 @@ object GroupPackageCodec {
         appVersion: String,
         configs: List<ConfigRef>,
     ): String = JSONObject().apply {
+        /* ⚠️ 说明放第一个字段：导出文件打开就能看到（程序读取时忽略） */
+        ConfigJsonComments.putManifestComment(this, ConfigJsonComments.groupManifest())
         put("format", FORMAT_ID)
         put("formatVersion", FORMAT_VERSION)
         put("appVersion", appVersion)

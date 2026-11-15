@@ -102,6 +102,70 @@ object KeyCodes {
     const val BTN_DPAD_LEFT = 0x222
     const val BTN_DPAD_RIGHT = 0x223
 
+    /*
+     * ============================================================
+     * 手柄摇杆**八段式方向** —— 仅内存内部码，**永远不写进 JSON**
+     * ============================================================
+     * 用户要求"手柄摇杆也能实现 WASD 按显"，但摇杆方向**没有 evdev 键码**
+     * （devices 只报 ABS_X/ABS_Y 轴）。所以:
+     *
+     * | 层 | 表示 |
+     * |---|---|
+     * | JSON（配置） | `JOYSTICK_LEFT_UP` 这类**明文 ID**（见 `KeyIds`）|
+     * | 内存 / `pressedCodes` | 下面这些保留 `Int` |
+     * | 采集 | 由 `StickState` 每帧算出来，不是设备上报的 |
+     *
+     * ⚠️ 区间选 `0x400` 起:真实 evdev 码最大到 `0x2e7`，旧扳机伪码是
+     * `0x300/0x301`，都不会撞。**这个区间只能用于摇杆方向**，别再挪用。
+     */
+    const val STICK_LEFT_UP = 0x400
+    const val STICK_LEFT_DOWN = 0x401
+    const val STICK_LEFT_LEFT = 0x402
+    const val STICK_LEFT_RIGHT = 0x403
+    const val STICK_LEFT_UP_LEFT = 0x404
+    const val STICK_LEFT_UP_RIGHT = 0x405
+    const val STICK_LEFT_DOWN_LEFT = 0x406
+    const val STICK_LEFT_DOWN_RIGHT = 0x407
+
+    const val STICK_RIGHT_UP = 0x410
+    const val STICK_RIGHT_DOWN = 0x411
+    const val STICK_RIGHT_LEFT = 0x412
+    const val STICK_RIGHT_RIGHT = 0x413
+    const val STICK_RIGHT_UP_LEFT = 0x414
+    const val STICK_RIGHT_UP_RIGHT = 0x415
+    const val STICK_RIGHT_DOWN_LEFT = 0x416
+    const val STICK_RIGHT_DOWN_RIGHT = 0x417
+
+    /** 这个码是不是"摇杆八段式方向"（见上面那段说明） */
+    fun isStickDirection(code: Int): Boolean =
+        code in STICK_LEFT_UP..STICK_LEFT_DOWN_RIGHT ||
+            code in STICK_RIGHT_UP..STICK_RIGHT_DOWN_RIGHT
+
+    /**
+     * 摇杆方向的**显示名**（只给 UI 用；JSON 里是 `JOYSTICK_*` ID）。
+     *
+     * ⚠️ 与 `domain/custom/StickDirectionCodes` 的 `codeOf` 一一对应，
+     * 那边改了方向映射这里必须一起改 —— 有测试钉着。
+     */
+    private val stickDirectionNames: Map<Int, String> = linkedMapOf(
+        STICK_LEFT_UP to "左摇杆 ↑",
+        STICK_LEFT_DOWN to "左摇杆 ↓",
+        STICK_LEFT_LEFT to "左摇杆 ←",
+        STICK_LEFT_RIGHT to "左摇杆 →",
+        STICK_LEFT_UP_LEFT to "左摇杆 ↖",
+        STICK_LEFT_UP_RIGHT to "左摇杆 ↗",
+        STICK_LEFT_DOWN_LEFT to "左摇杆 ↙",
+        STICK_LEFT_DOWN_RIGHT to "左摇杆 ↘",
+        STICK_RIGHT_UP to "右摇杆 ↑",
+        STICK_RIGHT_DOWN to "右摇杆 ↓",
+        STICK_RIGHT_LEFT to "右摇杆 ←",
+        STICK_RIGHT_RIGHT to "右摇杆 →",
+        STICK_RIGHT_UP_LEFT to "右摇杆 ↖",
+        STICK_RIGHT_UP_RIGHT to "右摇杆 ↗",
+        STICK_RIGHT_DOWN_LEFT to "右摇杆 ↙",
+        STICK_RIGHT_DOWN_RIGHT to "右摇杆 ↘",
+    )
+
     /**
      * ============================================================
      * 扳机的键码 —— **与真实 evdev 码一致**（`BTN_TL2` / `BTN_TR2`）
@@ -411,7 +475,16 @@ object KeyCodes {
      * 只是没有内置名字（例如某些键盘的厂商自定义键）。
      */
     fun displayName(keyCode: Int): String =
-        byCode[keyCode]?.name ?: "KEY_$keyCode"
+        stickDirectionNames[keyCode] ?: byCode[keyCode]?.name ?: "KEY_$keyCode"
+
+    /**
+     * 芯片/已选列表上的一行文字。
+     *
+     * ⚠️ 摇杆方向**不显示内部码** —— 那是只活在内存里的保留值，
+     * 对用户没有意义（"左摇杆 ↑" 已经说清是什么）。
+     */
+    fun labelWithCode(keyCode: Int): String =
+        if (isStickDirection(keyCode)) displayName(keyCode) else "${displayName(keyCode)} · $keyCode"
 
     fun find(keyCode: Int): AvailableKey? = byCode[keyCode]
 

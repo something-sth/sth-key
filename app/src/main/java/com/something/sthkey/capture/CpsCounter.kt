@@ -2,6 +2,7 @@ package com.something.sthkey.capture
 
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.style.KeyLayout
+import com.something.sthkey.domain.style.StyleId
 
 /**
  * CPS（每秒点击次数）统计。
@@ -123,5 +124,48 @@ class CpsCounter {
          */
         fun slotOf(config: KeyStrokesConfig, code: Int): String? =
             KeyLayout.codeToSlotMap(config)[code]
+
+        /**
+         * 从配置里算出"某个输入键码该记进哪个 **CPS 桶**"。
+         *
+         * ============================================================
+         * ⚠️⚠️ 为什么要多这一层（用户报的 bug）
+         * ============================================================
+         * 用户的原话:
+         *
+         * > 手柄在自定义 key 中，文本组件带有 cps 占位符时，绑定的手柄按键
+         * > 不起效果……这个 cps 值不会动，始终是 0
+         *
+         * ⚠️ 根因:自定义 Key 的 **`keyMappings` 是键盘/鼠标那套默认值**
+         * （W / A / S / D / SPACE / SHIFT / LMB / RMB），里面**没有手柄键码**。
+         * 而自定义组件的 CPS 可以选任意键码（手柄 A、键盘 Q…），于是:
+         *
+         * | 环节 | 用 `slotOf` 的结果 |
+         * |---|---|
+         * | 记录（`recordCpsClick`） | 翻译不出来 → **一个桶都没记** |
+         * | 显示（`CustomLayout.cpsAt`） | 翻译不出来 → 查不到 → 永远 0 |
+         *
+         * ⚠️ 修法:**自定义 Key 里翻译不出来的码，就按键码本身记**
+         * （`@code:<码>`）。两侧用**同一个函数**算桶名，所以记录与显示
+         * 必然对得上 —— 这正是"一个真源"原则。
+         *
+         * ⚠️ 能翻成槽位的码仍然走槽位（例如 W）：同一份物理键的点击
+         * 仍然共享一个计数，不会因为换了组件就分成两份。
+         *
+         * ⚠️ 其它样式**保持原样**（翻译不出来就不记）:
+         * 键盘/手柄样式的键位是固定的，随便一个键码都记一份只会让调试数据变脏。
+         */
+        fun cpsBucketOf(config: KeyStrokesConfig, code: Int): String? = when (config.styleId) {
+            StyleId.CUSTOM_KEY -> slotOf(config, code) ?: codeBucket(code)
+            else -> slotOf(config, code)
+        }
+
+        /**
+         * 自定义 Key 里**按键位映射翻译不出来**的键码，用它自己的桶。
+         *
+         * ⚠️ 前缀用 `@code:` —— 真实槽位 id 都是 `W` / `LMB` 这种大写单词，
+         * 不可能与它撞车;而且一眼能看出"这是一个原始键码，不是槽位"。
+         */
+        fun codeBucket(code: Int): String = "@code:$code"
     }
 }

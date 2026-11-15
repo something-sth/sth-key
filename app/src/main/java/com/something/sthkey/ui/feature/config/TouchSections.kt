@@ -61,9 +61,14 @@ internal fun LazyListScope.touchStyleSections(
     editable: KeyStrokesConfig,
     onOpenRegionEditor: () -> Unit,
 ) {
-    val regions = editable.touch.regions
-    val joystick = regions.firstOrNull { it.slotId == TouchSettings.JOYSTICK_SLOT_ID }
-    val buttonCount = regions.count { it.slotId != TouchSettings.JOYSTICK_SLOT_ID }
+    /*
+     * ⚠️ 只统计**用户真配过的**（`activeRegions`）——
+     * 没配过的槽位现在也会按默认坐标生效（见 `touchEffectiveRegions`），
+     * 所以文案不能说"还没有配置"，那与"碰了有反应"自相矛盾。
+     */
+    val configured = editable.touch.activeRegions
+    val joystick = configured.firstOrNull { it.slotId == TouchSettings.JOYSTICK_SLOT_ID }
+    val buttonCount = configured.count { it.slotId != TouchSettings.JOYSTICK_SLOT_ID }
 
     item { SectionHeader("触屏设置") }
 
@@ -72,8 +77,12 @@ internal fun LazyListScope.touchStyleSections(
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
                     text = when {
-                        regions.isEmpty() -> "还没有配置触摸区域"
-                        joystick == null -> "轮盘未配置 · 按键区域 $buttonCount 块"
+                        configured.isEmpty() ->
+                            "未配置 · 使用默认触摸区域坐标（轮盘左下、按键右上）"
+
+                        joystick == null ->
+                            "按键区域 $buttonCount 块 · 轮盘使用默认坐标"
+
                         else -> "轮盘 中心 (%.2f, %.2f) 边长 %.2f · 按键区域 %d 块".format(
                             joystick.centerX,
                             joystick.centerY,

@@ -46,11 +46,9 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.something.sthkey.capture.accessibility.AccessibilityGrant
 import com.something.sthkey.capture.accessibility.SthKeyAccessibilityService
 import com.something.sthkey.data.permission.PermissionHelper
-import com.something.sthkey.domain.capture.RootProbe
 import com.something.sthkey.ui.component.findActivity
 import com.something.sthkey.ui.component.ScreenScaffold
 import com.something.sthkey.ui.component.SectionHeader
-import com.something.sthkey.ui.component.SectionHint
 import com.something.sthkey.ui.component.SettingsCard
 import com.something.sthkey.ui.MainViewModel
 
@@ -288,10 +286,21 @@ fun SetupScreen(
                     )
                 }
 
-                // 只有确实缺东西时才展开详细提示
-                if (!captureReady && !viewModel.isProbing) {
-                    item { SectionHint(text = RootProbe.hint()) }
-                }
+                /*
+                 * ⚠️ 这里**不再有**"还差：…"或"需要 root"的提示（2026-11-15）。
+                 *
+                 * 用户的原话:
+                 *
+                 * > 未授权时下方文字显示的红字不对……三选一授权，无障碍、shizuku、
+                 * > root 三选一都可以授权，但下面红字显示的是还差：无障碍服务、
+                 * > 采集通道。这很明显不符。我建议把这个红字删了，毕竟标题已经
+                 * > 写了三选一即可，没必要红字提示。
+                 *
+                 * ⚠️ 原来的红字与 `RootProbe.hint()` 都只站在"必须 root"的角度，
+                 * 与"三选一"直接矛盾 —— 删掉比改一版更不容易再错。
+                 * 每张卡片自己会显示"已授权 / 未开启 / 会自动开启"，
+                 * 底部按钮 `enabled = allReady` 也已经表达了"还差东西"。
+                 */
             }
 
             Column(
@@ -300,27 +309,6 @@ fun SetupScreen(
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                if (!allReady) {
-                    Text(
-                        text = "还差：" + buildList {
-                            /*
-                             * ⚠️⚠️ 有 root / Shizuku 时**不列"无障碍服务"**
-                             * ============================================================
-                             * 那种情况我们**替他开**（见 `canGrantByShell`），
-                             * 不列出来才是对的 —— 列了会让用户以为还得自己点一下。
-                             *
-                             * 用户的原话:
-                             * > 不需要让用户已经授权 shizuku/root 的时候
-                             * > 还单独开启无障碍
-                             */
-                            if (!canGrantByShell && !accessibilityOn) add("无障碍服务")
-                            if (!captureReady) add("采集通道")
-                        }.joinToString("、").ifEmpty { "（等待检测…）" },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(
                         onClick = { showSkipDialog = true },

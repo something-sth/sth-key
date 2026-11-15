@@ -37,6 +37,7 @@ import com.something.sthkey.domain.custom.MouseJoystickFeel
 import com.something.sthkey.domain.custom.StickSide
 import com.something.sthkey.domain.custom.TextComponent
 import com.something.sthkey.domain.custom.TouchDirection
+import com.something.sthkey.domain.keys.KeyCodes
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -189,7 +190,7 @@ object CustomLayoutCodec {
                 put("label", component.label)
                 put(
                     "inputKeyCodes",
-                    JSONArray().apply { component.inputKeyCodes.forEach { put(it) } },
+                    JSONArray().apply { KeyCodeJson.putList(this, component.inputKeyCodes) },
                 )
                 put("textScalePercent", component.textScalePercent)
                 // CPS 那一行的额外缩放（模式 3 的第二行比主文字小）
@@ -217,13 +218,13 @@ object CustomLayoutCodec {
                  */
                 put(
                     "cpsKeyCodes",
-                    JSONArray().apply { component.cpsKeyCodes.forEach { put(it) } },
+                    JSONArray().apply { KeyCodeJson.putList(this, component.cpsKeyCodes) },
                 )
                 put(
                     "cpsKeyCodesPerPlaceholder",
                     JSONArray().apply {
                         component.cpsKeyCodesPerPlaceholder.forEach { group ->
-                            put(JSONArray().apply { group.forEach { put(it) } })
+                            put(JSONArray().apply { KeyCodeJson.putList(this, group) })
                         }
                     },
                 )
@@ -266,7 +267,7 @@ object CustomLayoutCodec {
                     "inputKeyCodes",
                     JSONArray().apply {
                         component.inputKeyCodes.forEach { group ->
-                            put(JSONArray().apply { group.forEach { put(it) } })
+                            put(JSONArray().apply { KeyCodeJson.putList(this, group) })
                         }
                     },
                 )
@@ -856,9 +857,9 @@ object CustomLayoutCodec {
     private fun decodeJoystickKeys(array: JSONArray?): List<List<Int>> {
         if (array == null || array.length() == 0) return DEFAULT_KEYBOARD_JOYSTICK_KEYS
 
-        /* ⚠️ 扁平老格式:每一项都是数字 */
+        /* ⚠️ 扁平老格式:每一项都是数字/字符串 */
         if (array.optJSONArray(0) == null) {
-            val flat = decodeKeyCodes(array)
+            val flat = decodeKeyCodes(array).filterNot { KeyCodes.isStickDirection(it) }
             return if (flat.isEmpty()) {
                 DEFAULT_KEYBOARD_JOYSTICK_KEYS
             } else {
@@ -874,22 +875,26 @@ object CustomLayoutCodec {
                  * ⚠️ 空的**内层**要保留（"这一向不绑键"是有意义的选择），
                  * 跳过它会让后面几向整体前移、上下左右全乱 ——
                  * 与 `decodeCpsKeyCodesPerPlaceholder` 同一个坑。
+                 *
+                 * ⚠️ **摇杆方向码要过滤掉**：摇杆组件的四向绑定是"键盘摇杆
+                 * 读哪几个键"，把八段式方向绑进去没有语义（等于拿摇杆推摇杆）。
+                 * 界面本来就不提供，这里再兜一层，防手改 JSON。
                  */
-                add(decodeKeyCodes(array.optJSONArray(index)))
+                add(
+                    decodeKeyCodes(array.optJSONArray(index))
+                        .filterNot { KeyCodes.isStickDirection(it) },
+                )
             }
         }
     }
-    private fun decodeKeyCodes(array: JSONArray?): List<Int> {
-        if (array == null) return emptyList()
-        return buildList {
-            for (index in 0 until array.length()) {
-                // 负数码不是合法键码，直接丢掉
-                val code = array.optInt(index, -1)
-                        /* ⚠️ 迁移旧伪键码:768/769 → 312/313（见 KeyCodes.migrateLegacyCode） */
-                        if (code >= 0) add(com.something.sthkey.domain.keys.KeyCodes.migrateLegacyCode(code))
-            }
-        }
-    }
+
+    /**
+     * 读一组键码。
+     *
+     * ⚠️ 数字（老配置）和明文 ID（新配置）都收 —— 见 [KeyCodeJson]。
+     * 写出去只会是明文 ID。
+     */
+    private fun decodeKeyCodes(array: JSONArray?): List<Int> = KeyCodeJson.readList(array)
 
     /**
      * 读文本组件"CPS 统计哪些键"。

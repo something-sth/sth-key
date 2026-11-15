@@ -72,6 +72,19 @@ internal class GamepadNativeMonitor(
     private val onDisconnected: () -> Unit,
     private val onButton: (code: Int, down: Boolean) -> Unit,
     private val onAxis: (code: Int, value: Float) -> Unit,
+    /**
+     * **一帧的所有轴都处理完之后**回调一次（2026-11-15）。
+     *
+     * ============================================================
+     * ⚠️ 为什么需要它（摇杆八段式）
+     * ============================================================
+     * 一帧里 lx / ly / rx / ry 是**分开**回调的（见 [dispatch]），
+     * 如果每来一个轴就算一次方向，斜推会先出现"右"、再出现"右上" ——
+     * 用作"点亮/计数"就会多记一个假方向。
+     *
+     * 所以方向判定必须等**这一帧的轴都到齐**再做。采集层在这里统一算一次。
+     */
+    private val onStickFrame: () -> Unit = {},
 ) {
 
     /** 正在运行的进程；[stop] 时销毁它 */
@@ -507,6 +520,12 @@ internal class GamepadNativeMonitor(
          * 的自愈点。理由见 [reconcileTriggers] 的说明。
          */
         reconcileTriggers(state)
+
+        /*
+         * ⚠️ 轴全部更新完之后再算摇杆方向（见 [onStickFrame] 的说明）——
+         * 放在 [reconcileTriggers] 之后、[dispatch] 的最后一步。
+         */
+        onStickFrame()
     }
 
     /**

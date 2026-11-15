@@ -28,6 +28,7 @@ import com.something.sthkey.domain.custom.KeyComponent
 import com.something.sthkey.domain.custom.StickSide
 import com.something.sthkey.domain.custom.TextComponent
 import com.something.sthkey.domain.custom.CustomTouchRegion
+import com.something.sthkey.domain.custom.touchPressedComponents
 import com.something.sthkey.capture.OverlayBounds
 import com.something.sthkey.capture.touch.TouchCapture
 import com.something.sthkey.capture.touch.TouchFrameTracker
@@ -35,11 +36,13 @@ import com.something.sthkey.ui.overlay.gamepad.TouchContent
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.something.sthkey.capture.CaptureSession
+import com.something.sthkey.capture.CpsCounter
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.custom.CustomLayout
 import com.something.sthkey.domain.style.KeyLayout
 import com.something.sthkey.domain.style.OverlayStyleRegistry
 import com.something.sthkey.domain.style.StyleId
+import com.something.sthkey.domain.style.touchEffectiveRegions
 import com.something.sthkey.ui.overlay.gamepad.Gamepad1Content
 import com.something.sthkey.ui.overlay.gamepad.Gamepad2Content
 import kotlinx.coroutines.delay
@@ -97,6 +100,13 @@ fun OverlayContent(
     mouseMotionFlow: StateFlow<MouseMotion>? = null,
 ) {
     val pressedKeys by CaptureSession.pressedKeys.collectAsState()
+    /*
+     * 手柄摇杆八段式方向（内部码）。
+     *
+     * ⚠️ 与 [pressedKeys] **分开**收集:它只给自定义 Key 的按键/文本组件用，
+     * 不能混进"物理键"那条路（键位映射、设备记账都按真实键码理解它）。
+     */
+    val stickDirectionCodes by CaptureSession.stickDirections.collectAsState()
     val density = LocalDensity.current.density
 
     /*
@@ -151,39 +161,31 @@ fun OverlayContent(
     )
 
     /**
-     * 自定义布局里**因触摸区域而记的 CPS**（**区域 id** → 次数）。
+     * 自定义布局里**因触摸区域而记的 CPS**（**组件 id** → 次数）。
+     *
+     * ============================================================
+     * ⚠️ 按**组件**记（不再按区域记再扇出）
+     * ============================================================
+     * 早先是"按区域 id 记，再翻成组件"（一块区域绑多个组件时把次数摊给每个）。
+     * 那在 C3 的**方向绑定**下就不成立了:
+     *
+     * | 情况 | 按区域记的后果 |
+     * |---|---|
+     * | 轮盘区域绑了"前"的文本 + "左"的文本 | 推任意方向，**两个都 +1** |
+     *
+     * ⚠️ 而 `pressedComponentIds` 已经在 [touchPressedComponents] 里
+     * 把方向过滤过了 —— 直接拿它做边沿计数，就与"按键亮不亮"**同一个判据**:
+     * 亮了的那个组件才加 CPS。一处判断、两处消费。
+     *
+     * ⚠️ 同一组件被多块区域同时按住时只算一次（集合本身去重）——
+     * 那正是"这个组件这一刻被触发了"的语义。
      *
      * ⚠️ 与 [touchStateForCustom] 一样无条件调用 —— 它内部也有 effect。
      */
-    val touchCpsByRegion = rememberTouchCps(
+    val touchCpsByComponent = rememberTouchCps(
         configId = current.id,
-        pressedRegionIds = touchStateForCustom?.pressedRegionIds.orEmpty(),
+        pressedComponentIds = touchStateForCustom?.pressedComponentIds.orEmpty(),
     )
-
-    /**
-     * 把"区域 → 次数"翻成"**组件** → 次数"。
-     *
-     * ⚠️ 这一步只能在**这里**做:渲染层（`CustomKeyGrid`）认识组件、
-     * 不认识区域列表；而"哪块区域绑了谁"只有配置知道。
-     *
-     * ⚠️ 一块区域可以绑**多个**组件 —— 所以不是简单的一对一映射，
-     * 而是"每个组件把**绑了它的那些区域**的次数加起来"。
-     *
-     * ⚠️ 按**组件**给值（不是按 CPS 占位符）:一条绑定就是"某块区域 →
-     * 某个组件"，它不区分哪一个 `(cps)`。旧模型试过按占位符分
-     * （`placeholderIndex`），那正是被用户否掉的那套。
-     */
-    val touchCpsByComponent = remember(touchCpsByRegion, current.custom.touchRegions) {
-        val counts = mutableMapOf<String, Int>()
-        current.custom.touchRegions.forEach { region ->
-            val clicks = touchCpsByRegion[region.id] ?: 0
-            if (clicks == 0) return@forEach
-            region.bindings.forEach { binding ->
-                counts[binding.componentId] = (counts[binding.componentId] ?: 0) + clicks
-            }
-        }
-        counts
-    }
 
     /*
      * CPS 数值：只在**真的用到**时定时刷新。
@@ -294,6 +296,16 @@ fun OverlayContent(
                  */
                 val touchSettings = current.touch
                 val (screenW, screenH) = OverlayBounds.screenSize(context)
+                /*
+                 * ⚠️ **生效区域** = 用户配过的 + 没配过的槽位按默认坐标补齐。
+                 *
+                 * 原来只取 `activeRegions`，于是新建配置（`regions` 为空）
+                 * 一块区域都没有 —— 按键不亮、碰哪里都没反应。
+                 * 默认坐标与编辑器里画出来的那几块方块**同一个函数**
+                 * （见 `touchEffectiveRegions`），所以"编辑器里看到的"
+                 * 与"悬浮窗上生效的"必然一致。
+                 */
+                val effectiveRegions = remember(current) { touchEffectiveRegions(current) }
 
                 /*
                  * ⚠️ `remember(current.id)` —— 跨帧状态（归属 / 上一帧 / 累计）
@@ -397,11 +409,12 @@ fun OverlayContent(
                     screenWidth = screenW,
                     screenHeight = screenH,
                     /*
-                     * ⚠️ 用 `activeRegions`（**只含用户真配过的**），不是 `regions` ——
-                     * 列表里可能含有"编辑器画出来给用户拖、但没碰过"的占位条目，
-                     * 那些**不该生效**。详见 `TouchRegionBinding.pinned`。
+                     * ⚠️ 用**生效区域**（配过的 + 默认坐标补齐），不是
+                     * `touchSettings.regions`（可能含占位条目），
+                     * 也不是 `activeRegions`（新建配置时是空的）——
+                     * 判据与编辑器、与下面的诊断面板**同一个函数**。
                      */
-                    regions = touchSettings.activeRegions,
+                    regions = effectiveRegions,
                     moveFeel = touchSettings.move.feel,
                     cameraFeel = touchSettings.camera.feel,
                     naturalWidth = naturalW,
@@ -535,13 +548,28 @@ fun OverlayContent(
 
             CustomKeyCanvas(
                 settings = current.custom.copy(components = windowed.components),
-                pressedCodes = pressedKeys,
+                /*
+                 * ⚠️ 物理键 + 摇杆八段式方向一起给。
+                 *
+                 * `KeyComponent.isPressed` 本来就是"监听码里任意一个在
+                 * pressedCodes 里"，所以 W 绑了 `KEY_W` 和 `JOYSTICK_LEFT_UP`
+                 * 之后，按 W 或推左摇杆向上都会亮 —— 不需要第二套判断。
+                 */
+                pressedCodes = pressedKeys + stickDirectionCodes,
                 scale = factor * KeyLayout.uiScale(current),
                 cpsBySlot = cps,
                 /* ⚠️ 实时帧率;读不到时 FpsText 渲染成 N/A */
                 fps = fpsReading.value,
                 fpsSeed = fpsReading.seq,
-                slotIdOf = { code -> KeyLayout.codeToSlotMap(current)[code] },
+                /*
+                 * ⚠️ CPS 的"码 → 桶"必须与采集侧**同一个函数**
+                 * （`CpsCounter.cpsBucketOf`）:
+                 * 自定义 Key 的组件能绑手柄/任意键码，而 `keyMappings` 里
+                 * 没有那些码 —— 那边按键码本身记 `@code:<码>`，这边也得
+                 * 按键码本身查。只写 `codeToSlotMap` 的话，手柄键的 CPS
+                 * 永远是 0（用户报的 bug）。
+                 */
+                slotIdOf = { code -> CpsCounter.cpsBucketOf(current, code) },
                 baseWidth = windowed.bounds.width,
                 baseHeight = windowed.bounds.height,
                 overallAlpha = current.customOpacityPercent.coerceIn(0, 100) / 100f,
@@ -855,12 +883,47 @@ private fun customTouchInput(
         onDispose { tracker.reset() }
     }
 
-    /* ② 翻回去:被按到的区域 → 它绑的组件 */
-    val pressedRegions = snapshot.pressedSlots
-    val pressedComponents = remember(pressedRegions, touchRegions) {
-        touchRegions.filter { it.id in pressedRegions }
-            .flatMap { it.bindings }
-            .mapTo(mutableSetOf()) { it.componentId }
+    /* ② 翻回去:被按到的区域 → 它绑的组件（**方向也要算**） */
+    /*
+     * ⚠️⚠️ **轮盘区域也要算"被按到"**（`pressedSlots` 里没有它们）。
+     *
+     * `TouchFrameTracker` 的 `pressedSlots` 是"按键槽位"语义，它**故意剔除**
+     * 了被当作轮盘用的区域（见那边的 `moveClaimedSlots`）——
+     * 所以在自定义 Key 这一支里，只看 `pressedSlots` 的话:
+     *
+     * | 绑在轮盘区域上的 | 不并进来会怎样 |
+     * |---|---|
+     * | 带方向的按键/文本 | 怎么推都**不亮**（8 向全部失效） |
+     * | 不带方向的按键/文本 | 按了**没反应**（"摇到哪儿都触发"也一样） |
+     * | 触屏移动摇杆 | 不看这里（它读 `moveRegions`），不受影响 |
+     *
+     * ⚠️ `moveRegions` 的键就是"这一刻有手指在里面的轮盘区域"，
+     * 把它并进来，与 `pressedSlots` 合起来才是"这一刻被按到的全部区域"。
+     * 两边**不可能重复**（轮盘区域已被 `pressedSlots` 剔除），所以不会多算。
+     */
+    val pressedRegions = remember(snapshot.pressedSlots, snapshot.moveRegions) {
+        if (snapshot.moveRegions.isEmpty()) {
+            snapshot.pressedSlots
+        } else {
+            snapshot.pressedSlots + snapshot.moveRegions.keys
+        }
+    }
+    /*
+     * ⚠️⚠️ 不能只做 "区域 → 绑定的组件" 的平铺:轮盘区域绑按键/文本组件时
+     * 可以带方向（前/后/左/右…），只有摇杆朝那个方向时才算触发。
+     *
+     * ⚠️ 不过滤的后果:一块轮盘区域绑了"前 / 后 / 左 / 右"四个组件时，
+     * 手指一碰**四个一起亮**。用户报的"8 向没生效"就是这种形态。
+     * 过滤规则收在 [touchPressedComponents] 里（纯函数，8 个方向都有单测）。
+     *
+     * ⚠️ 依赖里带上 `snapshot.moveRegions`:手指在区域内移动会改方向，
+     * 不跟着它重算的话，按键会停在"按下那一刻"的方向上。
+     */
+    val pressedComponents = remember(pressedRegions, touchRegions, snapshot.moveRegions) {
+        touchPressedComponents(
+            regions = touchRegions,
+            pressedRegionIds = pressedRegions,
+        ) { regionId -> snapshot.moveRegions[regionId] }
     }
 
     /*
@@ -901,14 +964,13 @@ private fun customTouchInput(
             moveByComponent = moveByComponent,
             camera = snapshot.camera,
             pressedComponentIds = pressedComponents,
-            pressedRegionIds = pressedRegions,
             moveByRegion = snapshot.moveRegions,
         )
     }
 }
 
 /**
- * 自定义布局里**因触摸区域而记的 CPS**（**区域 id** → 次数）。
+ * 自定义布局里**因触摸区域而记的 CPS**（**组件 id** → 次数）。
  *
  * ============================================================
  * ⚠️⚠️ 为什么单开一路，而不是并进 `cpsBySlot`
@@ -921,15 +983,13 @@ private fun customTouchInput(
  * （`recordCpsClick(configId, slotId)`），而自定义布局的触摸区域
  * **不属于任何槽位** —— 它是配置级的一等数据（`CustomTouchRegion`）。
  *
- * ⚠️ 所以触摸这一路按**区域 id** 记。把它并进 `cpsBySlot` 再另外
- * 加一遍的话会**加两遍**（用户看到 CPS 直接翻倍，而且只在
- * "既绑了键又配了区域"时才出现 —— 极难联想）。
+ * ⚠️ 所以触摸这一路按**组件 id** 记（组件 id 与槽位 id 是两套命名，
+ * 不会撞）。并进 `cpsBySlot` 再另外加一遍的话会**加两遍**
+ * （用户看到 CPS 直接翻倍，而且只在"既绑了键又配了区域"时出现）。
  *
- * ============================================================
- * ⚠️ 为什么按**区域**而不是按组件记
- * ============================================================
- * 一块区域可以绑**多个**组件（用户确认过"能选多个"）。
- * 若按组件记，那"这块区域被按了几次"就分不出来。
+ * ⚠️ 为什么是"**组件**"而不是"区域":见调用点 `touchCpsByComponent` ——
+ * 方向绑定要求"只有真正触发的那个组件加"，而 `pressedComponentIds`
+ * 正是这个判据（与按键亮不亮**同一个判据**）。
  *
  * ⚠️ 抽成一个 `@Composable` 而不是内联在那一大段里，是因为它带
  * `LaunchedEffect`（真正的副作用:改全局计数器），混在几百行里读不出来。
@@ -937,10 +997,10 @@ private fun customTouchInput(
 @Composable
 private fun rememberTouchCps(
     configId: String,
-    pressedRegionIds: Set<String>,
+    pressedComponentIds: Set<String>,
 ): Map<String, Int> {
     /*
-     * ⚠️ 「上一次按住了哪些区域」只活在**这个会话**里 ——
+     * ⚠️ 「上一次按住了哪些组件」只活在**这个会话**里 ——
      * 它只是用来判"这一帧是不是**新按下**的边沿"，不需要跨进程存活。
      */
     var lastPressed by remember(configId) { mutableStateOf(emptySet<String>()) }
@@ -950,11 +1010,11 @@ private fun rememberTouchCps(
      * 每帧都记的话，按住区域一秒就是 60 次/秒的假 CPS。
      *
      * ⚠️ 这是**真正的副作用**（改全局计数器），所以放 `LaunchedEffect`
-     * 而不是组合期直接调。它由 `pressedRegionIds` 驱动。
+     * 而不是组合期直接调。它由 `pressedComponentIds` 驱动。
      */
-    LaunchedEffect(pressedRegionIds, configId) {
-        val fresh = pressedRegionIds - lastPressed
-        lastPressed = pressedRegionIds
+    LaunchedEffect(pressedComponentIds, configId) {
+        val fresh = pressedComponentIds - lastPressed
+        lastPressed = pressedComponentIds
         fresh.forEach { key ->
             CaptureSession.recordCpsClick(configId, key)
         }
@@ -975,42 +1035,3 @@ private fun rememberTouchCps(
 
     return counts
 }
-
-/**
- * 一块触摸区域在 CPS 计数器里的**键**。
- *
- * ============================================================
- * ⚠️⚠️ 为什么不是"一个组件一个键"
- * ============================================================
- * 用户报的:
- *
- * > 在**任意占位符**添加的触摸区域都会**加到其他触摸区域上**
- *
- * ⚠️ 成因:计数原来按**组件 id** 记，而文本组件可以有好几个 `(cps)`，
- * 各配各的区域 —— 于是两处各按一下，**两处都显示 2**（组件总次数）。
- * 用户看到的是"两块区域的次数混在一起"。
- *
- * ⚠️ 现在按 **组件 id + 占位符下标** 记，每块区域各有各的计数:
- *
- * | 组件 | 键 |
- * |---|---|
- * | 按键组件（没有占位符） | `组件id` |
- * | 文本组件第 n 处 | `组件id#n` |
- *
- * ⚠️ 分隔符用 `#` —— 组件 id 是 `custom:key_1` 那种形状（有冒号），
- * 再用冒号会撞；`#` 在 id 里不会出现。
- */
-internal fun touchCpsKey(componentId: String, placeholderIndex: Int?): String =
-    if (placeholderIndex == null) componentId else "$componentId#$placeholderIndex"
-
-/**
- * 组件 id → 它在 CPS 计数器里的**所有**键。
- *
- * ⚠️ 按下"区域"时只知道它属于哪个组件（`pressedRegionIds` 里是组件 id），
- * 而计数是按"组件 + 占位符"记的 —— 所以要**扇出**成它的每一个键。
- *
- * ⚠️ 文本组件有几处占位符是不确定的（用户随时可以改文字），
- * 所以这里用一个**够大的范围**扫一遍，而不是去查配置
- * （查配置会让这个 effect 依赖整份配置，重组范围大得多）。
- */
-private const val MAX_TOUCH_CPS_PLACEHOLDERS = 8

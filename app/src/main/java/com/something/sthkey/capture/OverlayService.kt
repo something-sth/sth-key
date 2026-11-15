@@ -813,12 +813,13 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                  *
                  * 用户提的:"如果新建的触屏配置没有调整触摸区域，但用户仍然
                  * 直接开启触屏悬浮窗时，弹一条 toast"。他说得对 ——
-                 * 不提示的话用户看到的是"悬浮窗画出来了，但碰哪里都没反应"，
-                 * 而那与"功能坏了"完全分不出来。
+                 * 不提示的话用户不知道"现在用的是默认位置"，
+                 * 想改的时候也不知道去哪儿改。
                  *
-                 * ⚠️ 措辞比用户原话更具体一点，因为**视角摇杆其实是有输出的**
-                 * （它吃"所有没落在区域里的触摸"）。只说"没有任何输出"会让人
-                 * 以为整个组件都是死的，进而去查一个没坏的东西。
+                 * ⚠️ 但**默认区域现在是生效的**（见 `touchEffectiveRegions`）:
+                 * 新建配置里轮盘默认在左下、按键默认从右上排开，碰了就有反应。
+                 * 所以措辞必须改成"已使用默认坐标"，**不能**再说
+                 * "不会有输出"—— 那是一句假话，会把用户引去查一个没坏的东西。
                  *
                  * ⚠️ 每个窗口**只弹一次**（见 [regionHintShown]）:
                  * 悬浮窗会因配置改动、旋转、尺寸重算而反复重组，
@@ -829,8 +830,8 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                      * ⚠️ 判据用 `activeRegions`（用户真配过的那些），不是 `regions` ——
                      * 后者可能含有编辑器画出来的占位条目。
                      *
-                     * ⚠️ 用错的话后果很具体:用户"打开过编辑器但没配任何区域"时，
-                     * `regions` 非空 → **这句提示再也不弹**，而他确实一个区域都没有。
+                     * ⚠️ 现在默认区域也生效，但这个判据**仍然对**:它回答的是
+                     * "用户有没有自己配过"，而不是"有没有区域可用"。
                      */
                     config.touch.activeRegions.isEmpty() &&
                     regionHintShown.add(config.id)
@@ -838,7 +839,8 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                     android.widget.Toast.makeText(
                         applicationContext,
                         "「${config.name}」还没有配置触摸区域：" +
-                            "移动轮盘和按键都不会有输出，整屏滑动都会进视角摇杆",
+                            "已使用默认触摸区域坐标（轮盘在左下、按键在右上），" +
+                            "可在「触摸区域编辑」里调整",
                         android.widget.Toast.LENGTH_LONG,
                     ).show()
                 }

@@ -5,9 +5,11 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.Typeface
 import android.view.MotionEvent
 import android.view.View
 import com.something.sthkey.domain.config.TouchRegionGeometry
+import com.something.sthkey.domain.custom.TouchDirection
 
 /**
  * **单容器**触摸区域编辑器（P2:可拖动）。
@@ -51,6 +53,17 @@ class TouchRegionContainerView(context: Context) : View(context) {
          * 触屏样式恒为 null（它的轮盘由 `@move` 槽位决定）。
          */
         val kind: com.something.sthkey.domain.custom.CustomTouchRegion.Kind? = null,
+        /*
+         * ⚠️ 自定义 Key 的**绑定**（组件 id + 方向）。
+         *
+         * 触屏样式恒为空 —— 它的区域是槽位决定的，"绑谁"是固定的。
+         *
+         * ⚠️ 只放 `(id, 方向)` 而不是 `CustomTouchRegionBinding`:
+         * 编辑器的 `Item` 是**屏幕上的一个方块**，它只需要"怎么画、怎么显示"；
+         * 领域类型在**保存时**才由服务端翻回去（见 `commitAndExit`）。
+         * 把领域对象搬进 View 层会让"哪一层负责持久化"变模糊。
+         */
+        val bindings: List<Pair<String, TouchDirection?>> = emptyList(),
     )
 
     var items: List<Item> = emptyList()
@@ -80,6 +93,21 @@ class TouchRegionContainerView(context: Context) : View(context) {
      * 所以面板接管后这里传 false（按钮不画、也不响应点击）。
      */
     var showButtons: Boolean = false
+
+    /**
+     * 是否在每块方块左上角画**序号**。
+     *
+     * ⚠️ 只有**自定义 Key** 打开:它的区域是用户自己加的，绑同一个按键时
+     * 标题会一模一样;触屏样式的行名是槽位（W / A / LMB…），本来就唯一。
+     *
+     * ⚠️ 序号与面板行用的是**同一个下标**（都是 `items` 的顺序），
+     * 所以"面板第 3 行"永远对应"屏幕上第 ③ 块"。
+     */
+    var showOrdinals: Boolean = false
+        set(value) {
+            field = value
+            invalidate()
+        }
 
     /** 点「取消」或返回键时回调 */
     var onCancel: (() -> Unit)? = null
@@ -117,15 +145,29 @@ class TouchRegionContainerView(context: Context) : View(context) {
         color = 0xFF7C4DFF.toInt()
     }
 
-    /** 区域配色（与旧编辑器同一路的彩色方块） */
-    private val PALETTE = intArrayOf(
-        0xFF7C4DFF.toInt(),
-        0xFF03A9F4.toInt(),
-        0xFF4CAF50.toInt(),
-        0xFFFF9800.toInt(),
-        0xFFE91E63.toInt(),
-        0xFF00BCD4.toInt(),
-    )
+    /**
+     * 区域**序号**（左上角）。
+     *
+     * ============================================================
+     * ⚠️ 它解决的是"几块区域名字一样"
+     * ============================================================
+     * 都绑同一个按键时，标题会完全相同。用户提了两个方案:
+     * 名字染色 / 加序号 —— 最后选了序号（理由见 [touchRegionOrdinal]）。
+     *
+     * ⚠️ 序号**不拼进标题**，而是单独画在左上角:
+     * 标题在方块上会被截断（`…(按键 · A)`），拼进去的话序号也会被切掉。
+     * 单独画还顺带解决了"方块极小、平时不画标题"的情况 ——
+     * 那种时候序号仍然看得见，用户至少知道这是第几块。
+     *
+     * ⚠️ 白色 + 黑色阴影:方块底色是半透明填充叠在游戏画面上，
+     * 再叠一块不透明底会挤掉里面的名称 —— 阴影足够让数字在浅色块上也清楚。
+     */
+    private val ordinalPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = 11f * resources.displayMetrics.scaledDensity
+        color = Color.WHITE
+        typeface = Typeface.DEFAULT_BOLD
+        setShadowLayer(2.5f * resources.displayMetrics.density, 0f, 0f, 0xCC000000.toInt())
+    }
 
     /** 给颜色加透明度（0x00..0xFF） */
     private fun withAlpha(color: Int, alpha: Int): Int =
@@ -246,7 +288,7 @@ class TouchRegionContainerView(context: Context) : View(context) {
              *
              * ⚠️ 颜色按**下标**取（与槽位顺序绑定），刷新后不会乱跳。
              */
-            val color = PALETTE[index % PALETTE.size]
+            val color = touchRegionColor(index)
             fillPaint.color = withAlpha(color, 0x3D)
             strokePaint.color = color
             strokePaint.strokeWidth = if (index == draggingIndex) 3f * density else 1.5f * density
@@ -254,16 +296,78 @@ class TouchRegionContainerView(context: Context) : View(context) {
             canvas.drawRoundRect(rect, 8f * density, 8f * density, fillPaint)
             canvas.drawRoundRect(rect, 8f * density, 8f * density, strokePaint)
 
-            val text = item.label
-            val tw = labelPaint.measureText(text)
-            val th = labelPaint.textSize
-            val cx = rect.centerX()
-            val cy = rect.centerY() + th / 3f
-            /* 文字太多时缩一点，避免顶出方块 */
-            if (tw > rect.width() - 8f * density) {
-                canvas.drawText(text, cx - (rect.width() - 8f * density) / 2f, cy, labelPaint)
-            } else {
-                canvas.drawText(text, cx - tw / 2f, cy, labelPaint)
+            /*
+             * ============================================================
+             * 方块里的文字（方案 §11.3）
+             * ============================================================
+             * | 情况 | 处理 |
+             * |---|---|
+             * | 够宽 | 原字号、居中整段 |
+             * | 略超 | 按比例缩字号，最小 8sp，不换行 |
+             * | 仍超 | 截断成 `…(按键 · A)` —— 保住括号里的组件名 |
+             * | 方块极小 | 只在**拖动**时画字，平时只画色块 |
+             *
+             * ⚠️ 之前是"超宽就从左边对齐、让它自然溢出" —— 文字会**顶出方块**，
+             * 跟旁边那块的字叠在一起，两行都读不出来。
+             */
+            val label = item.label
+            val textWidth = rect.width() - 8f * density
+            val tooSmall = rect.width() < 44f * density || rect.height() < 22f * density
+            if (label.isNotEmpty() && textWidth > 0f && (!tooSmall || index == draggingIndex)) {
+                val baseSize = 12f * resources.displayMetrics.scaledDensity
+                val minSize = 8f * resources.displayMetrics.scaledDensity
+                val fitted = fitRegionLabel(label, textWidth, baseSize, minSize) { value, size ->
+                    labelPaint.textSize = size
+                    labelPaint.measureText(value)
+                }
+                if (fitted.text.isNotEmpty()) {
+                    labelPaint.textSize = fitted.textSize
+                    /*
+                     * ⚠️ **未绑定用红字**（与面板一致）:
+                     * 方块照样画着、按下去却没反应 —— 这是旧模型最坑人的地方，
+                     * 所以必须在屏幕上就能看出来。
+                     *
+                     * 触屏样式（kind == null）没有"未绑定"这个概念，保持白字。
+                     */
+                    labelPaint.color = if (item.kind != null && item.bindings.isEmpty()) {
+                        0xFFFF6B6B.toInt()
+                    } else {
+                        Color.WHITE
+                    }
+                    val w = labelPaint.measureText(fitted.text)
+                    canvas.drawText(
+                        fitted.text,
+                        rect.centerX() - w / 2f,
+                        rect.centerY() + fitted.textSize / 3f,
+                        labelPaint,
+                    )
+                }
+            }
+
+            /*
+             * **序号**（见 [ordinalPaint] 的说明）。
+             *
+             * ⚠️ 放在最后画:标题居中、序号在左上，正常不会重叠;
+             * 万一某个长标题把左上角也占了，序号压在上面才读得到。
+             *
+             * ⚠️ 字号跟着方块高度缩，但**最小 8sp** —— 再小就是糊的。
+             * 方块再小也画:名称可以不画，但"这是第几块"必须能看见。
+             */
+            if (showOrdinals) {
+                val ordinal = touchRegionOrdinal(index)
+                val ordinalSize = (11f * resources.displayMetrics.scaledDensity)
+                    .coerceAtMost(rect.height() * 0.45f)
+                    .coerceAtLeast(8f * resources.displayMetrics.scaledDensity)
+                ordinalPaint.textSize = ordinalSize
+                canvas.save()
+                canvas.clipRect(rect)
+                canvas.drawText(
+                    ordinal,
+                    rect.left + 4f * density,
+                    rect.top + 4f * density + ordinalSize,
+                    ordinalPaint,
+                )
+                canvas.restore()
             }
         }
 

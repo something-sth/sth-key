@@ -665,7 +665,7 @@ fun CustomLayoutEditorScreen(
     }
 
     /*
-     * 「监听的键」—— 只绑**物理键**。
+     * 「监听的键」—— 物理键 **+ 手柄摇杆八段式方向**（只对按键组件开放）。
      *
      * ============================================================
      * ⚠️⚠️ 触摸区域**不在这里**（返工后的结论）
@@ -679,14 +679,24 @@ fun CustomLayoutEditorScreen(
      * ⚠️ 新模型:**区域是配置级的独立实体**（见 `CustomTouchRegion`），
      * 在**配置编辑页的「触屏设置」**里加、并在那里绑定组件 ——
      * 所以这个对话框回到原来的样子:只管物理键。
+     *
+     * ⚠️ 2026-11-15 起多了"手柄摇杆八段式方向"（`allowStickDirections = true`）:
+     * 它没有 evdev 键码，是采集层从摇杆向量算出来的内部码，只对自定义组件有意义。
      */
     editingListenFor?.let { key ->
         MultiKeyPickerDialog(
             title = "选择「${key.label.ifBlank { "按键" }}」监听的键",
             hint = "可以绑定多个物理键，任意一个按下都会点亮这个组件。" +
-                "例如左右 Shift 是两个不同的键码，两个都选上才会都亮。",
+                "例如左右 Shift 是两个不同的键码，两个都选上才会都亮。" +
+                "\n\n也可以加「左/右摇杆（八段式）」——推方向时组件会亮，" +
+                "按键组件的 CPS 也一起统计。",
             initialCodes = key.inputKeyCodes,
             emptyHint = "当前未绑定任何按键（这个组件不会亮）",
+            /*
+             * ⚠️ 只有按键组件/文本组件允许摇杆八段式；摇杆组件的四向键位
+             * 与 Key 样式的键位映射都保持默认 false（见对话框参数说明）。
+             */
+            allowStickDirections = true,
             onDismiss = { editingListenFor = null },
             onConfirm = { codes ->
                 draft.replace(key.withInputKeyCodes(codes))
@@ -724,12 +734,16 @@ fun CustomLayoutEditorScreen(
          *
          * ⚠️ 新模型下区域是**配置级的独立实体**（见 `CustomTouchRegion`），
          * 在配置编辑页的「触屏设置」里加与绑定 —— 所以这里不再认识区域。
+         *
+         * ⚠️ 手柄摇杆方向**可以选**（`allowStickDirections = true`）:
+         * 它由采集层按八段式算出来，推方向时对应槽位的 CPS +1。
          */
         MultiKeyPickerDialog(
             title = "第 ${placeholderIndex + 1} 个 CPS 占位符统计的键",
             hint = buildString {
                 append("可以选多个键，它们的点击次数会**相加**。")
                 append("注意同一个键位映射下的键共享计数，不会重复计算。")
+                append("\n\n手柄摇杆方向也能选：推到那个方向时这一处 CPS 会 +1。")
                 if (placeholder != null) {
                     append("\n\n对应文字里的第 ${placeholderIndex + 1} 处「")
                     append(if (placeholder.isMode1) "(cps2)" else "(cps)")
@@ -738,6 +752,7 @@ fun CustomLayoutEditorScreen(
             },
             initialCodes = CustomLayout.cpsKeyCodesAt(text, placeholderIndex),
             emptyHint = "当前未选择任何按键（这一处 CPS 会一直是 0）",
+            allowStickDirections = true,
             onDismiss = { editingCpsKeysFor = null },
             onConfirm = { codes ->
                 draft.replace(text.withCpsKeyCodesAt(placeholderIndex, codes))

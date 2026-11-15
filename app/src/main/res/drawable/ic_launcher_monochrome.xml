@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated from design/app-icon (MinecraftAE / key). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <group
+        android:translateX="19.195"
+        android:translateY="67.052"
+        android:scaleX="0.034805"
+        android:scaleY="0.034805">
+        <path android:pathData="M500 0L375 0L375-125L500-125L500 0M375-125L250-125L250-250L375-250L375-125M375-375L250-375L250-500L375-500L375-375M500-500L375-500L375-625L500-625L500-500M125 0L0 0L0-875L125-875L125-375L250-375L250-250L125-250L125 0M1250 0L750 0L750-125L1250-125L1250 0M750-125L625-125L625-500L750-500L750-375L1125-375L1125-500L1250-500L1250-250L750-250L750-125M1125-500L750-500L750-625L1125-625L1125-500M1875 125L1500 125L1500 0L1875 0L1875 125M1500-250L1375-250L1375-625L1500-625L1500-250M2000 0L1875 0L1875-125L1500-125L1500-250L1875-250L1875-625L2000-625" android:fillColor="#FFFFFF"/>
+    </group>
+</vector>

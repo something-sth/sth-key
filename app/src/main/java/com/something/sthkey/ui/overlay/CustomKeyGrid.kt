@@ -46,6 +46,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import com.something.sthkey.capture.CpsCounter
 import com.something.sthkey.capture.MouseMotion
 import com.something.sthkey.capture.StickState
 import com.something.sthkey.core.log.AppLog
@@ -72,7 +73,6 @@ import com.something.sthkey.domain.custom.mouseJoystickStep
 import com.something.sthkey.domain.custom.StickSide
 import com.something.sthkey.domain.custom.TextComponent
 import com.something.sthkey.domain.custom.TextualComponent
-import com.something.sthkey.domain.custom.TouchDirection
 import com.something.sthkey.domain.media.CustomMediaStore
 import com.something.sthkey.domain.style.KeyBox
 import com.something.sthkey.domain.style.KeyLayout
@@ -687,6 +687,10 @@ data class TouchInputState(
      *
      * ⚠️ 是**组件** —— 一条绑定就是"某块区域 → 某个组件"，
      * 被按到时该组件就是要亮（或加 CPS）的那个。
+     *
+     * ⚠️ 调用方**已经按方向过滤过**（见 `touchPressedComponents`）:
+     * 一块轮盘区域绑了"前/后/左/右"四个组件时，这里只会有当前方向对应的那个。
+     * 所以渲染与 CPS 两处用的是**同一个判据**，不会出现"亮了但没计数"。
      */
     val pressedComponentIds: Set<String> = emptySet(),
     /**
@@ -696,79 +700,7 @@ data class TouchInputState(
      * **那块区域自己的中心**算（同一个手指、两块区域，方向可能相反）。
      */
     val moveByRegion: Map<String, Pair<Float, Float>> = emptyMap(),
-    /**
-     * 这一刻**被按到**的**区域** id。
-     *
-     * ⚠️ 与 [pressedComponentIds] 并存**不是冗余**:
-     *
-     * | 字段 | 谁用 | 为什么 |
-     * |---|---|---|
-     * | [pressedComponentIds] | 渲染（键帽亮） | 亮的是**组件** |
-     * | [pressedRegionIds] | CPS 计数 | ⚠️ 计数按**区域**记 —— 否则一块区域绑了两个组件时，两边的次数会互相污染 |
-     */
-    val pressedRegionIds: Set<String> = emptySet(),
-) {
-    /**
-     * **这块区域**当前是否指向某个方向（八段式）。
-     *
-     * ⚠️ 与 `TouchFrameTracker.Snapshot.pointsToward` **同一套判据**
-     * （只看该轴符号；斜向时两个方向都成立）。
-     *
-     * ⚠️ 找不到这块区域的向量（手指不在它里面）= 四个方向都不成立 ——
-     * 那正是"没按到就不该有方向"。
-     */
-    fun pointsToward(
-        regionId: String,
-        direction: TouchDirection,
-    ): Boolean {
-        val (x, y) = moveByRegion[regionId] ?: return false
-        /* ⚠️ 死区之内一律不算 —— 防"刚按下就四个方向全亮" */
-        if (kotlin.math.hypot(x, y) <= TOUCH_DIRECTION_DEAD_ZONE) return false
-        /* ⚠️ 与 TouchFrameTracker 共用同一套 8 向判定（45° 扇区） */
-        return TouchDirection.resolve(x, y) == direction
-    }
-}
-
-/**
- * **某个组件**这一刻是不是"被按到"（且方向对得上）。
- *
- * ============================================================
- * ⚠️⚠️ 判据从"区域"换成了"组件"（返工）
- * ============================================================
- * 旧模型（已撤掉）判的是"**这块区域**在不在 `pressedRegionIds` 里" ——
- * 那时区域挂在组件上，所以两者是同一个东西。
- *
- * ⚠️ 新模型下区域与组件是**两块独立数据**，由**绑定**连起来:
- * 一条绑定 = `(区域 id, 组件 id, 方向?)`。所以判据是:
- *
- * | 判据 | 少了会怎样 |
- * |---|---|
- * | 这个组件在 [TouchInputState.pressedComponentIds] 里 | 组件永远不会因触摸而亮 |
- * | 有方向时，**它绑的那块区域**朝那个方向 | ⚠️ 前后左右几个组件会**一起亮** |
- *
- * @param componentId 要判的组件
- * @param direction 这条绑定的方向；`null` = 按键区域（按到就算）
- * @param regionId 这条绑定绑的是**哪块区域**（方向要按它算）
- */
-internal fun TouchInputState?.isBoundPressed(
-    componentId: String,
-    direction: TouchDirection?,
-    regionId: String,
-): Boolean {
-    val snapshot = this ?: return false
-    if (componentId !in snapshot.pressedComponentIds) return false
-    val dir = direction ?: return true
-    return snapshot.pointsToward(regionId, dir)
-}
-
-/**
- * 方向判定的死区。
- *
- * ⚠️ 取一个**很小**的值:作用只是"手指刚按下去时的微小抖动不该让四个方向全亮"，
- * 而不是"用户要推很远才算方向"。真正的手感死区在摇杆自己的
- * `touchFeel.deadZone` 里（它决定向量本身是不是 0）。
- */
-private const val TOUCH_DIRECTION_DEAD_ZONE = 0.05f
+)
 
 /**
  * 画一个摇杆组件。
@@ -1927,7 +1859,15 @@ fun cpsDiagnosticReport(
             withPlaceholder.forEach { component ->
                 val template = CustomLayout.primaryTextOf(component)
                 val keyCodes = CustomLayout.cpsKeyCodesOf(component)
-                val slots = keyCodes.mapNotNull(slotMap::get).distinct()
+                /*
+                 * ⚠️ 用 `CpsCounter.cpsBucketOf`（与采集、与渲染**同一个函数**）:
+                 * 自定义 Key 的手柄/任意键码会记在 `@code:<码>`，
+                 * 只查 `codeToSlotMap` 的话这里会误报"翻译不出来、数值 0"——
+                 * 而屏幕上其实是正常的，诊断反而把人带偏。
+                 */
+                val slots = keyCodes
+                    .mapNotNull { CpsCounter.cpsBucketOf(config, it) }
+                    .distinct()
                 val value = slots.sumOf { snapshot[it] ?: 0 }
                 val resolved = CustomLayout.displayText(component, value)
 
@@ -1935,7 +1875,7 @@ fun cpsDiagnosticReport(
                     "  组件 ${component.id}：" +
                         "模板 \"$template\"" +
                         " → 键码 ${if (keyCodes.isEmpty()) "**无**（这个组件没有可用的按键映射）" else keyCodes.toString()}" +
-                        " → 槽位 ${if (slots.isEmpty()) "**翻译不出来**（这些键不在这份配置的键位映射里）" else slots.toString()}" +
+                        " → 槽位/桶 ${if (slots.isEmpty()) "**翻译不出来**（这些键不在这份配置的键位映射里）" else slots.toString()}" +
                         " → 数值 $value" +
                         " → 显示 \"$resolved\"",
                 )
