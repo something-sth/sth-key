@@ -89,12 +89,13 @@ class BottomBarStyleTest {
         /*
          * ⚠️ 和底栏样式同理:这几个 id 已经写进用户设备了。
          * 放在这里一起卡住，改的时候至少有一条测试会响。
+         *
+         * ⚠️ 2026-11-21 起「明暗」与「是否跟随壁纸」拆开了，
+         * `monet_*` 只剩**旧 id 迁移**（见 `AppearanceTest`），不再写出去。
          */
         assertEquals("system", AppearanceColorMode.SYSTEM.id)
         assertEquals("light", AppearanceColorMode.LIGHT.id)
         assertEquals("dark", AppearanceColorMode.DARK.id)
-        assertEquals("monet_system", AppearanceColorMode.MONET_SYSTEM.id)
-        assertEquals("monet_light", AppearanceColorMode.MONET_LIGHT.id)
-        assertEquals("monet_dark", AppearanceColorMode.MONET_DARK.id)
+        assertEquals("black", AppearanceColorMode.BLACK.id)
     }
 }

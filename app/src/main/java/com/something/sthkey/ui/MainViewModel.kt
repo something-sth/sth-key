@@ -32,6 +32,7 @@ import com.something.sthkey.domain.overlay.OverlayLayouts
 import com.something.sthkey.domain.ui.AppearanceColorMode
 import com.something.sthkey.domain.ui.AppearancePalette
 import com.something.sthkey.domain.ui.BottomBarStyle
+import com.something.sthkey.domain.ui.ColorSpecOption
 import com.something.sthkey.ui.EditMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -539,6 +540,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         prefs.appearancePalette = palette.id
         appearancePalette = palette
         AppLog.i(TAG, "外观：色彩风格 → ${palette.label}")
+    }
+
+    /** 色彩规格（2021 / 2025），见 `ColorSpecOption` */
+    var appearanceColorSpec by mutableStateOf(
+        ColorSpecOption.fromId(prefs.appearanceColorSpec),
+    )
+        private set
+
+    fun applyAppearanceColorSpec(spec: ColorSpecOption) {
+        prefs.appearanceColorSpec = spec.id
+        appearanceColorSpec = spec
+        AppLog.i(TAG, "外观：色彩规格 → ${spec.label}")
     }
 
     /* ============================================================

@@ -150,11 +150,27 @@ SukiSU 是"明暗 4 选 + 规格"，取色只体现在"主色块=跟随壁纸"�
 ⚠️ 迁移：旧 id `monet_system/light/dark` → `themeMode` 保持原明暗、`seedColor` 置 0（=跟随壁纸）。
 写成一次性迁移函数 + 单测，**不要**在读取处到处判旧 id。
 
+#### ✅ 已实施（2026-11-21，用户拍板"SukiSU 做法"）
+
+| 改动 | 内容 |
+|---|---|
+| `AppearanceColorMode` | 从 6 个值**砍到 4 个**：`system` / `light` / `dark` / **`black`**（AMOLED）；新增 `isDark(systemDark)`、`isBlack` |
+| 旧 id 迁移 | `fromId()` 内置 `LEGACY_IDS`：`monet_system→SYSTEM`、`monet_light→LIGHT`、`monet_dark→DARK`。**只读不写**，界面再也不会产生 `monet_*` |
+| 新增枚举 | `domain/ui/ColorSpecOption`（`spec_2025` / `spec_2021`，默认 2025） |
+| 偏好 | 新增 `appearanceColorSpec`（key `appearance_color_spec`）；`appearanceColorMode` 的 key 不变 |
+| `SeedColor` 语义 | 不变：`0` = 跟随壁纸。**现在色彩风格/规格对壁纸也生效**（见 §5.6 的"还剩一处没对齐"，已随本轮修掉） |
+
+> ⚠️ **默认观感变了**：以前「跟随系统」且没选主色 = 两套写死的蓝灰配色；
+> 现在是"种子 = 系统动态主色（Android 12+）"。也就是**新装用户默认跟随壁纸**，
+> 与 SukiSU 一致；Android 11 及以下回退到品牌色 `#3F5F90` 当种子，观感仍接近旧版。
+
 ### 5.4 颜色切换的过渡
 
 SukiSU 给整个 `ColorScheme` 的每个字段套了 `animateColorAsState(spring())`。
 我们照这个思路做一个 `ColorScheme.animateAsState()`，好处是：换主色/风格时，**页面里的颜色是渐变过去的**，不是硬切。
 （注意：这会带来每帧重组，但只在主题页/切换瞬间，可接受。）
+
+> ⏳ 这一条**本轮没做**：现在换色是硬切。等 P2/P3 收尾时再补（不影响功能）。
 
 ### 5.5 自定义主色（"之前用 Java 取色还原不出来"的那件事）
 
@@ -221,6 +237,41 @@ ColorPickerDialog(
 > ⏳ **还剩一处没对齐**（不影响本步）：**壁纸种子**。SukiSU 是"取系统动态主色当种子，再按所选风格重算"；
 > 我们现在是直接使用系统 dynamic scheme（风格被忽略）。这一处要等 §5.3 的明暗/取色模型拆开
 > （P1）一起改，否则先改会让现有 `monet_*` 用户颜色突变。
+>
+> ✅ **已在 §5.7（同一天）一并修掉**：现在壁纸也是"取 primary 当种子 → 按风格/规格重算"。
+
+### 5.7 主题页实施记录（2026-11-21）
+
+| 文件 | 改动 |
+|---|---|
+| `ui/theme/Theme.kt` | 重写：`SthKeyTheme(colorMode, seedColor, palette, colorSpec)`；新增 `rememberEffectiveSeed()`（用户色 → 系统动态主色 → 品牌色回退）；AMOLED 走 `black` 档；删掉两套写死配色 |
+| `ui/feature/settings/ThemeScreen.kt` | 整页重做：预览卡 / 主色块 / 明暗四连 / 风格+规格下拉 / 底栏（保留） |
+| `domain/ui/Appearance.kt` | 4 档明暗 + 旧 id 迁移（见 §5.3） |
+| `domain/ui/ColorSpecOption.kt` | 新增 |
+| `core/prefs/AppPrefs.kt` | 新增 `appearanceColorSpec` |
+| `ui/MainViewModel.kt` | 新增 `appearanceColorSpec` 状态 + setter |
+| `MainActivity.kt` | 传 `colorSpec`；状态栏明暗判断改用 `colorMode.isDark(...)` |
+| `test/.../AppearanceTest.kt` | 重写 10 例：4 档 id、空串/未知值回退、**旧 id 迁移**、`isDark`/`isBlack`、规格 id |
+| `test/.../BottomBarStyleTest.kt` | 同步 4 档 id（原来断言 6 个） |
+
+页面上的几个实现要点：
+
+- **预览卡**：按 `屏幕宽 / 屏幕高` 的比例画手机壳（宽 0.46），内部用**当前配色**画顶栏 / 主色块 / 信息卡 / 悬浮胶囊；
+- **主色块**：72dp，每块用**自己的种子**算一套配色，画"上半 primaryContainer / 下半 tertiaryContainer"的圆；
+  选中 `scale 1.08` + 对勾；第一块是「壁纸」（种子 0，走 `rememberEffectiveSeed`）；最后一块是「自定义」→ 打开我们自己的取色盘；
+- **明暗四连**：`SingleChoiceSegmentedButtonRow` + 4 个 `SegmentedButton`，只有图标（文字会挤成两行）；
+- **规格提示**：明确写出"2025 只有 4 种风格支持，其余自动回退"——避免用户以为选 2025 没生效。
+
+⚠️ 性能：一屏最多同时存在 **10 个配色方案**（预览 1 + 色块 9）。每个都由 `remember` 按
+`(seed, dark, palette, spec, amoled)` 缓存，**只在参数变化时重算**；首次进入实测无卡顿。
+
+⚠️ 本轮**没做**：
+- 换色时的 spring 渐变（§5.4）；
+- 页面过渡与预测性返回（§6，等 P2）；
+- 边缘滑动返回。
+
+验证：单测 **827** 用例全过（`AppearanceTest` 10 例）；debug/release 通过；
+APK 10,385,051 B；签名不变。
 
 ---
 
@@ -349,7 +400,7 @@ PredictiveBackHandler(enabled = navigator.stack.size > 1) { progress ->
 
 ## 10. 待拍板
 
-1. **明暗模式怎么合并**：按 §5.3 拆成 `themeMode(4) + seedColor + colorSpec`（推荐），还是保留现在的 6 个 `monet_*` 再叠 AMOLED？
-2. **"跟随壁纸"的位置**：放主色块第一位（SukiSU 做法，推荐），还是保留现在"取色模式"那一组按钮？
+1. ~~明暗模式怎么合并~~ → ✅ **已定（2026-11-21）：SukiSU 做法**，4 档明暗 + `seedColor` + `colorSpec`，见 §5.3 / §5.7。
+2. ~~"跟随壁纸"的位置~~ → ✅ **已定：主色块第一位**（SukiSU 做法），已实施。
 3. **过渡参数**：§6.1 那组（缩放 0.92 / 压暗 0.32 / 圆角 16dp / 300ms）先按这个来？
 4. **要不要"滑动返回"**（从屏幕边缘横滑关闭二级页）：SukiSU 有，我们做不做？

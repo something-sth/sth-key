@@ -698,11 +698,18 @@ class AppPrefs private constructor(context: Context) {
             prefs.edit().putInt(KEY_SEED_COLOR, value).apply()
         }
 
-    /** 色彩风格 id，见 `domain/ui/AppearancePalette`。⚠️ 只有设了主色时它才生效 */
+    /** 色彩风格 id，见 `domain/ui/AppearancePalette`。⚠️ 现在**总是**生效（跟随壁纸时也有种子） */
     var appearancePalette: String
         get() = prefs.getString(KEY_APPEARANCE_PALETTE, null).orEmpty()
         set(value) {
             prefs.edit().putString(KEY_APPEARANCE_PALETTE, value).apply()
+        }
+
+    /** 色彩规格 id，见 `domain/ui/ColorSpecOption`（默认 2025，与 SukiSU 一致） */
+    var appearanceColorSpec: String
+        get() = prefs.getString(KEY_APPEARANCE_COLOR_SPEC, null).orEmpty()
+        set(value) {
+            prefs.edit().putString(KEY_APPEARANCE_COLOR_SPEC, value).apply()
         }
 
     /**
@@ -791,6 +798,7 @@ class AppPrefs private constructor(context: Context) {
     private const val KEY_CONFIG_GROUPS = "config_groups"
     private const val KEY_SEED_COLOR = "seed_color"
     private const val KEY_APPEARANCE_PALETTE = "appearance_palette"
+    private const val KEY_APPEARANCE_COLOR_SPEC = "appearance_color_spec"
 
         /**
          * 悬浮窗尚未被拖动过的位置标记。

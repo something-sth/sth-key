@@ -210,6 +210,7 @@ class MainActivity : ComponentActivity() {
                 colorMode = appViewModel.appearanceColorMode,
                 seedColor = appViewModel.seedColor,
                 palette = appViewModel.appearancePalette,
+                colorSpec = appViewModel.appearanceColorSpec,
             ) {
                 /*
                  * ⚠️ **全局**的导出/导入进度对话框。
@@ -304,17 +305,8 @@ class MainActivity : ComponentActivity() {
                  * `isSystemInDarkTheme()` —— 那是 `@Composable`，放进普通分支表达式会编译不过。
                  */
                 val systemDarkNow = androidx.compose.foundation.isSystemInDarkTheme()
-                val darkThemeNow = when (appViewModel.appearanceColorMode) {
-                    com.something.sthkey.domain.ui.AppearanceColorMode.DARK,
-                    com.something.sthkey.domain.ui.AppearanceColorMode.MONET_DARK,
-                    -> true
-
-                    com.something.sthkey.domain.ui.AppearanceColorMode.LIGHT,
-                    com.something.sthkey.domain.ui.AppearanceColorMode.MONET_LIGHT,
-                    -> false
-
-                    else -> systemDarkNow
-                }
+                /* ⚠️ 明暗判断收敛到枚举本身（含「纯黑」也是深色），别再在这里散着一份 when */
+                val darkThemeNow = appViewModel.appearanceColorMode.isDark(systemDarkNow)
                 LaunchedEffect(window, darkThemeNow) {
                     androidx.core.view.WindowInsetsControllerCompat(
                         window, window.decorView,
