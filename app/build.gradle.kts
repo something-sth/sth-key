@@ -248,6 +248,15 @@ dependencies {
 
 
     implementation(libs.material.color.utilities)
+
+    /*
+     * 动态取色：种子色 → 整套 Material 3 配色。
+     *
+     * ⚠️ 与 SukiSU 用的是**同一个库、同一个版本**（5.0.1）——这样两边颜色逐位一致，
+     *    不用自己复刻 materialKolor 的每个参数（规格回退 / AMOLED / fixed 角色）。
+     * ⚠️ 它依赖 kotlin-stdlib 2.4.10，所以本项目 Kotlin 必须 ≥ 2.4（见 docs/kotlin-version.md）。
+     */
+    implementation(libs.material.kolor)
     implementation(libs.shizuku.api)
     implementation(libs.shizuku.provider)
 

@@ -11,9 +11,14 @@ navigation = "2.7.7"
 composeBom = "2026.08.00"
 shizuku = "13.1.5"
 materialColorUtilities = "4.0.5"
+# 动态取色（种子色 → 整套 Material 3 配色），与 SukiSU 用的是同一个库、同一个版本。
+# ⚠️ 5.0.1 依赖 kotlin-stdlib 2.4.10 → 本项目 Kotlin 必须 ≥ 2.4（见 docs/kotlin-version.md）。
+#    2026-11-15 就是因为当时 Kotlin 2.2 读不了它的元数据才退回 material-color-utilities。
+materialKolor = "5.0.1"
 
 [libraries]
 material-color-utilities = { module = "com.materialkolor:material-color-utilities-android", version.ref = "materialColorUtilities" }
+material-kolor = { module = "com.materialkolor:material-kolor", version.ref = "materialKolor" }
 # --- 基础 ---
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 

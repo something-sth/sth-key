@@ -203,6 +203,25 @@ ColorPickerDialog(
 > 另外：主题页色块的"半圆双色"不是算法，只是画 `primaryContainer` / `tertiaryContainer`
 > 两个角色色，随便还原。
 
+#### ✅ 已按 A 实施（2026-11-21）
+
+| 项 | 结果 |
+|---|---|
+| 依赖 | 新增 `com.materialkolor:material-kolor:5.0.1`（与 SukiSU 同版本、Apache-2.0） |
+| 引擎 | `SeedColor.kt` 的 `buildSeededColorScheme()` 改为调用 `dynamicColorScheme(...)`，仍是**纯函数**（单测可直接跑） |
+| 规格回退 | 新增 `PaletteStyle.supportsSpec2025()` / `SpecVersion.effectiveFor()`，与 SukiSU 同名同逻辑 |
+| AMOLED | materialKolor 只刷了 surface / surfaceContainer 系列，**没刷 `surfaceDim`**；按 SukiSU 的 `amoledBackground()` 补上 |
+| 测试 | 新增 `SeedColorTest` **10 例**：风格映射、规格回退（5 种）、2025/2021 差异（4 种）、AMOLED、纯函数稳定性、fixed 角色、钉住一组标准 ARGB |
+| 结果 | 单测 **823** 用例全过；release 出包；APK 10,369,021 B（+125 KB，materialKolor 本身） |
+
+> ⚠️ **踩到的坑**：`ColorScheme` 有可读的 `toString()`，但**`equals` 不是按颜色比较**——
+> 两个颜色完全相同的 scheme 用 `assertEquals` 也会失败。单测里改成"反射取所有返回 `long`
+> 的 getter，逐字段比 ARGB"（见 `SeedColorTest.assertSameColors`）。以后写主题相关测试别再踩。
+
+> ⏳ **还剩一处没对齐**（不影响本步）：**壁纸种子**。SukiSU 是"取系统动态主色当种子，再按所选风格重算"；
+> 我们现在是直接使用系统 dynamic scheme（风格被忽略）。这一处要等 §5.3 的明暗/取色模型拆开
+> （P1）一起改，否则先改会让现有 `monet_*` 用户颜色突变。
+
 ---
 
 ## 6. 方案 B：页面过渡 + 预测性返回
