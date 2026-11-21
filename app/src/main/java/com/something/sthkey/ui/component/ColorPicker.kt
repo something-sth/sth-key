@@ -45,8 +45,14 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -100,8 +106,6 @@ fun ColorPickerDialog(
     onConfirm: (Long) -> Unit,
     alphaPercent: Int = 100,
 ) {
-    val focusManager = LocalFocusManager.current
-
     var rgb by remember { mutableStateOf(initialRgb and 0xFFFFFF) }
     var hsv by remember { mutableStateOf(rgbToHsv(initialRgb and 0xFFFFFF)) }
     var text by remember { mutableStateOf(formatHexDigits(rgb)) }
@@ -132,6 +136,23 @@ fun ColorPickerDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
+            /*
+             * ⚠️⚠️ `LocalFocusManager` 必须在**对话框内容里**取。
+             *
+             * 在 `ColorPickerDialog(...)` 函数体最外层取到的是**宿主 Activity** 那一层的
+             * FocusManager；而 AlertDialog 的内容活在**另一个窗口**里，有自己的焦点归属。
+             * 拿外层的调 `clearFocus()` 对这个输入框完全无效 ——
+             * 表现就是"按回车/完成，光标还在闪、焦点没取消"。
+             */
+            val focusManager = LocalFocusManager.current
+            val keyboard = LocalSoftwareKeyboardController.current
+
+            fun dismissInput() {
+                /* 两件事都要做：收键盘、清焦点（只做一件都会留下"还在编辑"的观感） */
+                keyboard?.hide()
+                focusManager.clearFocus(force = true)
+            }
+
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -233,9 +254,24 @@ fun ColorPickerDialog(
                             keyboardType = KeyboardType.Ascii,
                             imeAction = ImeAction.Done,
                         ),
-                        // 对话框里「完成」只收键盘；提交只认「保存」
-                        keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
-                        modifier = Modifier.weight(1f),
+                        // 「完成」只收键盘；提交只认「保存」
+                        keyboardActions = KeyboardActions(onDone = { dismissInput() }),
+                        modifier = Modifier
+                            .weight(1f)
+                            /*
+                             * ⚠️ 实体键盘的 Enter 不会走 IME 的 onDone（那只管软键盘），
+                             * 所以必须自己拦一下，否则"按回车不取消焦点"。
+                             * 软键盘仍走上面的 KeyboardActions。
+                             */
+                            .onPreviewKeyEvent { event ->
+                                val isEnter = event.key == Key.Enter || event.key == Key.NumPadEnter
+                                if (isEnter && event.type == KeyEventType.KeyDown) {
+                                    dismissInput()
+                                    true
+                                } else {
+                                    false
+                                }
+                            },
                     )
                 }
 
@@ -498,9 +534,9 @@ private fun applyZoneTouch(
 /**
  * 一条细的渐变滑杆（H / S / V）。
  *
- * - 轨道 14dp（第一版 24dp 太粗）；
+ * - 轨道只有 **6dp**，比圆球（直径 16dp）明显细；触摸区仍是 28dp 高，点得到；
  * - 拇指是**白描边 + 中间填当前颜色**（"动态取色"），不是实心白；
- * - 映射时扣掉两端圆角半径，否则拖到最左/最右会和拇指位置对不上。
+ * - 映射时扣掉两端**拇指半径**（不是轨道半高），否则拖到最左/最右会和球位置对不上。
  */
 @Composable
 private fun HsvSlider(
@@ -529,16 +565,21 @@ private fun HsvSlider(
         Box(
             modifier = Modifier
                 .weight(1f)
-                .height(14.dp)
+                /* 触摸区留 28dp，但轨道本身只有 6dp —— 看得细、点得到 */
+                .height(28.dp)
                 .pointerInput(Unit) {
                     detectTapGestures { pos ->
-                        latestOnChange(fractionAt(pos.x, size.width.toFloat(), size.height.toFloat()))
+                        latestOnChange(
+                            fractionAt(pos.x, size.width.toFloat(), THUMB_RADIUS.toPx()),
+                        )
                     }
                 }
                 .pointerInput(Unit) {
                     detectDragGestures(
                         onDragStart = { pos ->
-                            latestOnChange(fractionAt(pos.x, size.width.toFloat(), size.height.toFloat()))
+                            latestOnChange(
+                                fractionAt(pos.x, size.width.toFloat(), THUMB_RADIUS.toPx()),
+                            )
                         },
                         onDrag = { change, _ ->
                             change.consume()
@@ -546,7 +587,7 @@ private fun HsvSlider(
                                 fractionAt(
                                     change.position.x,
                                     size.width.toFloat(),
-                                    size.height.toFloat(),
+                                    THUMB_RADIUS.toPx(),
                                 ),
                             )
                         },
@@ -554,26 +595,32 @@ private fun HsvSlider(
                 },
         ) {
             Canvas(modifier = Modifier.fillMaxSize()) {
-                val h = size.height
-                val r = h / 2f
+                val cy = size.height / 2f
+                val trackHeight = TRACK_HEIGHT.toPx()
+                val thumbRadius = THUMB_RADIUS.toPx()
+
+                /* 轨道：6dp，比圆球（直径 16dp）明显细 */
                 drawRoundRect(
                     brush = brush,
-                    cornerRadius = CornerRadius(r, r),
+                    topLeft = Offset(0f, cy - trackHeight / 2f),
+                    size = Size(size.width, trackHeight),
+                    cornerRadius = CornerRadius(trackHeight / 2f, trackHeight / 2f),
                 )
-                val x = r + latestFraction.coerceIn(0f, 1f) * (size.width - 2f * r)
-                /* 拇指比轨道略大，白描边 + 中间当前颜色 */
-                val thumbRadius = r + 2.5.dp.toPx()
+
+                val x = thumbRadius +
+                    latestFraction.coerceIn(0f, 1f) * (size.width - 2f * thumbRadius)
+
                 drawCircle(
                     color = Color.Black.copy(alpha = 0.18f),
                     radius = thumbRadius + 1.dp.toPx(),
-                    center = Offset(x, r),
+                    center = Offset(x, cy),
                     style = Stroke(width = 1.5.dp.toPx()),
                 )
-                drawCircle(color = thumbColor, radius = thumbRadius, center = Offset(x, r))
+                drawCircle(color = thumbColor, radius = thumbRadius, center = Offset(x, cy))
                 drawCircle(
                     color = Color.White,
                     radius = thumbRadius,
-                    center = Offset(x, r),
+                    center = Offset(x, cy),
                     style = Stroke(width = 2.dp.toPx()),
                 )
             }
@@ -589,12 +636,17 @@ private fun HsvSlider(
     }
 }
 
-/** 像素 x → 0..1（扣掉两端圆角半径） */
-private fun fractionAt(x: Float, width: Float, height: Float): Float {
-    val r = height / 2f
-    val usable = (width - 2f * r).coerceAtLeast(1f)
-    return ((x - r) / usable).coerceIn(0f, 1f)
+/** 像素 x → 0..1（扣掉两端拇指半径，保证球贴边时不越界） */
+private fun fractionAt(x: Float, width: Float, edgeInset: Float): Float {
+    val usable = (width - 2f * edgeInset).coerceAtLeast(1f)
+    return ((x - edgeInset) / usable).coerceIn(0f, 1f)
 }
+
+/** 滑杆轨道高度（比圆球细很多，见 [THUMB_RADIUS]） */
+private val TRACK_HEIGHT = 6.dp
+
+/** 滑杆圆球半径（直径 16dp） */
+private val THUMB_RADIUS = 8.dp
 
 // ---------------------------------------------------------------- 预览与输入
 

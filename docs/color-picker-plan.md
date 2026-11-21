@@ -667,3 +667,28 @@ compose-color-picker 是"方板 + alpha"——**没有库提供"色环 + 内嵌�
 验证：88 个测试类 / **813 个用例**（`ColorPickerGeometryTest` 增至 7 例）；
 debug/release 通过；APK 10,231,118 B；签名证书不变。
 
+---
+
+### 14.9 第三轮小修（2026-11-21 19:00）：滑杆更细 + Enter 收不起焦点
+
+| 反馈 | 根因 | 改法 |
+|---|---|---|
+| 滑杆还是偏粗，要比圆球细 | 轨道 14dp、球直径 19dp，比例只差 5dp，看着像"一样粗" | 轨道 **6dp**、球直径 **16dp**；触摸区保留 28dp 高（点得到），轨道画在中间。`fractionAt()` 的边界从"轨道半高"改成"球半径"，否则球会跑出轨道两端 |
+| 回车/「完成」不取消焦点（**软键盘也一样**） | ⚠️ `LocalFocusManager.current` 在 `AlertDialog` **外面**取，拿到的是**宿主 Activity** 那一层的 FocusManager；对话框内容在**另一个窗口**、有自己的焦点归属，拿外层的 `clearFocus()` 对这个输入框无效 | 把 `LocalFocusManager.current` 移到对话框内容的 `text = { }` 里取；同时 `keyboard?.hide()` 收键盘；实体键盘 Enter 另用 `onPreviewKeyEvent` 拦（IME 的 `onDone` 只管软键盘） |
+
+> ⚠️ **这是一个可以复用到全项目的坑**：任何"在 `AlertDialog` 外面读
+> `LocalFocusManager` / `LocalSoftwareKeyboardController`，再传进对话框内容"的写法，
+> 在对话框里都是无效的。本项目其它带输入框的对话框（如 `NumberEditorDialog`）
+> 也这么写，但它们的 `onDone` 会顺带 `onDismiss()` 把对话框关掉，
+> 所以看不出问题 —— 只有"只收键盘、不关对话框"的场景才会暴露。
+
+滑杆三个可调值（都在 `ColorPicker.kt` 底部）：
+
+```kotlin
+private val TRACK_HEIGHT = 6.dp    // 轨道粗细
+private val THUMB_RADIUS = 8.dp    // 球半径（直径 16dp）
+// 触摸区高度：HsvSlider 里的 .height(28.dp)
+```
+
+验证：813 用例全过；debug/release 通过；APK 10,233,345 B；签名不变。
+
