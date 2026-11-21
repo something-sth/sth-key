@@ -161,6 +161,9 @@ internal fun LazyListScope.joystickStyleSections(
                 label = "摇杆颜色",
                 value = js.color.toLong() and 0xFFFFFFFFL,
                 alphaPercent = (js.opacity * 100f).roundToInt(),
+                onAlphaChange = { v ->
+                    applyChange { it.copy(joystick = it.joystick.copy(opacity = v / 100f)) }
+                },
                 onValueChange = { v ->
                     applyChange { it.copy(joystick = it.joystick.copy(color = v.toInt())) }
                 },
@@ -182,6 +185,9 @@ internal fun LazyListScope.joystickStyleSections(
                 label = "描边颜色",
                 value = js.strokeColor.toLong() and 0xFFFFFFFFL,
                 alphaPercent = (js.strokeOpacity * 100f).roundToInt(),
+                onAlphaChange = { v ->
+                    applyChange { it.copy(joystick = it.joystick.copy(strokeOpacity = v / 100f)) }
+                },
                 onValueChange = { v ->
                     applyChange { it.copy(joystick = it.joystick.copy(strokeColor = v.toInt())) }
                 },
@@ -232,6 +238,9 @@ internal fun LazyListScope.joystickStyleSections(
                 label = "内圆颜色",
                 value = js.ringColor.toLong() and 0xFFFFFFFFL,
                 alphaPercent = (js.ringOpacity * 100f).roundToInt(),
+                onAlphaChange = { v ->
+                    applyChange { it.copy(joystick = it.joystick.copy(ringOpacity = v / 100f)) }
+                },
                 onValueChange = { v ->
                     applyChange { it.copy(joystick = it.joystick.copy(ringColor = v.toInt())) }
                 },
@@ -327,6 +336,9 @@ internal fun LazyListScope.joystickStyleSections(
                 label = "摇杆帽颜色",
                 value = js.knobColor.toLong() and 0xFFFFFFFFL,
                 alphaPercent = (js.knobOpacity * 100f).roundToInt(),
+                onAlphaChange = { v ->
+                    applyChange { it.copy(joystick = it.joystick.copy(knobOpacity = v / 100f)) }
+                },
                 onValueChange = { v ->
                     applyChange { it.copy(joystick = it.joystick.copy(knobColor = v.toInt())) }
                 },
@@ -352,6 +364,11 @@ internal fun LazyListScope.joystickStyleSections(
                 label = "摇杆帽描边颜色",
                 value = js.knobStrokeColor.toLong() and 0xFFFFFFFFL,
                 alphaPercent = (js.knobStrokeOpacity * 100f).roundToInt(),
+                onAlphaChange = { v ->
+                    applyChange {
+                        it.copy(joystick = it.joystick.copy(knobStrokeOpacity = v / 100f))
+                    }
+                },
                 onValueChange = { v ->
                     applyChange { it.copy(joystick = it.joystick.copy(knobStrokeColor = v.toInt())) }
                 },

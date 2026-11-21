@@ -970,24 +970,28 @@ fun ConfigEditorScreen(
                     value = editable.colors.keyUp,
                     alphaPercent = editable.opacity.keyUp,
                     onValueChange = { color -> applyChange { it.copy(colors = it.colors.copy(keyUp = color)) } },
+                    onAlphaChange = { v -> applyChange { it.copy(opacity = it.opacity.copy(keyUp = v)) } },
                 )
                 HexColorRow(
                     label = "键帽（按下）",
                     value = editable.colors.keyDown,
                     alphaPercent = editable.opacity.keyDown,
                     onValueChange = { color -> applyChange { it.copy(colors = it.colors.copy(keyDown = color)) } },
+                    onAlphaChange = { v -> applyChange { it.copy(opacity = it.opacity.copy(keyDown = v)) } },
                 )
                 HexColorRow(
                     label = "文字（未按下）",
                     value = editable.colors.textUp,
                     alphaPercent = editable.opacity.textUp,
                     onValueChange = { color -> applyChange { it.copy(colors = it.colors.copy(textUp = color)) } },
+                    onAlphaChange = { v -> applyChange { it.copy(opacity = it.opacity.copy(textUp = v)) } },
                 )
                 HexColorRow(
                     label = "文字（按下）",
                     value = editable.colors.textDown,
                     alphaPercent = editable.opacity.textDown,
                     onValueChange = { color -> applyChange { it.copy(colors = it.colors.copy(textDown = color)) } },
+                    onAlphaChange = { v -> applyChange { it.copy(opacity = it.opacity.copy(textDown = v)) } },
                 )
 
                 if (editable.outline.enabled) {
@@ -998,6 +1002,9 @@ fun ConfigEditorScreen(
                         onValueChange = { color ->
                             applyChange { it.copy(colors = it.colors.copy(outlineUp = color)) }
                         },
+                        onAlphaChange = { v ->
+                            applyChange { it.copy(opacity = it.opacity.copy(outlineUp = v)) }
+                        },
                     )
                     HexColorRow(
                         label = "描边（按下）",
@@ -1005,6 +1012,9 @@ fun ConfigEditorScreen(
                         alphaPercent = editable.opacity.outlineDown,
                         onValueChange = { color ->
                             applyChange { it.copy(colors = it.colors.copy(outlineDown = color)) }
+                        },
+                        onAlphaChange = { v ->
+                            applyChange { it.copy(opacity = it.opacity.copy(outlineDown = v)) }
                         },
                     )
                 }
@@ -1017,6 +1027,9 @@ fun ConfigEditorScreen(
                         onValueChange = { color ->
                             applyChange { it.copy(colors = it.colors.copy(shadowUp = color)) }
                         },
+                        onAlphaChange = { v ->
+                            applyChange { it.copy(opacity = it.opacity.copy(shadowUp = v)) }
+                        },
                     )
                     HexColorRow(
                         label = "文字阴影（按下）",
@@ -1024,6 +1037,9 @@ fun ConfigEditorScreen(
                         alphaPercent = editable.opacity.shadowDown,
                         onValueChange = { color ->
                             applyChange { it.copy(colors = it.colors.copy(shadowDown = color)) }
+                        },
+                        onAlphaChange = { v ->
+                            applyChange { it.copy(opacity = it.opacity.copy(shadowDown = v)) }
                         },
                     )
                 }

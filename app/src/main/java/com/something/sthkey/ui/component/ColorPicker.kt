@@ -103,11 +103,21 @@ fun ColorPickerDialog(
     title: String,
     initialRgb: Long,
     onDismiss: () -> Unit,
-    onConfirm: (Long) -> Unit,
+    onConfirm: (rgb: Long, alphaPercent: Int) -> Unit,
     alphaPercent: Int = 100,
+    /**
+     * A 滑杆是否可编辑。
+     *
+     * ⚠️ 只在"这个颜色有配对的 opacity 字段"时为 true（键盘/自定义/摇杆）。
+     * 媒体组件的染色色、描边色没有 alpha，传 false —— 那种情况不显示 A 滑杆，
+     * 而不是显示一个拖了没用的滑杆。
+     */
+    alphaEditable: Boolean = false,
 ) {
     var rgb by remember { mutableStateOf(initialRgb and 0xFFFFFF) }
     var hsv by remember { mutableStateOf(rgbToHsv(initialRgb and 0xFFFFFF)) }
+    /* A 是**草稿**：与颜色一样，只有点「保存」才提交；取消一起回滚 */
+    var alpha by remember { mutableStateOf(alphaPercent.coerceIn(0, 100)) }
     var text by remember { mutableStateOf(formatHexDigits(rgb)) }
     var error by remember { mutableStateOf(false) }
 
@@ -218,6 +228,29 @@ fun ColorPickerDialog(
                     onFractionChange = { applyHsv(hsv.copy(value = it)) },
                 )
 
+                if (alphaEditable) {
+                    /*
+                     * A：**不是颜色的 alpha**，写回的是各分区那个「不透明度」字段。
+                     * 轨道垫棋盘格，一眼能看出这是"透明"不是"颜色"。
+                     */
+                    HsvSlider(
+                        label = "A",
+                        fraction = alpha / 100f,
+                        valueText = "$alpha%",
+                        brush = Brush.horizontalGradient(
+                            listOf(
+                                Color.hsv(hsv.hue, hsv.saturation, hsv.value).copy(alpha = 0f),
+                                Color.hsv(hsv.hue, hsv.saturation, hsv.value),
+                            ),
+                        ),
+                        thumbColor = Color.hsv(hsv.hue, hsv.saturation, hsv.value),
+                        checkerboard = true,
+                        onFractionChange = {
+                            alpha = (it.coerceIn(0f, 1f) * 100f).roundToInt().coerceIn(0, 100)
+                        },
+                    )
+                }
+
                 Spacer(modifier = Modifier.height(2.dp))
 
                 Row(
@@ -226,7 +259,7 @@ fun ColorPickerDialog(
                 ) {
                     ColorPreview(
                         rgb = parsed ?: rgb,
-                        alphaPercent = alphaPercent,
+                        alphaPercent = alpha,
                         modifier = Modifier.size(40.dp),
                     )
 
@@ -276,8 +309,13 @@ fun ColorPickerDialog(
                 }
 
                 Text(
-                    text = "不透明度在「不透明度」分区单独调整（当前 $alphaPercent%），" +
-                        "这里的预览已经按它合成。",
+                    text = if (alphaEditable) {
+                        "A 与下方「不透明度」分区是**同一个值**，点「保存」才生效；" +
+                            "预览已按它合成。"
+                    } else {
+                        "不透明度在「不透明度」分区单独调整（当前 $alphaPercent%），" +
+                            "这里的预览已经按它合成。"
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -285,7 +323,7 @@ fun ColorPickerDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = { parsed?.let(onConfirm) },
+                onClick = { parsed?.let { onConfirm(it, alpha) } },
                 enabled = parsed != null,
             ) {
                 Text("保存")
@@ -532,10 +570,11 @@ private fun applyZoneTouch(
 // ---------------------------------------------------------------- 滑杆
 
 /**
- * 一条细的渐变滑杆（H / S / V）。
+ * 一条细的渐变滑杆（H / S / V / A）。
  *
  * - 轨道只有 **6dp**，比圆球（直径 16dp）明显细；触摸区仍是 28dp 高，点得到；
  * - 拇指是**白描边 + 中间填当前颜色**（"动态取色"），不是实心白；
+ * - [checkerboard] = true 时（A 滑杆）轨道与拇指都垫棋盘格，这样"透明"看得出来；
  * - 映射时扣掉两端**拇指半径**（不是轨道半高），否则拖到最左/最右会和球位置对不上。
  */
 @Composable
@@ -547,6 +586,7 @@ private fun HsvSlider(
     thumbColor: Color,
     onFractionChange: (Float) -> Unit,
     modifier: Modifier = Modifier,
+    checkerboard: Boolean = false,
 ) {
     val latestFraction by rememberUpdatedState(fraction)
     val latestOnChange by rememberUpdatedState(onFractionChange)
@@ -598,29 +638,56 @@ private fun HsvSlider(
                 val cy = size.height / 2f
                 val trackHeight = TRACK_HEIGHT.toPx()
                 val thumbRadius = THUMB_RADIUS.toPx()
+                val trackTop = cy - trackHeight / 2f
+                val trackSize = Size(size.width, trackHeight)
 
-                /* 轨道：6dp，比圆球（直径 16dp）明显细 */
-                drawRoundRect(
-                    brush = brush,
-                    topLeft = Offset(0f, cy - trackHeight / 2f),
-                    size = Size(size.width, trackHeight),
-                    cornerRadius = CornerRadius(trackHeight / 2f, trackHeight / 2f),
-                )
+                /* 轨道：6dp，比圆球（直径 16dp）明显细；A 滑杆在下面垫棋盘格 */
+                val trackPath = Path().apply {
+                    addRoundRect(
+                        RoundRect(
+                            Rect(0f, trackTop, size.width, trackTop + trackHeight),
+                            CornerRadius(trackHeight / 2f, trackHeight / 2f),
+                        ),
+                    )
+                }
+                clipPath(trackPath) {
+                    if (checkerboard) {
+                        drawRect(Color.White, topLeft = Offset(0f, trackTop), size = trackSize)
+                        drawCheckerboard(
+                            topLeft = Offset(0f, trackTop),
+                            size = trackSize,
+                            cell = trackHeight / 2f,
+                            color = CHECKER_DARK,
+                        )
+                    }
+                    drawRect(brush = brush, topLeft = Offset(0f, trackTop), size = trackSize)
+                }
 
                 val x = thumbRadius +
                     latestFraction.coerceIn(0f, 1f) * (size.width - 2f * thumbRadius)
+                val thumbCenter = Offset(x, cy)
 
                 drawCircle(
                     color = Color.Black.copy(alpha = 0.18f),
                     radius = thumbRadius + 1.dp.toPx(),
-                    center = Offset(x, cy),
+                    center = thumbCenter,
                     style = Stroke(width = 1.5.dp.toPx()),
                 )
-                drawCircle(color = thumbColor, radius = thumbRadius, center = Offset(x, cy))
+                if (checkerboard) {
+                    /* A 的球里也垫棋盘格 + 当前透明度，直接看出"有多透" */
+                    drawAlphaThumb(
+                        center = thumbCenter,
+                        radius = thumbRadius,
+                        color = thumbColor,
+                        alpha = latestFraction,
+                    )
+                } else {
+                    drawCircle(color = thumbColor, radius = thumbRadius, center = thumbCenter)
+                }
                 drawCircle(
                     color = Color.White,
                     radius = thumbRadius,
-                    center = Offset(x, cy),
+                    center = thumbCenter,
                     style = Stroke(width = 2.dp.toPx()),
                 )
             }
@@ -648,6 +715,72 @@ private val TRACK_HEIGHT = 6.dp
 /** 滑杆圆球半径（直径 16dp） */
 private val THUMB_RADIUS = 8.dp
 
+/** 棋盘格的深色格（半透明，深浅主题下都能看出格子） */
+private val CHECKER_DARK = Color.Black.copy(alpha = 0.16f)
+
+/**
+ * 在给定矩形里画棋盘格。
+ *
+ * 用于"需要让人看出透明"的地方：A 滑杆的轨道/圆球、颜色预览块。
+ * 不垫棋盘的话，半透明色只会跟背景混成一个更浅的颜色，看不出"透"。
+ */
+private fun DrawScope.drawCheckerboard(
+    topLeft: Offset,
+    size: Size,
+    cell: Float,
+    color: Color,
+) {
+    val cellPx = cell.coerceAtLeast(1f)
+    var y = topLeft.y
+    var row = 0
+    while (y < topLeft.y + size.height) {
+        var x = topLeft.x
+        var col = 0
+        while (x < topLeft.x + size.width) {
+            if ((row + col) % 2 == 1) {
+                drawRect(
+                    color = color,
+                    topLeft = Offset(x, y),
+                    size = Size(
+                        width = min(cellPx, topLeft.x + size.width - x),
+                        height = min(cellPx, topLeft.y + size.height - y),
+                    ),
+                )
+            }
+            x += cellPx
+            col++
+        }
+        y += cellPx
+        row++
+    }
+}
+
+/** A 滑杆的圆球：棋盘格 + 当前透明度叠色，再套白描边（描边由调用方画） */
+private fun DrawScope.drawAlphaThumb(
+    center: Offset,
+    radius: Float,
+    color: Color,
+    alpha: Float,
+) {
+    val topLeft = Offset(center.x - radius, center.y - radius)
+    val side = radius * 2f
+    val circle = Path().apply { addOval(Rect(topLeft, Size(side, side))) }
+    clipPath(circle) {
+        drawRect(Color.White, topLeft = topLeft, size = Size(side, side))
+        drawCheckerboard(
+            topLeft = topLeft,
+            size = Size(side, side),
+            cell = radius / 2f,
+            color = CHECKER_DARK,
+        )
+        drawRect(
+            color = color.copy(alpha = alpha.coerceIn(0f, 1f)),
+            topLeft = topLeft,
+            size = Size(side, side),
+        )
+    }
+}
+
 // ---------------------------------------------------------------- 预览与输入
 
 /** 预览色块：棋盘底 + 按真实不透明度叠色（否则半透明色会被背景冲淡成"浅色"） */
@@ -667,29 +800,12 @@ private fun ColorPreview(
             .background(light),
     ) {
         Canvas(modifier = Modifier.matchParentSize()) {
-            val cell = 8.dp.toPx().coerceAtLeast(1f)
-            var y = 0f
-            var row = 0
-            while (y < size.height) {
-                var x = 0f
-                var col = 0
-                while (x < size.width) {
-                    if ((row + col) % 2 == 1) {
-                        drawRect(
-                            color = dark,
-                            topLeft = Offset(x, y),
-                            size = Size(
-                                width = minOf(cell, size.width - x),
-                                height = minOf(cell, size.height - y),
-                            ),
-                        )
-                    }
-                    x += cell
-                    col++
-                }
-                y += cell
-                row++
-            }
+            drawCheckerboard(
+                topLeft = Offset.Zero,
+                size = size,
+                cell = 8.dp.toPx(),
+                color = dark,
+            )
         }
 
         Box(

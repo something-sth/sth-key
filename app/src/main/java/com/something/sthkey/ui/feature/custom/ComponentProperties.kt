@@ -1388,6 +1388,7 @@ private fun ColorSection(
         value = component.style.fillUp,
         alphaPercent = component.style.fillOpacityUp,
         onValueChange = { onStyleChange(component.style.copy(fillUp = it), true) },
+        onAlphaChange = { onStyleChange(component.style.copy(fillOpacityUp = it), true) },
     )
     if (hasPressed) {
         HexColorRow(
@@ -1395,6 +1396,7 @@ private fun ColorSection(
             value = component.style.fillDown,
             alphaPercent = component.style.fillOpacityDown,
             onValueChange = { onStyleChange(component.style.copy(fillDown = it), true) },
+            onAlphaChange = { onStyleChange(component.style.copy(fillOpacityDown = it), true) },
         )
     }
     HexColorRow(
@@ -1402,6 +1404,7 @@ private fun ColorSection(
         value = component.style.textUp,
         alphaPercent = component.style.textOpacityUp,
         onValueChange = { onStyleChange(component.style.copy(textUp = it), true) },
+        onAlphaChange = { onStyleChange(component.style.copy(textOpacityUp = it), true) },
     )
     if (hasPressed) {
         HexColorRow(
@@ -1409,6 +1412,7 @@ private fun ColorSection(
             value = component.style.textDown,
             alphaPercent = component.style.textOpacityDown,
             onValueChange = { onStyleChange(component.style.copy(textDown = it), true) },
+            onAlphaChange = { onStyleChange(component.style.copy(textOpacityDown = it), true) },
         )
     }
 
@@ -1418,6 +1422,7 @@ private fun ColorSection(
             value = component.style.outlineUp,
             alphaPercent = component.style.outlineOpacityUp,
             onValueChange = { onStyleChange(component.style.copy(outlineUp = it), true) },
+            onAlphaChange = { onStyleChange(component.style.copy(outlineOpacityUp = it), true) },
         )
         if (hasPressed) {
             HexColorRow(
@@ -1425,6 +1430,9 @@ private fun ColorSection(
                 value = component.style.outlineDown,
                 alphaPercent = component.style.outlineOpacityDown,
                 onValueChange = { onStyleChange(component.style.copy(outlineDown = it), true) },
+                onAlphaChange = {
+                    onStyleChange(component.style.copy(outlineOpacityDown = it), true)
+                },
             )
         }
     }
@@ -1435,6 +1443,7 @@ private fun ColorSection(
             value = component.style.shadowUp,
             alphaPercent = component.style.shadowOpacityUp,
             onValueChange = { onStyleChange(component.style.copy(shadowUp = it), true) },
+            onAlphaChange = { onStyleChange(component.style.copy(shadowOpacityUp = it), true) },
         )
         if (hasPressed) {
             HexColorRow(
@@ -1442,6 +1451,9 @@ private fun ColorSection(
                 value = component.style.shadowDown,
                 alphaPercent = component.style.shadowOpacityDown,
                 onValueChange = { onStyleChange(component.style.copy(shadowDown = it), true) },
+                onAlphaChange = {
+                    onStyleChange(component.style.copy(shadowOpacityDown = it), true)
+                },
             )
         }
     }

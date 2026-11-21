@@ -100,11 +100,13 @@ fun ColorSwatch(
  * 现在整行是一个**可点按钮**：`label + 色块 + #RRGGBB + ›`，
  * 点开 [ColorPickerDialog] 才编辑 —— 取色盘 + 手动输 6 位 + 取消/保存。
  *
- * ⚠️ 只有「保存」才回调 [onValueChange]；取消/返回键/点外部一律丢弃。
- * 这一点很关键：24 个调用点大多走 `onComponentChange(..., true)`（记一步 undo），
+ * ⚠️ 只有「保存」才回调 [onValueChange] / [onAlphaChange]；取消/返回键/点外部一律丢弃。
+ * 这一点很关键：调用点大多走 `onComponentChange(..., true)`（记一步 undo），
  * 如果拖动面板时实时提交，undo 栈会被刷成几百步。
  *
- * ⚠️ [alphaPercent] 只影响色块预览（看起来透不透），**不参与** [onValueChange]。
+ * ⚠️ [alphaPercent] 是**当前值**：既用于色块预览，也作为对话框里 A 滑杆的起点。
+ * 传了 [onAlphaChange] 才能编辑 A；没传（如媒体组件的染色/描边）对话框不显示 A ——
+ * 那种颜色本来就没有 alpha 字段。
  */
 @Composable
 fun HexColorRow(
@@ -113,8 +115,10 @@ fun HexColorRow(
     onValueChange: (Long) -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    /** 仅用于色块预览 */
+    /** 当前不透明度（0..100），既用于色块预览，也是 A 滑杆的起点 */
     alphaPercent: Int = 100,
+    /** 不透明度变更；为 null 表示这个颜色没有配对的不透明度（不显示 A 滑杆） */
+    onAlphaChange: ((Int) -> Unit)? = null,
 ) {
     var showDialog by remember { mutableStateOf(false) }
 
@@ -162,10 +166,16 @@ fun HexColorRow(
             title = label,
             initialRgb = value,
             alphaPercent = alphaPercent,
+            alphaEditable = onAlphaChange != null,
             onDismiss = { showDialog = false },
-            onConfirm = { picked ->
+            onConfirm = { pickedRgb, pickedAlpha ->
                 showDialog = false
-                if (picked != value) onValueChange(picked)
+                /*
+                 * 各自只在**真的变了**时才回调：
+                 * 只调了颜色就不该顺手记一步"不透明度没变"的 undo。
+                 */
+                if (pickedRgb != value) onValueChange(pickedRgb)
+                if (pickedAlpha != alphaPercent) onAlphaChange?.invoke(pickedAlpha)
             },
         )
     }

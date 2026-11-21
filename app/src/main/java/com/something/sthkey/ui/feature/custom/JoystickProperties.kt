@@ -434,6 +434,7 @@ internal fun JoystickColorSection(
         alpha = js.opacity,
         component = component,
         onComponentChange = onComponentChange,
+        applyAlpha = { s, a -> s.copy(opacity = a) },
     ) { s, c -> s.copy(color = c) }
 
     JoystickColorRow(
@@ -442,6 +443,7 @@ internal fun JoystickColorSection(
         alpha = js.strokeOpacity,
         component = component,
         onComponentChange = onComponentChange,
+        applyAlpha = { s, a -> s.copy(strokeOpacity = a) },
     ) { s, c -> s.copy(strokeColor = c) }
 
     JoystickColorRow(
@@ -450,6 +452,7 @@ internal fun JoystickColorSection(
         alpha = js.ringOpacity,
         component = component,
         onComponentChange = onComponentChange,
+        applyAlpha = { s, a -> s.copy(ringOpacity = a) },
     ) { s, c -> s.copy(ringColor = c) }
 
     JoystickColorRow(
@@ -458,6 +461,7 @@ internal fun JoystickColorSection(
         alpha = js.knobOpacity,
         component = component,
         onComponentChange = onComponentChange,
+        applyAlpha = { s, a -> s.copy(knobOpacity = a) },
     ) { s, c -> s.copy(knobColor = c) }
 
     JoystickColorRow(
@@ -466,6 +470,7 @@ internal fun JoystickColorSection(
         alpha = js.knobStrokeOpacity,
         component = component,
         onComponentChange = onComponentChange,
+        applyAlpha = { s, a -> s.copy(knobStrokeOpacity = a) },
     ) { s, c -> s.copy(knobStrokeColor = c) }
 
     JoystickHint("颜色只填 6 位十六进制（例如 FF8800），不透明度用「不透明度」那一组单独调。")
@@ -1048,6 +1053,7 @@ private fun JoystickColorRow(
     alpha: Float,
     component: JoystickComponent,
     onComponentChange: (CustomComponent, Boolean) -> Unit,
+    applyAlpha: (JoystickStyle, Float) -> JoystickStyle,
     apply: (JoystickStyle, Int) -> JoystickStyle,
 ) {
     HexColorRow(
@@ -1057,6 +1063,13 @@ private fun JoystickColorRow(
         alphaPercent = (alpha * 100f).roundToInt(),
         onValueChange = { v ->
             onComponentChange(component.copy(joystick = apply(component.joystick, v.toInt())), true)
+        },
+        /* 对话框里的 A 写回同一个 opacity 字段（Float 0..1） */
+        onAlphaChange = { v ->
+            onComponentChange(
+                component.copy(joystick = applyAlpha(component.joystick, v / 100f)),
+                true,
+            )
         },
     )
 }
