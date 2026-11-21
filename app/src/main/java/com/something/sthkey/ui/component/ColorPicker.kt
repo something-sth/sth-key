@@ -37,16 +37,19 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import kotlin.math.abs
@@ -73,21 +76,21 @@ import kotlin.math.sin
  * 约定（**不要改**）
  * ============================================================
  * - 颜色**只存 RGB**（`0xRRGGBB`），**不含 alpha**。不透明度由各分区的
- *   「不透明度」滑块单独管。理由见 `docs/color-picker-plan.md` §3：
- *   数据层融合 alpha 会破坏配置格式与跨端契约，并且会把
- *   "alpha × opacity 双重相乘"那个让摇杆消失的 bug 带回来。
+ *   「不透明度」滑块单独管。理由见 `docs/color-picker-plan.md` §3。
  * - 输入框**只接受 6 位**十六进制；`parseHexColor` 是唯一解析入口。
  * - [alphaPercent] **只用于预览**，不参与保存。
  *
  * ============================================================
- * ⚠️ 真源是 `rgb`；`hsv` 只是视图状态
+ * ⚠️ 绘制上踩过的三个坑（2026-11-21 第二轮）
  * ============================================================
- * - 拖色环 / 方板 / 滑杆 → 先改 `hsv`，再由 `hsvToRgb` 算出 `rgb`；
- * - 输入框合法 → 改 `rgb`，再 `rgbToHsv(previousHue)` 反推 `hsv`
- *   （灰/黑时保留旧色相，否则"调到黑再调回来"会跳成红色）；
- * - 保存时递出去的是 **`rgb`**，所以"打开→保存"永远等于原值。
- *
- * ⚠️ 整块内容可滚动：窄屏 / 低 dpi / 大字体下色环 + 三条滑杆 + 输入框会超高。
+ * 1. **渐变必须给显式坐标**：`Brush.horizontalGradient/verticalGradient` 不传
+ *    start/end 时按**整个画布**铺，而方板只是画布中间的一块矩形 ——
+ *    于是方板左边缘已经走到渐变 ~20% 处，看起来"左上角不是纯白、整体发灰"。
+ *    现在一律 `Brush.linearGradient(start = 方板左上, end = 方板右上/左下)`。
+ * 2. **色环要按描边宽度往内缩**：环的半径是**中心线**半径，描边会向外溢出一半。
+ *    直接把中心线放在画布最外圈，环的上下左右会被画布裁掉一截。
+ * 3. **方板按内接正方形取半边**（`inner半径 / √2`），否则四角扎进色环，
+ *    而且点角落时"离圆心距离"超过内半径，会被误判成在拖色环。
  */
 @Composable
 fun ColorPickerDialog(
@@ -133,11 +136,11 @@ fun ColorPickerDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                    /* 色环直径跟对话框宽度走，最宽 264dp；方板内嵌在环里 */
-                    val side = minOf(maxWidth, 264.dp)
+                    /* 色环直径跟对话框宽度走，最宽 272dp；方板内嵌在环里 */
+                    val side = minOf(maxWidth, 272.dp)
                     ColorRingAndSquare(
                         hsv = hsv,
                         onChange = { applyHsv(it) },
@@ -147,15 +150,21 @@ fun ColorPickerDialog(
                     )
                 }
 
+                Spacer(modifier = Modifier.height(2.dp))
+
                 HsvSlider(
                     label = "H",
                     fraction = hsv.hue / 360f,
                     valueText = "${hsv.hue.roundToInt()}°",
                     brush = Brush.horizontalGradient(HUE_RING_COLORS),
+                    thumbColor = Color.hsv(
+                        (hsv.hue.coerceIn(0f, 359.9f)),
+                        1f,
+                        1f,
+                    ),
                     /*
                      * ⚠️ 夹到 0.999 而不是 1：hue 360 与 0 是同一个颜色，
-                     * 但 `Color.hsv(360f, ...)` 在部分版本会要求 [0, 360)；
-                     * 而且拇指拖到最右端后突然跳回最左会很怪。
+                     * 但拇指拖到最右端后突然跳回最左会很怪。
                      */
                     onFractionChange = {
                         applyHsv(hsv.copy(hue = it.coerceIn(0f, 0.999f) * 360f))
@@ -171,6 +180,7 @@ fun ColorPickerDialog(
                             Color.hsv(hsv.hue, 1f, hsv.value),
                         ),
                     ),
+                    thumbColor = Color.hsv(hsv.hue, hsv.saturation, hsv.value),
                     onFractionChange = { applyHsv(hsv.copy(saturation = it)) },
                 )
                 HsvSlider(
@@ -183,8 +193,11 @@ fun ColorPickerDialog(
                             Color.hsv(hsv.hue, hsv.saturation, 1f),
                         ),
                     ),
+                    thumbColor = Color.hsv(hsv.hue, hsv.saturation, hsv.value),
                     onFractionChange = { applyHsv(hsv.copy(value = it)) },
                 )
+
+                Spacer(modifier = Modifier.height(2.dp))
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -261,14 +274,22 @@ private val HUE_RING_COLORS = listOf(
     Color.Red,
 )
 
-/** 色环与内嵌方板的几何关系（px）。draw 与手势必须用同一套算法，否则点到的地方和画出来的对不上。 */
+/**
+ * 色环与内嵌方板的几何关系（px）。
+ * draw 与手势必须用同一套算法，否则点到的地方和画出来的对不上。
+ *
+ * @param canvasRadius 画布半径（短边的一半）
+ * @param ringWidth 环的描边宽度
+ * @param ringCenterRadius **中心线**半径 —— 已经按描边宽度和一点点外边距内缩过
+ */
 internal class RingGeometry(
     val center: Offset,
-    val outerRadius: Float,
+    val canvasRadius: Float,
     val ringWidth: Float,
+    val ringCenterRadius: Float,
 ) {
-    val innerRadius: Float = outerRadius - ringWidth
-    val ringMidRadius: Float = outerRadius - ringWidth / 2f
+    val outerRadius: Float = ringCenterRadius + ringWidth / 2f
+    val innerRadius: Float = ringCenterRadius - ringWidth / 2f
 
     /**
      * 方板半边长。
@@ -277,8 +298,7 @@ internal class RingGeometry(
      * 后者会让方板的四个角**扎进色环里**，视觉上重叠；而且点方板角落时
      * "离圆心距离"会比内半径大，被误判成在拖色环 → 改的是色相而不是饱和度。
      */
-    val squareHalf: Float =
-        (innerRadius / SQRT2 - outerRadius * 0.03f).coerceAtLeast(1f)
+    val squareHalf: Float = (innerRadius / SQRT2 - canvasRadius * 0.012f).coerceAtLeast(1f)
 
     val square: Rect = Rect(
         left = center.x - squareHalf,
@@ -291,23 +311,29 @@ internal class RingGeometry(
 private const val SQRT2 = 1.4142135f
 
 internal fun ringGeometry(size: Size): RingGeometry {
-    val outer = min(size.width, size.height) / 2f
+    val side = min(size.width, size.height)
+    val canvasRadius = side / 2f
+    /* 环宽 ≈ 直径的 10.5%（参考图约 11%），比第一版的 16% 半径明显粗 */
+    val ringWidth = side * 0.105f
+    /* 往里缩：留一点外边距，再让描边整体落进画布（否则上下会被裁） */
+    val margin = side * 0.012f
+    val ringCenterRadius = (canvasRadius - margin - ringWidth / 2f).coerceAtLeast(ringWidth / 2f)
     return RingGeometry(
         center = Offset(size.width / 2f, size.height / 2f),
-        outerRadius = outer,
-        ringWidth = outer * 0.16f,
+        canvasRadius = canvasRadius,
+        ringWidth = ringWidth,
+        ringCenterRadius = ringCenterRadius,
     )
 }
 
 /**
  * 色环（H）+ 内嵌方板（S 横轴 / V 纵轴）。
  *
- * 手势按"离圆心多远"分区：
- * - 落在环带上 → 改色相；
- * - 落在方板里 → 改饱和度与明度。
- *
  * ⚠️ `pointerInput(Unit)` + `rememberUpdatedState`：key 不能写成 `hsv`，
  * 否则拖动过程中每次状态变化都会重启手势识别，拖一下就断。
+ *
+ * ⚠️ 拖动时**锁定起手所在的区**（环 / 方板）：每次移动都重新判断的话，
+ * 从方板往角落斜拖会被当成拖色环，色相突然跳一下。
  */
 @Composable
 private fun ColorRingAndSquare(
@@ -326,11 +352,6 @@ private fun ColorRingAndSquare(
                 }
             }
             .pointerInput(Unit) {
-                /*
-                 * ⚠️ 拖动过程中必须**记住起手时的分区**：
-                 * 如果每次移动都重新判断，从方板往角落斜拖时"离圆心距离"会超过内半径，
-                 * 中途被当成在拖色环 → 色相突然跳一下。这里锁定到手势结束。
-                 */
                 var zone: PickerZone? = null
                 detectDragGestures(
                     onDragStart = { pos ->
@@ -351,58 +372,87 @@ private fun ColorRingAndSquare(
     ) {
         val g = ringGeometry(size)
 
-        /* 1) 色环：扫掠渐变 + 粗描边 */
+        /* 1) 色环：扫掠渐变 + 粗描边（中心线已内缩，描边不会超出画布） */
         drawArc(
             brush = Brush.sweepGradient(HUE_RING_COLORS),
             startAngle = 0f,
             sweepAngle = 360f,
             useCenter = false,
-            topLeft = Offset(g.center.x - g.outerRadius, g.center.y - g.outerRadius),
-            size = Size(g.outerRadius * 2f, g.outerRadius * 2f),
+            topLeft = Offset(g.center.x - g.ringCenterRadius, g.center.y - g.ringCenterRadius),
+            size = Size(g.ringCenterRadius * 2f, g.ringCenterRadius * 2f),
             style = Stroke(width = g.ringWidth),
         )
 
         /* 2) 方板：横向白→纯色相，纵向透明→黑（顺序不能反） */
         val pureHue = Color.hsv(hsv.hue, 1f, 1f)
-        drawRect(
-            brush = Brush.horizontalGradient(listOf(Color.White, pureHue)),
-            topLeft = g.square.topLeft,
-            size = g.square.size,
-        )
-        drawRect(
-            brush = Brush.verticalGradient(listOf(Color.Transparent, Color.Black)),
-            topLeft = g.square.topLeft,
-            size = g.square.size,
-        )
+        val corner = CornerRadius(2.dp.toPx(), 2.dp.toPx())
+        val squarePath = Path().apply { addRoundRect(RoundRect(g.square, corner)) }
 
-        /* 3) 色环滑块 */
+        clipPath(squarePath) {
+            /*
+             * ⚠️ 两个渐变都显式给坐标：不传 start/end 时它们按**整块画布**铺，
+             * 方板只是画布中间的一块矩形 → 左边缘会落在渐变 20% 处，
+             * 表现就是"左上角不是纯白、整体发灰"。
+             */
+            drawRect(
+                brush = Brush.linearGradient(
+                    colors = listOf(Color.White, pureHue),
+                    start = g.square.topLeft,
+                    end = Offset(g.square.right, g.square.top),
+                ),
+                topLeft = g.square.topLeft,
+                size = g.square.size,
+            )
+            drawRect(
+                brush = Brush.linearGradient(
+                    colors = listOf(Color.Transparent, Color.Black),
+                    start = g.square.topLeft,
+                    end = Offset(g.square.left, g.square.bottom),
+                ),
+                topLeft = g.square.topLeft,
+                size = g.square.size,
+            )
+        }
+
+        /* 3) 色环滑块：空心白描边 */
         val angle = Math.toRadians(hsv.hue.toDouble())
         val ringThumb = Offset(
-            x = g.center.x + (cos(angle) * g.ringMidRadius).toFloat(),
-            y = g.center.y + (sin(angle) * g.ringMidRadius).toFloat(),
+            x = g.center.x + (cos(angle) * g.ringCenterRadius).toFloat(),
+            y = g.center.y + (sin(angle) * g.ringCenterRadius).toFloat(),
         )
-        drawThumb(center = ringThumb, radius = g.ringWidth * 0.40f)
+        drawRingThumb(center = ringThumb, radius = g.ringWidth * 0.34f)
 
-        /* 4) 方板滑块：x = 饱和度，y = 1 - 明度 */
+        /* 4) 方板滑块：x = 饱和度，y = 1 - 明度；空心白描边 */
         val squareThumb = Offset(
             x = g.square.left + hsv.saturation.coerceIn(0f, 1f) * g.square.width,
             y = g.square.bottom - hsv.value.coerceIn(0f, 1f) * g.square.height,
         )
-        drawThumb(center = squareThumb, radius = 7.dp.toPx())
+        drawRingThumb(center = squareThumb, radius = 8.dp.toPx(), strokeWidth = 2.5.dp.toPx())
     }
 }
 
-/** 白心 + 深色描边，深色/浅色底上都看得见 */
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawThumb(
+/**
+ * 空心白描边圆点（环 / 方板用）。
+ *
+ * 里面是透明的，所以能透出下面的色环或方板颜色；外面再加一圈很淡的深色光晕，
+ * 这样在白色、黄色这类亮背景上也看得见白圈。
+ */
+private fun DrawScope.drawRingThumb(
     center: Offset,
     radius: Float,
+    strokeWidth: Float = 3.dp.toPx(),
 ) {
-    drawCircle(color = Color.White, radius = radius, center = center)
     drawCircle(
-        color = Color.Black.copy(alpha = 0.35f),
+        color = Color.Black.copy(alpha = 0.18f),
+        radius = radius + strokeWidth * 0.5f,
+        center = center,
+        style = Stroke(width = strokeWidth * 1.6f),
+    )
+    drawCircle(
+        color = Color.White,
         radius = radius,
         center = center,
-        style = Stroke(width = 1.5.dp.toPx()),
+        style = Stroke(width = strokeWidth),
     )
 }
 
@@ -446,10 +496,11 @@ private fun applyZoneTouch(
 // ---------------------------------------------------------------- 滑杆
 
 /**
- * 一条带渐变的细滑杆（H / S / V）。
+ * 一条细的渐变滑杆（H / S / V）。
  *
- * ⚠️ 轨道两端各留半个圆做圆角，所以映射时要扣掉两端半径，
- * 否则拖到最左/最右会和拇指位置对不上。
+ * - 轨道 14dp（第一版 24dp 太粗）；
+ * - 拇指是**白描边 + 中间填当前颜色**（"动态取色"），不是实心白；
+ * - 映射时扣掉两端圆角半径，否则拖到最左/最右会和拇指位置对不上。
  */
 @Composable
 private fun HsvSlider(
@@ -457,6 +508,7 @@ private fun HsvSlider(
     fraction: Float,
     valueText: String,
     brush: Brush,
+    thumbColor: Color,
     onFractionChange: (Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -477,7 +529,7 @@ private fun HsvSlider(
         Box(
             modifier = Modifier
                 .weight(1f)
-                .height(24.dp)
+                .height(14.dp)
                 .pointerInput(Unit) {
                     detectTapGestures { pos ->
                         latestOnChange(fractionAt(pos.x, size.width.toFloat(), size.height.toFloat()))
@@ -509,7 +561,21 @@ private fun HsvSlider(
                     cornerRadius = CornerRadius(r, r),
                 )
                 val x = r + latestFraction.coerceIn(0f, 1f) * (size.width - 2f * r)
-                drawThumb(center = Offset(x, r), radius = r * 0.72f)
+                /* 拇指比轨道略大，白描边 + 中间当前颜色 */
+                val thumbRadius = r + 2.5.dp.toPx()
+                drawCircle(
+                    color = Color.Black.copy(alpha = 0.18f),
+                    radius = thumbRadius + 1.dp.toPx(),
+                    center = Offset(x, r),
+                    style = Stroke(width = 1.5.dp.toPx()),
+                )
+                drawCircle(color = thumbColor, radius = thumbRadius, center = Offset(x, r))
+                drawCircle(
+                    color = Color.White,
+                    radius = thumbRadius,
+                    center = Offset(x, r),
+                    style = Stroke(width = 2.dp.toPx()),
+                )
             }
         }
 
