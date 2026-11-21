@@ -228,6 +228,19 @@ The binary version of its metadata is 2.4.0, expected version is 2.2.0.
 
 ⭐ **结论：用 miuix `0.9.0` 即可，工具链一个字都不用改**（已实测编译 + 619 测试通过）。
 
+> ⚠️⚠️ **2026-11-21 更新：上面「升不上去」的结论已经不成立，别再照它做决定。**
+>
+> Kotlin 已经通过「把 KGP 放进 buildscript classpath 覆盖 AGP 自带版本」升到 **2.4.21**
+> （单测 787 全过、release 构建通过）。完整做法与验证方式见
+> [`kotlin-version.md`](kotlin-version.md)。
+>
+> 因此：
+> - 本节的**版本矩阵**与「只能选 0.9.0」只对 **2026-11-15 那套 2.2.10 工具链**成立；
+> - miuix **0.9.4**（需要 kotlin-stdlib 2.4.20）现在**可以编译**，`blur.highlight` / `miuix-shader`
+>   这些「0.9.0 没有」的东西也一并能用了；
+> - 但 §4.4 的 **`miuix-blur` 要求 minSdk 31** 与 Kotlin 无关，**仍然存在**
+>   （本项目 minSdk 现在是 28，比当时写的 30 还低两个版本）。
+
 ### 4.3 ⚠️ 0.9.0 有 / 没有的东西
 
 | 有 | 说明 |
