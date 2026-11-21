@@ -127,7 +127,8 @@ cd D:\Project\sthkey
 | 字节码元数据 | ✅ `@Metadata(mv=[2,4,0])`，`kotlin-stdlib` 解析到 2.4.21 |
 | `:app:testDebugUnitTest` | ✅ 85 个测试类 / **787 个用例**，0 失败 |
 | `:app:assembleRelease` | ✅ `BUILD SUCCESSFUL in 5m 33s`（含 `minifyReleaseWithR8` / `lintVitalRelease`） |
-| APK | `app/build/outputs/apk/release/app-release.apk`，10,212,809 B，v1+v2 签名，证书 SHA-256 `8415FB31…6949A1`（与 `newkey999888` 一致） |
+| `clean` + 单测 + release（从头验证） | ✅ `BUILD SUCCESSFUL in 4m 15s`，787 用例 0 失败 |
+| APK | `app/build/outputs/apk/release/app-release.apk`，10,212,809 B，**v2 签名**（实测没有 v1，历史包也没有），证书 SHA-256 `8415FB31…6949A1`（与 `newkey999888` 一致） |
 
 > ⚠️ **产物位置别搞混**：
 > - **命令行** `assembleRelease` → `app/build/outputs/apk/release/app-release.apk`（AGP 默认位置）

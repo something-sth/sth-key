@@ -389,8 +389,8 @@ Kotlin 编译器**读不了比它新的元数据**：2.2 编译器遇到 2.3/2.4
 只在 `P0` 之前做一次 30 分钟 spike，任一条件不满足就回到自研：
 
 ```powershell
-# 1) 加依赖（仅 spike 分支）
-implementation("com.github.skydoves:colorpicker-compose:1.1.3")
+# 1) 加依赖（仅 spike 分支；Kotlin 2.4.21 之后 1.3.0 才编得动，1.1.3 已无必要）
+implementation("com.github.skydoves:colorpicker-compose:1.3.0")
 # 2) 确认解析得到、且没有把 Compose 降级
 .\gradlew.bat :app:dependencies --configuration releaseRuntimeClasspath > deps.txt
 #    搜 androidx.compose.foundation / runtime：应为 1.12.x（BOM 2026.08.00），不能出现 1.9.x
@@ -485,7 +485,8 @@ implementation("com.github.skydoves:colorpicker-compose:1.1.3")
 1. **点击范围**：整行可点（我推荐），还是只有右边的"色块 + 文字"可点？
 2. **P2 是否要做**：对话框里加一条"绑定同一字段"的不透明度滑杆？（我倾向先不做，看 P1 用起来的感觉）
 3. **H/S/V 数值滑杆**：截图里那三条要不要？好处是小屏/无障碍/精确输入；坏处是对话框变高约 100dp。
-4. **要不要先花 30 分钟试 `colorpicker-compose:1.1.3`**（§8.3），还是直接自研？
+4. **要不要用现成库**：Kotlin 升到 2.4.21 之后，`skydoves/colorpicker-compose:1.3.0`
+   （Kotlin 2.4.20、`minCompileSdk=37`）已经能编；是直接用它，还是按 §8.2 自研？
 
 ---
 
