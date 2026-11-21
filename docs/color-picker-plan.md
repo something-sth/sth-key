@@ -2,7 +2,8 @@
 
 > 2026-11-21 起草。需求来自用户的一张截图（另一个 App 的 HSV 取色弹窗）+ 口述。
 >
-> **本文只是方案，不含任何代码改动。** 施工前先看 §12「待拍板」——那里有 4 个还没定的事。
+> **本文是方案 + 实施记录。** 决策与落地结果见 **§14「实施记录（2026-11-21）」**；
+> §12 的四个「待拍板」已经在那一节里给了答案。
 
 ---
 
@@ -504,3 +505,68 @@ domain/config/KeyStrokesConfig.kt           Opacity 模型（只读，不改）
 data/config/JsonConfigCodec.kt              颜色/不透明度字段（只读，不改）
 docs/custom-key.md                          「颜色」与「不透明度」分区的既有约定
 ```
+
+---
+
+## 14. 实施记录（2026-11-21）
+
+### 14.1 拍板结果
+
+| §12 的问题 | 结论 |
+|---|---|
+| 点击范围 | **整行可点**（含 `›` 箭头暗示） |
+| 对话框内 alpha 滑杆 | **不做**（不透明度仍只在各分区调） |
+| H/S/V 数值滑杆 | **不做**（面板 + 色相条 + hex 足够；也避免对话框过高） |
+| 用库还是自研 | **用库**：`com.github.skydoves:colorpicker-compose:1.3.0`（用户：自研耗时，不划算） |
+
+### 14.2 实际改动
+
+| 文件 | 改动 |
+|---|---|
+| `gradle/libs.versions.toml` | 新增 `colorpickerCompose = "1.3.0"` 与 `colorpicker-compose` 条目 |
+| `app/build.gradle.kts` | `implementation(libs.colorpicker.compose)`（注释里写明"受 Kotlin 2.4 约束"） |
+| `ui/component/ColorPicker.kt` | **新增**：`ColorPickerDialog` / `ColorPreview`（棋盘底）/ `normalizeHexDigits` / `rgbToOpaqueColor` |
+| `ui/component/ColorEditor.kt` | `HexColorRow` 改成**只读可点行**（label + 色块 + `#RRGGBB` + `›`）；**删除** `HexColorDialog`（死代码） |
+| `ui/feature/config/JoystickSections.kt` | 5 个颜色行补 `alphaPercent`（`js.opacity` / `strokeOpacity` / `ringOpacity` / `knobOpacity` / `knobStrokeOpacity`） |
+| `ui/feature/custom/JoystickProperties.kt` | `JoystickColorRow` 增加 `alpha` 参数，5 个调用点全部传入 |
+| `ui/component/ColorHexTest.kt` | **新增** 11 个用例（解析/格式化/输入整理/往返） |
+
+> 媒体组件那 2 个颜色（染色色、描边色）**保持 100%**：它们没有 alpha，`tintPercent` 是染色程度不是透明。
+
+### 14.3 实现上值得记的三件事
+
+1. **不要用 `HsvColorPicker.onColorChanged` 当唯一出口**
+   —— 那个回调只覆盖"点/拖面板"，拖**色相条**走的是 `HueSlider` 的另一条回调。
+   正确做法是监听 `controller.selectedColor`（这里用 `snapshotFlow`），
+   两种来源一次收齐，也不会漏掉程序化设置。
+2. **`initialColor` 必须传稳定值**
+   —— 如果传跟着 `rgb` 变的值，会形成"库设色 → selectedColor 变 → 我们改 rgb → 再传下去"的自激。
+   这里 `val initialColor = remember { rgbToOpaqueColor(initialRgb) }`。
+3. **`Color(Int)` 是 ARGB，不是 RGB**
+   —— 直接 `Color(rgb.toInt())` 会得到 **alpha=0 的透明色**（高 8 位是 0）。
+   统一走 `rgbToOpaqueColor()`（`0xFF000000 or rgb`），否则面板初始色/预览会发虚。
+
+### 14.4 可滚动（用户明确要求）
+
+- 对话框内容整块 `verticalScroll`；
+- 面板用 `BoxWithConstraints` 取 `min(可用宽度, 280.dp)` 的**正方形**；
+- 色相条 24dp、输入框单行、提示一行 —— 窄屏/低 dpi/大字体下超出高度时**滚动**，不再挤压按钮。
+
+### 14.5 验证
+
+| 项 | 结果 |
+|---|---|
+| `:app:testDebugUnitTest` | ✅ 86 个测试类 / **798 个用例**，0 失败（新增 11 个） |
+| `:app:assembleDebug` / `:app:assembleRelease` | ✅ 通过（R8 + lintVital） |
+| 依赖 | ✅ 解析到 `colorpicker-compose-android:1.3.0`；**没有**把 Compose 从 1.12.0 降级，也没有引入 `org.jetbrains.compose.*` |
+| APK | 10,263,265 B（比加库前多 **50 KB**），签名证书不变 |
+| 真机 | ⏳ **未验证**（本机没有连接设备）：面板拖动手感、初始色是否正落到面板、小屏滚动、保存后悬浮窗实时变化 |
+
+### 14.6 已知限制
+
+- 只有 **6 位 RGB**，没有 alpha —— 这是刻意的（§3），不要"顺手"改成 8 位。
+- 打开→保存不写盘（`onConfirm` 只在值真的变了才回调），但**每次打开会重建控制器**，
+  面板初始色来自当前值，不会"跳到白色"。
+- 库的调色板外观固定（圆角由 `clip` 控制），与项目主题只共享对话框外壳；
+  如果以后要"完全贴合 Material 3 配色"，再考虑 P3 自绘。
+

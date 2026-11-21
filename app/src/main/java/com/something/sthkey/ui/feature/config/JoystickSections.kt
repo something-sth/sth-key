@@ -26,6 +26,7 @@ import com.something.sthkey.ui.component.CardDivider
 import com.something.sthkey.ui.component.HexColorRow
 import com.something.sthkey.ui.component.SectionHint
 import com.something.sthkey.ui.component.SettingsCard
+import kotlin.math.roundToInt
 
 /*
  * ============================================================
@@ -159,6 +160,7 @@ internal fun LazyListScope.joystickStyleSections(
             HexColorRow(
                 label = "摇杆颜色",
                 value = js.color.toLong() and 0xFFFFFFFFL,
+                alphaPercent = (js.opacity * 100f).roundToInt(),
                 onValueChange = { v ->
                     applyChange { it.copy(joystick = it.joystick.copy(color = v.toInt())) }
                 },
@@ -179,6 +181,7 @@ internal fun LazyListScope.joystickStyleSections(
             HexColorRow(
                 label = "描边颜色",
                 value = js.strokeColor.toLong() and 0xFFFFFFFFL,
+                alphaPercent = (js.strokeOpacity * 100f).roundToInt(),
                 onValueChange = { v ->
                     applyChange { it.copy(joystick = it.joystick.copy(strokeColor = v.toInt())) }
                 },
@@ -228,6 +231,7 @@ internal fun LazyListScope.joystickStyleSections(
             HexColorRow(
                 label = "内圆颜色",
                 value = js.ringColor.toLong() and 0xFFFFFFFFL,
+                alphaPercent = (js.ringOpacity * 100f).roundToInt(),
                 onValueChange = { v ->
                     applyChange { it.copy(joystick = it.joystick.copy(ringColor = v.toInt())) }
                 },
@@ -322,6 +326,7 @@ internal fun LazyListScope.joystickStyleSections(
             HexColorRow(
                 label = "摇杆帽颜色",
                 value = js.knobColor.toLong() and 0xFFFFFFFFL,
+                alphaPercent = (js.knobOpacity * 100f).roundToInt(),
                 onValueChange = { v ->
                     applyChange { it.copy(joystick = it.joystick.copy(knobColor = v.toInt())) }
                 },
@@ -346,6 +351,7 @@ internal fun LazyListScope.joystickStyleSections(
             HexColorRow(
                 label = "摇杆帽描边颜色",
                 value = js.knobStrokeColor.toLong() and 0xFFFFFFFFL,
+                alphaPercent = (js.knobStrokeOpacity * 100f).roundToInt(),
                 onValueChange = { v ->
                     applyChange { it.copy(joystick = it.joystick.copy(knobStrokeColor = v.toInt())) }
                 },

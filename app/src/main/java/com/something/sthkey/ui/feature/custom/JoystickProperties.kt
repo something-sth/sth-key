@@ -37,6 +37,7 @@ import com.something.sthkey.ui.feature.config.JOYSTICK_SENSITIVITY_MIN
 import com.something.sthkey.ui.feature.config.JOYSTICK_SIZE_SCALE_MAX
 import com.something.sthkey.ui.feature.config.JOYSTICK_SIZE_SCALE_MIN
 import com.something.sthkey.ui.feature.config.JOYSTICK_SMOOTHING_MAX
+import kotlin.math.roundToInt
 
 /*
  * ============================================================
@@ -430,6 +431,7 @@ internal fun JoystickColorSection(
     JoystickColorRow(
         label = "摇杆",
         color = js.color,
+        alpha = js.opacity,
         component = component,
         onComponentChange = onComponentChange,
     ) { s, c -> s.copy(color = c) }
@@ -437,6 +439,7 @@ internal fun JoystickColorSection(
     JoystickColorRow(
         label = "底盘描边",
         color = js.strokeColor,
+        alpha = js.strokeOpacity,
         component = component,
         onComponentChange = onComponentChange,
     ) { s, c -> s.copy(strokeColor = c) }
@@ -444,6 +447,7 @@ internal fun JoystickColorSection(
     JoystickColorRow(
         label = "内圆",
         color = js.ringColor,
+        alpha = js.ringOpacity,
         component = component,
         onComponentChange = onComponentChange,
     ) { s, c -> s.copy(ringColor = c) }
@@ -451,6 +455,7 @@ internal fun JoystickColorSection(
     JoystickColorRow(
         label = "摇杆帽",
         color = js.knobColor,
+        alpha = js.knobOpacity,
         component = component,
         onComponentChange = onComponentChange,
     ) { s, c -> s.copy(knobColor = c) }
@@ -458,6 +463,7 @@ internal fun JoystickColorSection(
     JoystickColorRow(
         label = "摇杆帽描边",
         color = js.knobStrokeColor,
+        alpha = js.knobStrokeOpacity,
         component = component,
         onComponentChange = onComponentChange,
     ) { s, c -> s.copy(knobStrokeColor = c) }
@@ -1039,6 +1045,7 @@ private fun GamepadJoystickFeel(
 private fun JoystickColorRow(
     label: String,
     color: Int,
+    alpha: Float,
     component: JoystickComponent,
     onComponentChange: (CustomComponent, Boolean) -> Unit,
     apply: (JoystickStyle, Int) -> JoystickStyle,
@@ -1047,6 +1054,7 @@ private fun JoystickColorRow(
         label = label,
         /* `and 0xFFFFFFFFL` 把有符号 Int 当成无符号色彩值传给控件 */
         value = color.toLong() and 0xFFFFFFFFL,
+        alphaPercent = (alpha * 100f).roundToInt(),
         onValueChange = { v ->
             onComponentChange(component.copy(joystick = apply(component.joystick, v.toInt())), true)
         },

@@ -2,37 +2,29 @@ package com.something.sthkey.ui.component
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 
 /**
@@ -45,6 +37,10 @@ import androidx.compose.ui.unit.dp
  * 为什么拆开：颜色和不透明度混在同一个输入框里时，用户只想调颜色，
  * 却可能因为少写两位把不透明度改成 0 或 255，非常反直觉；
  * 拆开后两者各有一个真源，互不干扰。
+ *
+ * ⚠️ 曾经踩过的坑（`JoystickStyleTest` 钉着）：颜色里带 alpha 时，
+ * 它会被抹成 `0x00xxxxxx` 并写进存档，渲染时再乘一次不透明度 →
+ * `0 × 1.0 = 0`，**摇杆整个消失**。所以这里的解析/格式化永远只处理 RGB。
  */
 
 /** 颜色值位数（不含 `#`） */
@@ -95,12 +91,20 @@ fun ColorSwatch(
 }
 
 /**
- * 颜色输入行。
+ * 颜色行。
  *
- * 交互约定：
- * - 输入时即过滤非十六进制字符并截断到 6 位，从源头保证格式正确；
- * - 失焦时才提交，避免输入过程中反复写配置；
- * - 长度不足时保留内容并标红，不会悄悄丢掉用户的输入。
+ * ============================================================
+ * 交互约定（2026-11-21 改版）
+ * ============================================================
+ * 以前是「色块 + 行内十六进制输入框」，一行很高、而且每改一个字符就可能提交。
+ * 现在整行是一个**可点按钮**：`label + 色块 + #RRGGBB + ›`，
+ * 点开 [ColorPickerDialog] 才编辑 —— 取色盘 + 手动输 6 位 + 取消/保存。
+ *
+ * ⚠️ 只有「保存」才回调 [onValueChange]；取消/返回键/点外部一律丢弃。
+ * 这一点很关键：24 个调用点大多走 `onComponentChange(..., true)`（记一步 undo），
+ * 如果拖动面板时实时提交，undo 栈会被刷成几百步。
+ *
+ * ⚠️ [alphaPercent] 只影响色块预览（看起来透不透），**不参与** [onValueChange]。
  */
 @Composable
 fun HexColorRow(
@@ -112,167 +116,57 @@ fun HexColorRow(
     /** 仅用于色块预览 */
     alphaPercent: Int = 100,
 ) {
-    var text by remember(value) { mutableStateOf(formatHexDigits(value)) }
-    var error by remember { mutableStateOf(false) }
-
-    // 外部值变化（例如点了"恢复默认"）时同步回输入框
-    LaunchedEffect(value) {
-        text = formatHexDigits(value)
-        error = false
-    }
-
-    fun commit() {
-        val parsed = parseHexColor(text)
-        if (parsed == null) {
-            error = true
-        } else {
-            error = false
-            if (parsed != value) onValueChange(parsed)
-        }
-    }
+    var showDialog by remember { mutableStateOf(false) }
 
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .clickable(enabled = enabled) { showDialog = true }
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             text = label,
             style = MaterialTheme.typography.bodyLarge,
+            color = if (enabled) {
+                MaterialTheme.colorScheme.onSurface
+            } else {
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+            },
             modifier = Modifier.weight(1f),
         )
 
-        val focusManager = LocalFocusManager.current
+        ColorSwatch(rgb = value, alphaPercent = alphaPercent)
 
-        ColorSwatch(
-            rgb = parseHexColor(text) ?: value,
-            alphaPercent = alphaPercent,
+        Spacer(modifier = Modifier.width(8.dp))
+
+        Text(
+            text = formatHexColor(value),
+            style = MaterialTheme.typography.bodyMedium,
+            fontFamily = FontFamily.Monospace,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        Spacer(modifier = Modifier.width(12.dp))
+        Spacer(modifier = Modifier.width(2.dp))
 
-        OutlinedTextField(
-            value = text,
-            onValueChange = { input ->
-                text = input
-                    .filter { it.isDigit() || it.lowercaseChar() in 'a'..'f' }
-                    .take(HEX_LENGTH)
-                    .uppercase()
-                error = false
-            },
-            singleLine = true,
-            enabled = enabled,
-            isError = error,
-            prefix = { Text("#") },
-            supportingText = if (error) {
-                { Text("需要 6 位十六进制，例如 FF8800") }
-            } else {
-                null
-            },
-            /*
-             * ⚠️ 必须显式处理"完成"，否则编辑不会生效（这里踩过坑）。
-             *
-             * 提交是靠 `onFocusChanged` 里"失焦时 commit"做的。而软键盘上
-             * 点「完成」**默认只是收起键盘、不移走焦点** —— 于是：
-             * 左边的色块预览已经跟着输入变了（它读的是本地 text），
-             * 但值没提交、悬浮窗上还是旧颜色。用户看到的就是
-             * "编辑好了却没应用"。
-             *
-             * `clearFocus()` 才真正触发那次提交；外接键盘的 Enter
-             * 走的是同一个 [KeyboardActions.onDone]。
-             */
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Ascii,
-                imeAction = ImeAction.Done,
-            ),
-            keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
-            modifier = Modifier
-                .width(150.dp)
-                .onFocusChanged { state ->
-                    if (!state.isFocused) commit()
-                },
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
         )
     }
-}
 
-/**
- * 颜色编辑对话框。
- *
- * 与 [HexColorRow] 共用同一套解析规则，
- * 因此不会出现"一个地方接受 8 位、另一个只接受 6 位"的不一致。
- */
-@Composable
-fun HexColorDialog(
-    title: String,
-    value: Long,
-    onDismiss: () -> Unit,
-    onConfirm: (Long) -> Unit,
-    alphaPercent: Int = 100,
-) {
-    var text by remember { mutableStateOf(formatHexDigits(value)) }
-    val parsed = parseHexColor(text)
-    val focusManager = LocalFocusManager.current
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    ColorSwatch(
-                        rgb = parsed ?: value,
-                        alphaPercent = alphaPercent,
-                        modifier = Modifier.size(40.dp),
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        text = if (parsed != null) formatHexColor(parsed) else "需要 6 位十六进制",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { input ->
-                        text = input
-                            .filter { it.isDigit() || it.lowercaseChar() in 'a'..'f' }
-                            .take(HEX_LENGTH)
-                            .uppercase()
-                    },
-                    singleLine = true,
-                    isError = parsed == null,
-                    label = { Text("颜色值") },
-                    prefix = { Text("#") },
-                    placeholder = { Text("FF8800") },
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Ascii,
-                        imeAction = ImeAction.Done,
-                    ),
-                    // 对话框里"完成"只需收起键盘 —— 提交由「确定」按钮负责
-                    keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-
-                Text(
-                    text = "不透明度请到「不透明度」分区用滑块单独调整。",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-
-                Spacer(modifier = Modifier.height(4.dp))
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { parsed?.let(onConfirm) },
-                enabled = parsed != null,
-            ) {
-                Text("确定")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
-        },
-    )
+    if (showDialog) {
+        ColorPickerDialog(
+            title = label,
+            initialRgb = value,
+            alphaPercent = alphaPercent,
+            onDismiss = { showDialog = false },
+            onConfirm = { picked ->
+                showDialog = false
+                if (picked != value) onValueChange(picked)
+            },
+        )
+    }
 }

@@ -11,6 +11,10 @@ navigation = "2.7.7"
 composeBom = "2026.08.00"
 shizuku = "13.1.5"
 materialColorUtilities = "4.0.5"
+# ⚠️ 取色盘用的第三方库。1.3.0 是用 Kotlin 2.4.20 编的，元数据 2.4.0 ——
+#    本项目 Kotlin 已升到 2.4.21 才能读（见 docs/kotlin-version.md）。
+#    升级 Kotlin 时不要顺手降这个版本；反之亦然。
+colorpickerCompose = "1.3.0"
 
 [libraries]
 material-color-utilities = { module = "com.materialkolor:material-color-utilities-android", version.ref = "materialColorUtilities" }
@@ -41,6 +45,9 @@ androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-co
 
 shizuku-api = { group = "dev.rikka.shizuku", name = "api", version.ref = "shizuku" }
 shizuku-provider = { group = "dev.rikka.shizuku", name = "provider", version.ref = "shizuku" }
+
+# --- 取色盘（HSV 面板 / 色相条） ---
+colorpicker-compose = { module = "com.github.skydoves:colorpicker-compose", version.ref = "colorpickerCompose" }
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
