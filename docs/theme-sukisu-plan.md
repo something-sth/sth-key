@@ -173,6 +173,36 @@ ColorPickerDialog(
 
 即"主色"固定不透明（`seedColor` 里 0 表示跟随壁纸，不能是透明色）。
 
+### 5.6 配色引擎能不能"还原"成 SukiSU 那样？
+
+**能，而且现在已经一致了大部分。** 逐项对过（读了 SukiSU `Theme.kt` / `ThemeExt.kt` 与 materialKolor 5.0.1 的源码）：
+
+| 项 | SukiSU | 我们 | 一致？ |
+|---|---|---|---|
+| 算法 | material-color-utilities（HCT + `DynamicScheme`） | **同一个库**（4.0.5） | ✅ 同源 |
+| 对比度 | `Contrast.Default` = 0.0 | 0.0 | ✅ |
+| Platform | `DynamicScheme.Platform.Default` | `PHONE` | ✅（反编译确认 `Default` 就是 `PHONE`） |
+| 色彩风格 | `PaletteStyle` 9 种 | `AppearancePalette` 9 种 | ✅ 一一对应 |
+| 构造方式 | `SchemeXxx(hct, isDark, contrast, spec, platform)` | 同 | ✅ |
+| **色彩规格** | `effectiveFor(style)`：只有 TonalSpot / Neutral / Vibrant / Expressive 用 **2025**，其余 5 种回退 **2021** | 全部写死 `SPEC_2025` | ❌ **5 种风格会偏色** |
+| **壁纸种子** | 取 `dynamicLight/DarkColorScheme(context).primary` 当种子，**再按所选风格重算** | 直接把系统 dynamic scheme 当结果 → **风格被忽略** | ❌ 壁纸模式观感不同 |
+| 回退种子（API<31） | `FallbackSeedColor = 0xFFFF9CA8` | 用我们自己的两套固定配色 | ⚠️ 只在"没选主色 + 旧系统"时不同 |
+| **AMOLED** | `isAmoled` → surface 系列刷纯黑 | 没有 | ❌ 缺功能 |
+| fixed 角色 | 全量映射（`primaryFixed*` 等 16 个） | 没映射，落 Material 默认 | ⚠️ 我们 UI 目前没用到，但不算完全一致 |
+
+**两条路：**
+
+| 路线 | 做法 | 优 | 劣 |
+|---|---|---|---|
+| **A（推荐）** | 引入 `com.materialkolor:material-kolor:5.0.1` —— **就是 SukiSU 用的那个版本**，直接调它的纯函数 `dynamicColorScheme(...)` | 与 SukiSU **执行同一份代码**，颜色逐位一致；顺带白拿 AMOLED / fixed 角色 / 壁纸种子处理 | 多一个依赖；它带 CMP 1.12 传递依赖，需要验证不降级 Compose（取色库那次已验证这种情形可行） |
+| B（兜底） | 不引依赖，手改 `SeedColor.kt` 四处：spec 按风格回退、壁纸种子重算、AMOLED、补 fixed 角色 | 零依赖，约 40 行 | "完全一致"只能靠截图比对；以后 materialKolor 改版就追不上 |
+
+> ⭐ 关键事实：materialKolor **5.0.1** 正是 2026-11-15 那次放弃的版本（`kotlin-stdlib 2.4.10`，
+> 当时编译器 2.2 读不了元数据）。现在 Kotlin 已升到 2.4.21 —— **这个障碍消失了**。
+>
+> 另外：主题页色块的"半圆双色"不是算法，只是画 `primaryContainer` / `tertiaryContainer`
+> 两个角色色，随便还原。
+
 ---
 
 ## 6. 方案 B：页面过渡 + 预测性返回
