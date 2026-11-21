@@ -623,6 +623,11 @@ compose-color-picker 是"方板 + alpha"——**没有库提供"色环 + 内嵌�
 
 1. **同一套几何算两次**：`ringGeometry(size)` 同时供绘制与命中测试用 ——
    两边各写一份迟早会错位（点的地方和看到的地方对不上）。
+   ⚠️ 方板必须按**内接正方形**取半边（`innerRadius / √2`），不能取 `innerRadius - gap`：
+   否则四角会扎进色环，且点角落时"离圆心距离"超过内半径，被误判成在拖色环。
+   `ColorPickerGeometryTest` 钉着这条。
+2. **拖动要锁定起手时的分区**：每次移动都重新判断的话，从方板往角落斜拖会中途变成拖色环
+   （色相突然跳一下）。实现里在 `detectDragGestures` 外存 `zone`，抬手才清空。
 2. **手势 `pointerInput(Unit)` + `rememberUpdatedState(hsv)`**：
    key 写成 `hsv` 的话，拖动中每次状态变化都会重启手势识别，**拖一下就断**。
 3. **色环 0° 在 3 点钟方向、顺时针增加**，与 `Brush.sweepGradient` 的起点方向一致；
@@ -635,9 +640,9 @@ compose-color-picker 是"方板 + alpha"——**没有库提供"色环 + 内嵌�
 
 | 项 | 结果 |
 |---|---|
-| 单测 | ✅ 87 个测试类 / **806 个用例**（新增 `HsvColorTest` 8 例：端点/灰阶/越界/往返/无 alpha） |
+| 单测 | ✅ 88 个测试类 / **811 个用例**（`HsvColorTest` 8 + `ColorPickerGeometryTest` 5） |
 | debug / release | ✅ 通过（R8 + lintVital） |
 | 依赖 | ✅ 已移除 `colorpicker-compose`，依赖图里查不到它 |
-| APK | 10,229,833 B（自绘代码约 +17 KB，比用库时小 ~33 KB），签名证书不变 |
+| APK | 10,230,212 B（自绘代码约 +17 KB，比用库时小 ~33 KB），签名证书不变 |
 | 真机 | ⏳ **未验证**：色环/方板拖动是否跟手、拇指位置、小屏滚动、保存后悬浮窗刷新 |
 

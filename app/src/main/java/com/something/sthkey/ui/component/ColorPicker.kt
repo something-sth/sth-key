@@ -262,14 +262,24 @@ private val HUE_RING_COLORS = listOf(
 )
 
 /** 色环与内嵌方板的几何关系（px）。draw 与手势必须用同一套算法，否则点到的地方和画出来的对不上。 */
-private class RingGeometry(
+internal class RingGeometry(
     val center: Offset,
     val outerRadius: Float,
     val ringWidth: Float,
 ) {
     val innerRadius: Float = outerRadius - ringWidth
     val ringMidRadius: Float = outerRadius - ringWidth / 2f
-    val squareHalf: Float = (innerRadius - outerRadius * 0.05f).coerceAtLeast(1f)
+
+    /**
+     * 方板半边长。
+     *
+     * ⚠️ 必须按**内接正方形**算（`innerRadius / √2`），不能简单取 `innerRadius - gap`：
+     * 后者会让方板的四个角**扎进色环里**，视觉上重叠；而且点方板角落时
+     * "离圆心距离"会比内半径大，被误判成在拖色环 → 改的是色相而不是饱和度。
+     */
+    val squareHalf: Float =
+        (innerRadius / SQRT2 - outerRadius * 0.03f).coerceAtLeast(1f)
+
     val square: Rect = Rect(
         left = center.x - squareHalf,
         top = center.y - squareHalf,
@@ -278,7 +288,9 @@ private class RingGeometry(
     )
 }
 
-private fun ringGeometry(size: Size): RingGeometry {
+private const val SQRT2 = 1.4142135f
+
+internal fun ringGeometry(size: Size): RingGeometry {
     val outer = min(size.width, size.height) / 2f
     return RingGeometry(
         center = Offset(size.width / 2f, size.height / 2f),
@@ -310,17 +322,29 @@ private fun ColorRingAndSquare(
         modifier = modifier
             .pointerInput(Unit) {
                 detectTapGestures { pos ->
-                    handleRingAndSquareTouch(pos, size, latestHsv, latestOnChange)
+                    applyZoneTouch(zoneAt(pos, size), pos, size, latestHsv, latestOnChange)
                 }
             }
             .pointerInput(Unit) {
+                /*
+                 * ⚠️ 拖动过程中必须**记住起手时的分区**：
+                 * 如果每次移动都重新判断，从方板往角落斜拖时"离圆心距离"会超过内半径，
+                 * 中途被当成在拖色环 → 色相突然跳一下。这里锁定到手势结束。
+                 */
+                var zone: PickerZone? = null
                 detectDragGestures(
                     onDragStart = { pos ->
-                        handleRingAndSquareTouch(pos, size, latestHsv, latestOnChange)
+                        val z = zoneAt(pos, size)
+                        zone = z
+                        applyZoneTouch(z, pos, size, latestHsv, latestOnChange)
                     },
+                    onDragEnd = { zone = null },
+                    onDragCancel = { zone = null },
                     onDrag = { change, _ ->
                         change.consume()
-                        handleRingAndSquareTouch(change.position, size, latestHsv, latestOnChange)
+                        zone?.let { z ->
+                            applyZoneTouch(z, change.position, size, latestHsv, latestOnChange)
+                        }
                     },
                 )
             },
@@ -382,7 +406,17 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawThumb(
     )
 }
 
-private fun handleRingAndSquareTouch(
+/** 触点落在哪个区：圆内（含方板）算方板，圆外环带算色环 */
+private enum class PickerZone { Ring, Square }
+
+private fun zoneAt(pos: Offset, sizePx: IntSize): PickerZone {
+    val g = ringGeometry(Size(sizePx.width.toFloat(), sizePx.height.toFloat()))
+    val distance = hypot(pos.x - g.center.x, pos.y - g.center.y)
+    return if (distance <= g.innerRadius) PickerZone.Square else PickerZone.Ring
+}
+
+private fun applyZoneTouch(
+    zone: PickerZone,
     pos: Offset,
     sizePx: IntSize,
     current: Hsv,
@@ -390,19 +424,22 @@ private fun handleRingAndSquareTouch(
 ) {
     val g = ringGeometry(Size(sizePx.width.toFloat(), sizePx.height.toFloat()))
 
-    val dx = pos.x - g.center.x
-    val dy = pos.y - g.center.y
-    val distance = hypot(dx, dy)
+    when (zone) {
+        PickerZone.Ring -> {
+            /* 色相 = 角度（0° 在 3 点钟方向、顺时针增加，与 sweepGradient 一致） */
+            var degrees = Math.toDegrees(
+                atan2(pos.y - g.center.y, pos.x - g.center.x).toDouble(),
+            ).toFloat()
+            if (degrees < 0f) degrees += 360f
+            onChange(current.copy(hue = degrees % 360f))
+        }
 
-    if (distance >= g.innerRadius - g.ringWidth * 0.25f) {
-        /* 环带（含一点点内边界容差）：色相 = 角度 */
-        var degrees = Math.toDegrees(atan2(dy, dx).toDouble()).toFloat()
-        if (degrees < 0f) degrees += 360f
-        onChange(current.copy(hue = degrees % 360f))
-    } else {
-        val s = ((pos.x - g.square.left) / g.square.width).coerceIn(0f, 1f)
-        val v = ((g.square.bottom - pos.y) / g.square.height).coerceIn(0f, 1f)
-        onChange(current.copy(saturation = s, value = v))
+        PickerZone.Square -> {
+            /* 夹在 0..1：拖出方板时拇指贴边继续走，而不是失效 */
+            val s = ((pos.x - g.square.left) / g.square.width).coerceIn(0f, 1f)
+            val v = ((g.square.bottom - pos.y) / g.square.height).coerceIn(0f, 1f)
+            onChange(current.copy(saturation = s, value = v))
+        }
     }
 }
 
