@@ -251,15 +251,6 @@ dependencies {
     implementation(libs.shizuku.api)
     implementation(libs.shizuku.provider)
 
-    /*
-     * 取色盘（HSV 面板 + 色相条）。
-     *
-     * ⚠️ 版本受 Kotlin 元数据约束：这个库 1.3.0 用 Kotlin 2.4.20 编，
-     *    编译器低于 2.4 会报 "binary version of its metadata is 2.4.0"。
-     *    详见 docs/kotlin-version.md 与 docs/color-picker-plan.md §8。
-     */
-    implementation(libs.colorpicker.compose)
-
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.navigation.compose)
