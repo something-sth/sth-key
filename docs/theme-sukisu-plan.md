@@ -330,6 +330,29 @@ APK 10,385,051 B；签名不变。
 > ```
 > 否则"两个不同代码的包 tag 一模一样"，排查"装的是不是新包"时会误导。
 
+#### 第三轮：rail 样式照 SukiSU（2026-11-22 12:39）
+
+用户要求：**选中动画、选中用主题色、间距加大、顶部放菜单按钮展开**。
+
+⚠️ **没能直接用 SukiSU 的 `WideNavigationRail`**：本项目 material3 是 **1.4.0**，
+1.4.0 里这组 API 还挂在 `internal` 的 `ExperimentalMaterial3ExpressiveApi` 上
+（`Cannot access ... it is internal`）、而且没有 `contentPadding` 参数。
+升 material3 会牵动整个 Compose 运行时，不值得为一条 rail 冒险。
+
+所以用 `NavigationRail` 的基础零件**自己搭**，行为与 SukiSU 对齐：
+
+| 项 | 实现 |
+|---|---|
+| 展开 / 收起 | `animateDpAsState` 宽度 **80dp ↔ 200dp**（220ms）；标签 `AnimatedVisibility(fadeIn + expandHorizontally)` |
+| 顶部按钮 | `Menu`（收起）/ `MenuOpen`（展开），点一下切换 |
+| 选中态 | 胶囊 `primary` + 图标/文字 `onPrimary`；`animateColorAsState` 220ms 渐变 —— **这就是"选中动画"**（浅色主题下 primary 本身就是深色，所以看起来是深色胶囊） |
+| 间距 | 三项 `spacedBy(10.dp)`，比 M3 默认的 `Arrangement.Top` 松 |
+| 展开状态 | 新增偏好 `appearance_nav_rail_expanded`（**默认收起**），重进应用保持 |
+| 系统栏 | `windowInsetsPadding(systemBars ∪ displayCutout, only(Start + Vertical))`；外面**不能**再加 padding，否则双份 |
+
+⚠️ 收缩态每项是 56dp 高的方/圆形胶囊（左右各 12dp 外边距，内部居中），
+展开态变成整行（图标 + 12dp + 文字），切换时宽度与标签同时动，不会跳。
+
 #### 待确认 / 可能的后招
 
 - 现在**手机上也能开** rail（默认关）。如果觉得手机上开了太挤，可以按宽度（≥600dp）隐藏这个开关，或按宽度**默认开**；

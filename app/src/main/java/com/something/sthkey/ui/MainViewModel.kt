@@ -568,6 +568,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         AppLog.i(TAG, if (enabled) "外观：侧边导航栏 → 开" else "外观：侧边导航栏 → 关")
     }
 
+    /** 侧边导航栏是否展开（宽栏）；由 rail 顶部菜单按钮切换 */
+    var navRailExpanded by mutableStateOf(prefs.appearanceNavRailExpanded)
+        private set
+
+    fun applyNavRailExpanded(expanded: Boolean) {
+        if (navRailExpanded == expanded) return
+        prefs.appearanceNavRailExpanded = expanded
+        navRailExpanded = expanded
+    }
+
     /* ============================================================
      * 采集通道能力（root / Shizuku / 无障碍）
      * ============================================================ */

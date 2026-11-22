@@ -9,7 +9,16 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.Box
@@ -21,7 +30,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -31,7 +45,9 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.material.icons.automirrored.filled.MenuOpen
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.Icons
@@ -40,6 +56,7 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -60,10 +77,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.composable
@@ -954,12 +974,14 @@ private fun MainScaffold(
                     SthKeyNavigationRail(
                         currentPage = selectedPage,
                         onSelect = { destination -> animateTo(destination) },
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .padding(
-                                top = innerPadding.calculateTopPadding(),
-                                bottom = innerPadding.calculateBottomPadding(),
-                            ),
+                        expanded = viewModel.navRailExpanded,
+                        onExpandedChange = viewModel::applyNavRailExpanded,
+                        /*
+                         * ⚠️ 不要再手动加状态栏/导航栏内边距：
+                         * `WideNavigationRail` 自己用 `windowInsets` 处理了，
+                         * 手动再加会双份（rail 会缩成中间一截）。
+                         */
+                        modifier = Modifier.fillMaxHeight(),
                     )
                 }
 
@@ -1474,34 +1496,155 @@ private fun SthKeyBottomBar(
  *    所以 `floatingBar` 在那边已经与 `navigationRail` 互斥。
  *
  * ⚠️ 只在一级页面显示：二级页要全宽，rail 会把内容挤窄。
+ *
+ * ============================================================
+ * 样式照 SukiSU 的 `NavigationRailMaterial`，但**自己拼**
+ * ============================================================
+ * SukiSU 用的是 M3 `WideNavigationRail`；本项目 material3 是 1.4.0，
+ * 那个 API 还带 `internal` 的实验注解、参数也不一样（没有 `contentPadding`），
+ * 所以这里用 `NavigationRail` 的基础零件自己搭，效果对得上、也没有实验 API 的坑：
+ *
+ * | 项 | 做法 |
+ * |---|---|
+ * | 展开 / 收起 | 宽度 `80dp ↔ 200dp` 用 `animateDpAsState` 过渡，标签 `AnimatedVisibility` 淡入淡出 |
+ * | 顶部的开关按钮 | 收起时 `Menu`、展开时 `MenuOpen` |
+ * | 选中态 | 胶囊铺 `primary` + 图标 / 文字 `onPrimary`，颜色用 `animateColorAsState` 渐变 |
+ * | 间距 | 三项之间 `spacedBy(10.dp)`，比默认松 |
+ * | 系统栏 | 自己 `windowInsetsPadding`，外面**不要**再加，否则双份 |
+ * | 记住展开状态 | 存偏好 `appearance_nav_rail_expanded` |
  */
 @Composable
 private fun SthKeyNavigationRail(
     currentPage: Int,
     onSelect: (TopDestination) -> Unit,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    NavigationRail(
-        modifier = modifier,
-        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+    val width by animateDpAsState(
+        targetValue = if (expanded) 200.dp else 80.dp,
+        animationSpec = tween(220),
+        label = "nav_rail_width",
+    )
+
+    Column(
+        modifier = modifier
+            .fillMaxHeight()
+            .width(width)
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .windowInsetsPadding(
+                WindowInsets.systemBars
+                    .union(WindowInsets.displayCutout)
+                    .only(WindowInsetsSides.Start + WindowInsetsSides.Vertical),
+            ),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        /* 顶部：展开 / 收起 */
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(64.dp),
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            IconButton(
+                onClick = { onExpandedChange(!expanded) },
+                modifier = Modifier.padding(start = 16.dp),
+            ) {
+                Icon(
+                    imageVector = if (expanded) {
+                        Icons.AutoMirrored.Filled.MenuOpen
+                    } else {
+                        Icons.Filled.Menu
+                    },
+                    contentDescription = if (expanded) "收起侧边栏" else "展开侧边栏",
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
         TopDestination.entries.forEach { destination ->
-            NavigationRailItem(
+            NavigationRailEntry(
+                destination = destination,
                 selected = currentPage == destination.ordinal,
+                expanded = expanded,
                 onClick = { onSelect(destination) },
-                icon = {
-                    Icon(
-                        imageVector = destination.icon(),
-                        contentDescription = destination.label,
-                    )
-                },
-                label = { Text(destination.label) },
-                /*
-                 * ⚠️ 一直显示文字：只有图标时，第一次用的人得先猜。
-                 * rail 本身够宽（80dp+），放得下。
-                 */
-                alwaysShowLabel = true,
             )
+        }
+    }
+}
+
+/** 侧边栏里的一项：选中胶囊 + 图标 +（展开时）文字 */
+@Composable
+private fun NavigationRailEntry(
+    destination: TopDestination,
+    selected: Boolean,
+    expanded: Boolean,
+    onClick: () -> Unit,
+) {
+    /*
+     * ⚠️ 用 `animateColorAsState` 而不是直接切色：选中/取消选中时
+     * 胶囊和图标颜色是"渐变"过去的，这是 SukiSU 那个 rail 手感的关键。
+     */
+    val containerColor by animateColorAsState(
+        targetValue = if (selected) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            Color.Transparent
+        },
+        animationSpec = tween(220),
+        label = "nav_rail_item_container",
+    )
+    val contentColor by animateColorAsState(
+        targetValue = if (selected) {
+            MaterialTheme.colorScheme.onPrimary
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        animationSpec = tween(220),
+        label = "nav_rail_item_content",
+    )
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp)
+            .height(56.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(containerColor)
+            .clickable(enabled = !selected, onClick = onClick)
+            .padding(horizontal = if (expanded) 16.dp else 0.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = if (expanded) Arrangement.Start else Arrangement.Center,
+    ) {
+        Icon(
+            imageVector = if (selected) {
+                destination.selectedIcon()
+            } else {
+                destination.unselectedIcon()
+            },
+            contentDescription = destination.label,
+            tint = contentColor,
+            modifier = Modifier.size(24.dp),
+        )
+
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn(animationSpec = tween(150)) +
+                expandHorizontally(animationSpec = tween(220)),
+            exit = fadeOut(animationSpec = tween(100)) +
+                shrinkHorizontally(animationSpec = tween(220)),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = destination.label,
+                    color = contentColor,
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }

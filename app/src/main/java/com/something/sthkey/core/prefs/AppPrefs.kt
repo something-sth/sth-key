@@ -724,6 +724,18 @@ class AppPrefs private constructor(context: Context) {
         }
 
     /**
+     * 侧边导航栏是否**展开**（宽栏：图标 + 文字）。
+     *
+     * ⚠️ 默认收起（只显示图标）—— 和 SukiSU 一样：平板上一开始占的宽度越小越好，
+     * 想看文字点顶部的菜单按钮展开。
+     */
+    var appearanceNavRailExpanded: Boolean
+        get() = prefs.getBoolean(KEY_APPEARANCE_NAV_RAIL_EXPANDED, false)
+        set(value) {
+            prefs.edit().putBoolean(KEY_APPEARANCE_NAV_RAIL_EXPANDED, value).apply()
+        }
+
+    /**
      * 配置组合的 JSON（见 `data/config/GroupCodec`）。
      *
      * ⚠️ 存成**一个字符串**而不是拆成多个键:组合是"一组有序的成员"，
@@ -811,6 +823,7 @@ class AppPrefs private constructor(context: Context) {
     private const val KEY_APPEARANCE_PALETTE = "appearance_palette"
     private const val KEY_APPEARANCE_COLOR_SPEC = "appearance_color_spec"
     private const val KEY_APPEARANCE_NAV_RAIL = "appearance_nav_rail"
+    private const val KEY_APPEARANCE_NAV_RAIL_EXPANDED = "appearance_nav_rail_expanded"
 
         /**
          * 悬浮窗尚未被拖动过的位置标记。
