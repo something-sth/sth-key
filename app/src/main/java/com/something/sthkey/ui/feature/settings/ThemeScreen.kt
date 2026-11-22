@@ -33,6 +33,7 @@ import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.rounded.Colorize
+import androidx.compose.material.icons.rounded.MenuOpen
 import androidx.compose.material.icons.rounded.Style
 import androidx.compose.material.icons.rounded.ViewCarousel
 import androidx.compose.material.icons.rounded.Wallpaper
@@ -73,6 +74,7 @@ import com.something.sthkey.ui.component.SectionHeader
 import com.something.sthkey.ui.component.SectionHint
 import com.something.sthkey.ui.component.SettingDropdownItem
 import com.something.sthkey.ui.component.SettingsCard
+import com.something.sthkey.ui.component.SwitchItem
 import com.something.sthkey.ui.theme.rememberEffectiveSeed
 import com.something.sthkey.ui.theme.rememberSeededColorScheme
 import com.something.sthkey.ui.theme.toSpecVersion
@@ -201,12 +203,29 @@ fun ThemeScreen(
 
         item {
             SettingsCard {
+                /*
+                 * 侧边栏是**开关**，不是强制：SukiSU 在平板上默认就是 rail，
+                 * 但有人就喜欢底栏，所以这里让用户自己选。
+                 */
+                SwitchItem(
+                    title = "侧边导航栏",
+                    subtitle = "平板 / 横屏更顺手；开启后不显示底栏，" +
+                        "悬浮底栏同时停用（左侧浮一条胶囊没有意义）",
+                    leadingIcon = Icons.Rounded.MenuOpen,
+                    checked = viewModel.navigationRail,
+                    onCheckedChange = viewModel::applyNavigationRail,
+                )
                 SettingDropdownItem(
                     title = "底栏样式",
                     leadingIcon = Icons.Rounded.ViewCarousel,
-                    subtitle = viewModel.bottomBarStyle.description,
+                    subtitle = if (viewModel.navigationRail) {
+                        "已开启侧边导航栏，底栏不显示；这里的选择会保留"
+                    } else {
+                        viewModel.bottomBarStyle.description
+                    },
                     items = BottomBarStyle.entries.map { it.label },
                     selectedIndex = BottomBarStyle.entries.indexOf(viewModel.bottomBarStyle),
+                    enabled = !viewModel.navigationRail,
                     onItemSelected = { index ->
                         BottomBarStyle.entries.getOrNull(index)?.let(
                             viewModel::applyBottomBarStyle,
@@ -216,14 +235,17 @@ fun ThemeScreen(
             }
         }
 
-        item {
-            SettingsCard {
-                /*
-                 * ⚠️ 底栏只在三个一级页面显示，而这是二级页 ——
-                 * 改完如果不预览，屏幕上**什么都看不到**。所以这里放**真组件**，
-                 * 不是示意图（示意图迟早和真实观感脱节）。
-                 */
-                ThemeBottomBarPreview(style = viewModel.bottomBarStyle)
+        /* 底栏预览：开了侧边栏就不显示（那时屏幕上根本没有底栏） */
+        if (!viewModel.navigationRail) {
+            item {
+                SettingsCard {
+                    /*
+                     * ⚠️ 底栏只在三个一级页面显示，而这是二级页 ——
+                     * 改完如果不预览，屏幕上**什么都看不到**。所以这里放**真组件**，
+                     * 不是示意图（示意图迟早和真实观感脱节）。
+                     */
+                    ThemeBottomBarPreview(style = viewModel.bottomBarStyle)
+                }
             }
         }
 

@@ -554,6 +554,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         AppLog.i(TAG, "外观：色彩规格 → ${spec.label}")
     }
 
+    /**
+     * 侧边导航栏开关（平板 / 横屏）。
+     *
+     * ⚠️ 开启后底栏整条不显示（悬浮样式同时停用）—— 左侧再浮一条胶囊没有意义。
+     */
+    var navigationRail by mutableStateOf(prefs.appearanceNavigationRail)
+        private set
+
+    fun applyNavigationRail(enabled: Boolean) {
+        prefs.appearanceNavigationRail = enabled
+        navigationRail = enabled
+        AppLog.i(TAG, if (enabled) "外观：侧边导航栏 → 开" else "外观：侧边导航栏 → 关")
+    }
+
     /* ============================================================
      * 采集通道能力（root / Shizuku / 无障碍）
      * ============================================================ */

@@ -273,6 +273,51 @@ ColorPickerDialog(
 验证：单测 **827** 用例全过（`AppearanceTest` 10 例）；debug/release 通过；
 APK 10,385,051 B；签名不变。
 
+### 5.8 侧边导航栏 + 系统栏透明（2026-11-22）
+
+#### 需求
+
+> 平板打开 SukiSU，tab 在左侧、不能改回底栏。我们做成**开关而不是强制**；
+> 侧边栏开启时悬浮底栏不可用（左侧浮一条胶囊很怪）；
+> 悬浮底栏开启时，系统底部导航栏**不能填充实色**，否则看不出"浮着"。
+
+#### 实现
+
+| 项 | 做法 |
+|---|---|
+| 开关 | 偏好 `appearance_nav_rail`（默认 **关**），主题页「底栏」分组里的 `SwitchItem` |
+| 侧边栏 | M3 `NavigationRail` + `NavigationRailItem(alwaysShowLabel = true)`；**只在一级页面显示**（进二级页收起，内容要全宽） |
+| 与悬浮互斥 | `floatingBar = style == FLOATING && !navigationRail`；开启 rail 时底栏整条不画，`LocalBottomBarInset` 归 0 |
+| 底栏样式下拉 | 开启 rail 时 `enabled = false` + 副标题说明"选择会保留"，并**隐藏底栏预览**（屏幕上根本没有底栏） |
+| 布局 | `Row { [rail] Box(weight 1f) { NavHost + 悬浮栏 } }`；有 rail 时 NavHost **不能**再套 `padding(innerPadding)`（否则左边多一层缩进），改为只加顶/底内边距 |
+| 系统栏 | `enableEdgeToEdge(statusBarStyle = 透明, navigationBarStyle = 透明)` + API 29+ `window.isNavigationBarContrastEnforced = false` |
+
+**为什么"底部实色条"会消失**：`enableEdgeToEdge()` 的默认样式给导航栏刷的是**半透明 scrim**
+（浅色下 ≈ `#E6FFFFFF`），和页面底色 `surfaceContainer` 不是同一个颜色，所以看得到一条"实色条"。
+改成全透明 + 关掉系统的对比度增强后，导航栏区域显示的就是**页面自己的背景**，与内容连成一片，
+悬浮胶囊才像浮在上面。
+
+⚠️ **标准底栏不受影响**：M3 `NavigationBar` 默认 `windowInsets = NavigationBarDefaults.windowInsets`，
+它会把 surface 画到导航栏区域里（内部加 padding），所以看起来仍然是一条贴底的实色栏。
+
+⚠️ 这一条与 SukiSU 一样是**无条件**做的（不只在悬浮模式下）：
+标准栏本来就会自己填满，无条件透明只是去掉了那层多余的 scrim。
+
+#### 验证
+
+| 项 | 结果 |
+|---|---|
+| 单测 | ✅ 827 用例（本功能是纯 UI/偏好，无新增单测） |
+| debug / release | ✅ 通过 |
+| APK | 10,397,109 B；签名不变 |
+| 真机 | ⏳ 待验证：平板/横屏下 rail 位置与内边距；开 rail 后底栏消失、下拉置灰；悬浮模式下导航栏无实色条；三键导航设备上的观感 |
+
+#### 待确认 / 可能的后招
+
+- 现在**手机上也能开** rail（默认关）。如果觉得手机上开了太挤，可以按宽度（≥600dp）隐藏这个开关，或按宽度**默认开**；
+- rail 目前是图标+文字；如果想更窄可以只留图标（`alwaysShowLabel = false`）；
+- 页面过渡与预测性返回仍然**暂缓**（用户 2026-11-22 决定先放一放）。
+
 ---
 
 ## 6. 方案 B：页面过渡 + 预测性返回

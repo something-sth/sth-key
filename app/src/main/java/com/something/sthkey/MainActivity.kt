@@ -4,6 +4,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -14,11 +15,13 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.WindowInsets
@@ -36,6 +39,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -152,7 +157,27 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        /*
+         * ⚠️ 系统栏用**全透明**（与 SukiSU 一致），不要用 `enableEdgeToEdge()` 的默认
+         * 半透明 scrim：默认那层 scrim 会在屏幕底部留一条"实色条"，
+         * 悬浮胶囊压在上面就不像浮着了。
+         *
+         * ⚠️ 标准底栏不受影响：M3 `NavigationBar` 自己会把 surface 画到导航栏区域里。
+         * ⚠️ API 29+ 还要关掉 `isNavigationBarContrastEnforced`，否则系统会再加一层底。
+         */
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.auto(
+                android.graphics.Color.TRANSPARENT,
+                android.graphics.Color.TRANSPARENT,
+            ),
+            navigationBarStyle = SystemBarStyle.auto(
+                android.graphics.Color.TRANSPARENT,
+                android.graphics.Color.TRANSPARENT,
+            ),
+        )
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            window.isNavigationBarContrastEnforced = false
+        }
 
         AppLog.i(TAG, "MainActivity 创建")
 
@@ -773,7 +798,16 @@ private fun MainScaffold(
      * ⚠️ 它不进 `Scaffold` 的 `bottomBar` 槽位（那样会预留一条空白 =「实色背景」），
      * 而是叠在内容之上；高度通过 `LocalBottomBarInset` 传给需要避让的东西。
      */
-    val floatingBar = viewModel.bottomBarStyle == BottomBarStyle.FLOATING
+    /*
+     * ⚠️ 侧边导航栏开启时**整条底栏都不显示**（悬浮样式自然也停用）——
+     * 在屏幕左侧再浮一条胶囊本来就说不通，所以这里直接把 floating 置 false，
+     * 后面所有"悬浮栏预算 / 叠加层 / 系统栏透明"的判断都跟着它走。
+     */
+    val navigationRail = viewModel.navigationRail
+    val floatingBar = viewModel.bottomBarStyle == BottomBarStyle.FLOATING && !navigationRail
+
+    /** 侧边栏只在一级页面显示（和底栏一样，进二级页就收起来） */
+    val showRail = navigationRail && showBottomBar
 
     /*
      * 胶囊自己会避开手势条（`applyWindowInsets = true`），
@@ -853,7 +887,7 @@ private fun MainScaffold(
              * 看起来就像"底栏被安在一块实色背景上"（用户三番两次指出的坑）。
              * 悬浮样式改为叠在内容之上，见下面 `Box` 里的那一段。
              */
-            if (showBottomBar && !floatingBar) {
+            if (showBottomBar && !floatingBar && !navigationRail) {
                 SthKeyBottomBar(
                     currentPage = selectedPage,
                     style = viewModel.bottomBarStyle,
@@ -873,11 +907,50 @@ private fun MainScaffold(
             LocalBottomBarInset provides
                 if (floatingBar && showBottomBar) floatingBarReserved else 0.dp,
         ) {
-            Box(modifier = Modifier.fillMaxSize()) {
+            Row(modifier = Modifier.fillMaxSize()) {
+                /*
+                 * 侧边栏（平板/横屏）。
+                 *
+                 * ⚠️ 只给**一级页面**显示：进二级页时内容要全宽，rail 会让页面变窄。
+                 * ⚠️ 顶部/底部内边距要自己加：Rail 是贴着屏幕边放的，
+                 *    不加就会顶到状态栏下面、或者被手势条压住。
+                 */
+                if (showRail) {
+                    SthKeyNavigationRail(
+                        currentPage = selectedPage,
+                        onSelect = { destination -> animateTo(destination) },
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .padding(
+                                top = innerPadding.calculateTopPadding(),
+                                bottom = innerPadding.calculateBottomPadding(),
+                            ),
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                ) {
                 NavHost(
             navController = navController,
             startDestination = SubRoutes.MAIN,
-            modifier = Modifier.padding(innerPadding),
+            /*
+             * ⚠️ 有 rail 时**不能**再套一层 `padding(innerPadding)`：
+             * 横向会多出左边距（rail 已经占掉了），而顶部/底部内边距我们已经
+             * 单独加在 rail 和内容上了。
+             */
+            modifier = if (showRail) {
+                Modifier
+                    .fillMaxSize()
+                    .padding(
+                        top = innerPadding.calculateTopPadding(),
+                        bottom = innerPadding.calculateBottomPadding(),
+                    )
+            } else {
+                Modifier.padding(innerPadding)
+            },
             /*
              * 二级页的进退动画。
              *
@@ -1182,6 +1255,7 @@ private fun MainScaffold(
                     modifier = Modifier.align(Alignment.BottomCenter),
                 )
             }
+                }
             }
         }
     }
@@ -1328,6 +1402,55 @@ private fun SthKeyBottomBar(
                 TopDestination.entries.getOrNull(index)?.let(onSelect)
             },
         )
+    }
+}
+
+/**
+ * 侧边导航栏（平板 / 横屏）。
+ *
+ * ============================================================
+ * 为什么是**可选开关**，而不是按宽度自动切
+ * ============================================================
+ * SukiSU 在平板上默认就是左侧 rail、且不能切回底栏。我们的做法是给一个开关：
+ *
+ * | | SukiSU | 我们 |
+ * |---|---|---|
+ * | 触发 | 按屏幕宽度自动 | 用户自己开 |
+ * | 手机上 | 仍是底栏 | 也能开（有人就喜欢） |
+ *
+ * ⚠️ 开启后**底栏整条不显示**（含悬浮样式）—— 左侧再浮一条胶囊没有意义，
+ *    所以 `floatingBar` 在那边已经与 `navigationRail` 互斥。
+ *
+ * ⚠️ 只在一级页面显示：二级页要全宽，rail 会把内容挤窄。
+ */
+@Composable
+private fun SthKeyNavigationRail(
+    currentPage: Int,
+    onSelect: (TopDestination) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    NavigationRail(
+        modifier = modifier,
+        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+    ) {
+        TopDestination.entries.forEach { destination ->
+            NavigationRailItem(
+                selected = currentPage == destination.ordinal,
+                onClick = { onSelect(destination) },
+                icon = {
+                    Icon(
+                        imageVector = destination.icon(),
+                        contentDescription = destination.label,
+                    )
+                },
+                label = { Text(destination.label) },
+                /*
+                 * ⚠️ 一直显示文字：只有图标时，第一次用的人得先猜。
+                 * rail 本身够宽（80dp+），放得下。
+                 */
+                alwaysShowLabel = true,
+            )
+        }
     }
 }
 

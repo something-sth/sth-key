@@ -713,6 +713,17 @@ class AppPrefs private constructor(context: Context) {
         }
 
     /**
+     * 侧边导航栏（平板 / 横屏）。默认**关**。
+     *
+     * ⚠️ 开启后底栏整条不显示（悬浮样式同时停用），见 `MainActivity` 的 `navigationRail`。
+     */
+    var appearanceNavigationRail: Boolean
+        get() = prefs.getBoolean(KEY_APPEARANCE_NAV_RAIL, false)
+        set(value) {
+            prefs.edit().putBoolean(KEY_APPEARANCE_NAV_RAIL, value).apply()
+        }
+
+    /**
      * 配置组合的 JSON（见 `data/config/GroupCodec`）。
      *
      * ⚠️ 存成**一个字符串**而不是拆成多个键:组合是"一组有序的成员"，
@@ -799,6 +810,7 @@ class AppPrefs private constructor(context: Context) {
     private const val KEY_SEED_COLOR = "seed_color"
     private const val KEY_APPEARANCE_PALETTE = "appearance_palette"
     private const val KEY_APPEARANCE_COLOR_SPEC = "appearance_color_spec"
+    private const val KEY_APPEARANCE_NAV_RAIL = "appearance_nav_rail"
 
         /**
          * 悬浮窗尚未被拖动过的位置标记。
