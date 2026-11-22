@@ -312,6 +312,24 @@ APK 10,385,051 B；签名不变。
 | APK | 10,397,109 B；签名不变 |
 | 真机 | ⏳ 待验证：平板/横屏下 rail 位置与内边距；开 rail 后底栏消失、下拉置灰；悬浮模式下导航栏无实色条；三键导航设备上的观感 |
 
+#### 第二轮修正（2026-11-22 12:27，用户真机反馈）
+
+| 反馈 | 根因 | 改法 |
+|---|---|---|
+| **开侧边栏后还是左右翻页** | pager 写死了 `HorizontalPager` | 按 `navigationRail` 分支：rail 下用 `VerticalPager`（上下翻页）。两者共用同一个 `pagerState`；切换时 `scrollToPage(currentPage)` 对齐，避免停在"半页" |
+| **悬浮底栏下系统导航栏还有条背景色** | **不是系统 scrim**，是 `Scaffold` 给内容留了底部系统栏内边距：列表在导航栏上方就截止，底下露出一块纯页面底色 | 新增 `LocalBottomBarOverlay`：悬浮模式下**外层 Scaffold 和页面里的 `ScreenScaffold` 都把底部系统栏内边距去掉**，内容真的铺到屏幕最底；避让仍由 `LocalBottomBarInset`（含导航栏高度）负责。另加一层兜底：主题切换后重新把 `window.navigationBarColor` 压成透明（个别机型会重置） |
+
+> ⚠️ 第一条也解释了"为什么看起来像系统条"：色值确实是页面底色，
+> 但**内容到那里就断了**，视觉上就是一条带子。只把系统栏设透明是治不好的。
+
+> ⚠️ **构建标记的坑（重要）**：`clean` **不会**刷新 `BUILD_TAG` —— 它是配置阶段的
+> `buildConfigField`，会被**配置缓存**固化成第一次配置时的值。实测 `clean` 后重打，
+> tag 还是 `1122-121036`。要刷新必须加 `--no-configuration-cache`：
+> ```powershell
+> .\gradlew.bat :app:assembleRelease --no-configuration-cache
+> ```
+> 否则"两个不同代码的包 tag 一模一样"，排查"装的是不是新包"时会误导。
+
 #### 待确认 / 可能的后招
 
 - 现在**手机上也能开** rail（默认关）。如果觉得手机上开了太挤，可以按宽度（≥600dp）隐藏这个开关，或按宽度**默认开**；

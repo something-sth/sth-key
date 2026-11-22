@@ -20,12 +20,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
@@ -42,6 +46,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -79,6 +84,7 @@ import com.something.sthkey.domain.ui.BottomBarStyle
 import com.something.sthkey.ui.AppStage
 import com.something.sthkey.ui.component.FloatingTab
 import com.something.sthkey.ui.component.LocalBottomBarInset
+import com.something.sthkey.ui.component.LocalBottomBarOverlay
 import com.something.sthkey.ui.component.MaterialFloatingBottomBar
 import com.something.sthkey.ui.component.PendingBitmapImportDialog
 import com.something.sthkey.ui.feature.announcement.AnnouncementDialog
@@ -338,6 +344,18 @@ class MainActivity : ComponentActivity() {
                     ).apply {
                         isAppearanceLightStatusBars = !darkThemeNow
                         isAppearanceLightNavigationBars = !darkThemeNow
+                    }
+                    /*
+                     * ⚠️ 再兜一次底：主题/深浅色切换后，有的机型会把导航栏颜色
+                     * 重置回默认的 scrim（就是那条"实色"）。这里重新压回透明。
+                     * API 35 起导航栏强制 edge-to-edge，颜色本身被忽略，不用设。
+                     */
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                        window.isNavigationBarContrastEnforced = false
+                    }
+                    if (android.os.Build.VERSION.SDK_INT < 35) {
+                        @Suppress("DEPRECATION")
+                        window.navigationBarColor = android.graphics.Color.TRANSPARENT
                     }
                 }
                 Surface(
@@ -860,6 +878,18 @@ private fun MainScaffold(
          * 所以两者必须同色 —— 页面换色时这里也要跟着换。
          */
         containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        /*
+         * ⚠️ 悬浮底栏模式下**去掉底部系统栏内边距**：让内容铺到屏幕最底，
+         * 否则导航栏上方会截出一条纯色带（用户报的"还有条背景色"）。
+         * 避让由 `LocalBottomBarInset`（含导航栏高度）负责。
+         */
+        contentWindowInsets = if (floatingBar && showBottomBar) {
+            WindowInsets.systemBars.only(
+                WindowInsetsSides.Top + WindowInsetsSides.Horizontal,
+            )
+        } else {
+            ScaffoldDefaults.contentWindowInsets
+        },
         bottomBar = {
             /*
              * ⚠️⚠️ 两种样式**都**放在 `bottomBar` 槽里，不再自己叠在内容上
@@ -906,6 +936,11 @@ private fun MainScaffold(
         CompositionLocalProvider(
             LocalBottomBarInset provides
                 if (floatingBar && showBottomBar) floatingBarReserved else 0.dp,
+            /*
+             * ⚠️ 页面里的 `Scaffold` 也要知道现在是"悬浮压在上面"：
+             * 它必须把底部系统栏内边距去掉，内容才能铺到屏幕最底。
+             */
+            LocalBottomBarOverlay provides (floatingBar && showBottomBar),
         ) {
             Row(modifier = Modifier.fillMaxSize()) {
                 /*
@@ -992,15 +1027,12 @@ private fun MainScaffold(
              */
             composable(SubRoutes.MAIN) { entry ->
                 BlockInputWhenHidden(isCurrent = isCurrentRoute(entry, currentRoute)) {
-                    HorizontalPager(
-                        state = pagerState,
-                        modifier = Modifier.fillMaxSize(),
-                        /*
-                         * ⚠️ 停在二级页时 pager 不在前台，手势不该被它吃掉；
-                         * 不过那时整个 MAIN 页都被 BlockInputWhenHidden 盖住了，
-                         * 所以这里不用再单独判断。
-                         */
-                    ) { page ->
+                    /*
+                     * ⚠️ 侧边导航栏下**上下翻页**（用户要求）：
+                     * rail 是纵向排布，内容再横向滑很别扭。
+                     * 两种 `Pager` 共用同一个 `pagerState`，所以在这里分支即可。
+                     */
+                    val pageContent: @Composable (Int) -> Unit = { page ->
                         when (TopDestination.entries[page]) {
                             TopDestination.HOME -> HomeScreen(
                                 viewModel = viewModel,
@@ -1032,6 +1064,26 @@ private fun MainScaffold(
                                 onReopenSetup = onOpenSetup,
                             )
                         }
+                    }
+
+                    /*
+                     * 切换 rail 时把当前页对齐一下：两种 Pager 的滚动状态量纲不同，
+                     * 不对齐的话切完可能停在"半页"的位置。
+                     */
+                    LaunchedEffect(navigationRail) {
+                        pagerState.scrollToPage(pagerState.currentPage)
+                    }
+
+                    if (navigationRail) {
+                        VerticalPager(
+                            state = pagerState,
+                            modifier = Modifier.fillMaxSize(),
+                        ) { page -> pageContent(page) }
+                    } else {
+                        HorizontalPager(
+                            state = pagerState,
+                            modifier = Modifier.fillMaxSize(),
+                        ) { page -> pageContent(page) }
                     }
                 }
             }

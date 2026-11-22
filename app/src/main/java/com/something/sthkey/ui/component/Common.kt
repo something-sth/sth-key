@@ -14,6 +14,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -31,6 +35,7 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -120,6 +125,18 @@ private fun MaterialScreenScaffold(
         modifier = modifier,
         /* ⚠️ 页面底色 surfaceContainer（灰）+ 卡片 surface（白）—— 与 SukiSU 一致 */
         containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        /*
+         * ⚠️ 悬浮底栏模式下**不要**给底部留系统栏内边距：
+         * 留了就会在导航栏上方截断，底下露出一条纯色带（用户报的"还有条背景色"）。
+         * 让内容铺到屏幕最底，避让交给 `LocalBottomBarInset`（它已经含导航栏高度）。
+         */
+        contentWindowInsets = if (LocalBottomBarOverlay.current) {
+            WindowInsets.systemBars.only(
+                WindowInsetsSides.Top + WindowInsetsSides.Horizontal,
+            )
+        } else {
+            ScaffoldDefaults.contentWindowInsets
+        },
         topBar = {
             TopAppBar(
                 title = {
