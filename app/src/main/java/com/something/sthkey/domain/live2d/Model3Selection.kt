@@ -44,8 +44,24 @@ object Model3Selection {
      */
     private val VARIANT_PRIORITY = listOf("keyboard", "standard", "gamepad")
 
-    /** 搜索深度上限（与 Axon 的 `findFilesBySuffix(root, ".model3.json", 5)` 一致） */
-    const val MAX_DEPTH = 5
+    /**
+     * 搜索深度上限。
+     *
+     * ⚠️ **不是 Axon 的 5**。实测样本 `星野桌宠猫猫2K` 打穿了 5 层：
+     *
+     * ```
+     * 星野桌宠猫猫2K/2K/img/keyboard/cat_model/cat.model3.json
+     * ```
+     *
+     * 解压出来的根目录 = 压缩包顶层目录，于是包本身多套了一层
+     * （`<压缩包名>/<风格目录>/...`）；Kotlin 的
+     * `walkTopDown().maxDepth(5)` 在这个路径上**一个 model3 都找不到**，
+     * 用户看到的却是「这个压缩包里没有 .model3.json」—— 文案还完全误导。
+     *
+     * ⚠️ 所以放宽到 10：多套一两层（`X/X/2K/img/...`）都能覆盖，
+     * 而**排序仍然按深度从浅到深**，正常包的行为不变。
+     */
+    const val MAX_DEPTH = 10
 
     /**
      * 一个候选。

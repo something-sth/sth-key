@@ -55,6 +55,15 @@ object Live2DModelImporter {
     private const val MAX_ENTRY_BYTES = 192L * 1024L * 1024L
     private const val MAX_TOTAL_BYTES = 512L * 1024L * 1024L
 
+    /** physics3.json 上限（正常几 KB ~ 几十 KB；2MB 足够大） */
+    private const val MAX_PHYSICS_BYTES = 2L * 1024L * 1024L
+
+    /** 单条 motion3 上限（正常几十 KB） */
+    private const val MAX_MOTION_BYTES = 1L * 1024L * 1024L
+
+    /** 所有 motion 合计上限，防止 VTube 大包一次吃掉几十 MB */
+    private const val MAX_MOTIONS_TOTAL_BYTES = 8L * 1024L * 1024L
+
     /** base64 分块大小；必须是 3 的整数倍，否则拼出来的 base64 是坏的 */
     private const val BASE64_CHUNK_BYTES = 3 * 1024 * 1024
 
@@ -226,7 +235,10 @@ object Live2DModelImporter {
             is Model3Selection.Choice.Picked -> File(dir, choice.path)
 
             Model3Selection.Choice.NoModel3 -> return Result.failure(
-                IllegalStateException("这个压缩包里没有 .model3.json，不是 Live2D 模型包"),
+                IllegalStateException(
+                    "这个压缩包里没有 .model3.json（已查 ${Model3Selection.MAX_DEPTH} 层目录）。\n" +
+                        "请确认选的是 Live2D 模型包，而不是只有程序文件的安装包。",
+                ),
             )
 
             is Model3Selection.Choice.AllBroken -> return Result.failure(
@@ -341,6 +353,7 @@ object Live2DModelImporter {
         // 5. 生成页面
         /* ⚠️ Mver 风格包（自带逐键 PNG 手）不能去收模型手臂，见 writeModelData 的说明 */
         val expressions = loadExpressions(modelJson, modelBase, dir)
+        val (motions, motionGroups) = loadMotions(modelJson, modelBase, dir)
         writeModelData(
             dir = dir,
             moc = moc,
@@ -350,6 +363,15 @@ object Live2DModelImporter {
             mverHands = hasMverHands(dir),
             expressions = expressions,
             exprBindings = loadExpressionBindings(dir, null, expressions.length()),
+            physics = loadPhysics(modelJson, modelBase, dir),
+            motions = motions,
+            motionGroups = motionGroups,
+            motionBindings = loadMotionBindings(dir, null),
+            hands = Live2DMverConfig.loadHandSprites(dir, null, dir),
+            sticks = Live2DMverConfig.loadSticks(dir, null, dir),
+            background = Live2DMverConfig.loadBackground(dir, null, dir),
+            placement = Live2DMverConfig.loadLayout(dir),
+            design = Live2DMverConfig.loadDesign(dir),
         )
         File(dir, Live2DModels.ENTRY_INDEX).writeText(buildHtml(layout))
 
@@ -630,6 +652,7 @@ object Live2DModelImporter {
             }
 
             val variantExpressions = loadExpressions(json, modelBase, dir)
+            val (variantMotions, variantMotionGroups) = loadMotions(json, modelBase, dir)
             writeModelData(
                 dir = variant.root,
                 moc = moc,
@@ -645,6 +668,19 @@ object Live2DModelImporter {
                     mode = variant.configMode(),
                     expressionCount = variantExpressions.length(),
                 ),
+                physics = loadPhysics(json, modelBase, dir),
+                motions = variantMotions,
+                motionGroups = variantMotionGroups,
+                motionBindings = loadMotionBindings(dir, variant.configMode()),
+                hands = Live2DMverConfig.loadHandSprites(dir, variant.configMode(), variant.root),
+                sticks = Live2DMverConfig.loadSticks(dir, variant.configMode(), variant.root),
+                background = Live2DMverConfig.loadBackground(
+                    dir,
+                    variant.configMode(),
+                    variant.root,
+                ),
+                placement = Live2DMverConfig.loadLayout(dir),
+                design = Live2DMverConfig.loadDesign(dir),
             )
             File(variant.root, Live2DModels.ENTRY_INDEX).writeText(buildHtml(variant.layout))
             AppLog.i(TAG, "已生成变体页面：${variant.name}（${variant.pageDir}）")
@@ -828,6 +864,24 @@ object Live2DModelImporter {
         /* 表情与按键组合（见 loadExpressions / loadExpressionBindings） */
         expressions: JSONArray? = null,
         exprBindings: JSONArray? = null,
+        /** physics3.json 原文。没有就是 null（运行时自动跳过物理） */
+        physics: JSONObject? = null,
+        /** 动作原文件（motion3 JSON），已按 model3 顺序整理 */
+        motions: JSONArray? = null,
+        /** 动作组名 → 索引数组（`Idle` / `CAT_motion_lock` …） */
+        motionGroups: JSONObject? = null,
+        /** 按键组合 → 动作（Mver config.json） */
+        motionBindings: JSONArray? = null,
+        /** Mver 手部贴图（lefthand / righthand） */
+        hands: JSONObject? = null,
+        /** 手柄摇杆贴图与位置 */
+        sticks: JSONObject? = null,
+        /** 桌面/键盘底图（文件名，相对页面） */
+        background: String? = null,
+        /** Mver 摆放参数 {correct, offsetX, offsetY} */
+        placement: JSONObject? = null,
+        /** Mver 设计画布 {width, height, handOffsetX, handOffsetY} */
+        design: JSONObject? = null,
     ) {
         val texturePaths = JSONArray().apply {
             textures.forEach { put(relativePath(dir, it)) }
@@ -857,7 +911,116 @@ object Live2DModelImporter {
              */
             out.write("window.__BONGO_EXPRESSIONS=${expressions.orEmptyJsonArray()};\n")
             out.write("window.__BONGO_EXPR_BINDINGS=${exprBindings.orEmptyJsonArray()};\n")
+
+            /*
+             * 物理：整份 physics3.json 内联。
+             *
+             * ⚠️ 由 runtime 自己解析/求值（没有第三方 runtime）。
+             * 大模型的 physics 一般几十 KB，这里直接写；没有就写 null。
+             */
+            out.write("window.__BONGO_PHYSICS=${physics?.toString() ?: "null"};\n")
+
+            /*
+             * 动作：每条 motion3 原文 + 组名到索引的映射。
+             *
+             * ⚠️ 不在这里解析曲线：曲线格式（Linear/Bezier/Stepped/InverseStepped）
+             * 由 runtime 求值，Kotlin 只负责搬运，避免两边各写一份。
+             */
+            out.write("window.__BONGO_MOTIONS=${motions.orEmptyJsonArray()};\n")
+            out.write("window.__BONGO_MOTION_GROUPS=${motionGroups?.toString() ?: "{}"};\n")
+            out.write("window.__BONGO_MOTION_BINDINGS=${motionBindings.orEmptyJsonArray()};\n")
+            out.write("window.__BONGO_HANDS=${hands?.toString() ?: "null"};\n")
+            out.write("window.__BONGO_STICKS=${sticks?.toString() ?: "null"};\n")
+            out.write("window.__BONGO_BACKGROUND=${background?.let { JSONObject.quote(it) } ?: "null"};\n")
+            out.write("window.__BONGO_LAYOUT=${placement?.toString() ?: "null"};\n")
+            out.write("window.__BONGO_DESIGN=${design?.toString() ?: "null"};\n")
         }
+    }
+
+    /**
+     * 读 model3 的 `Motions`：每条 motion3 原文 + 组名 → 索引。
+     *
+     * ⚠️ 单个文件 >1MB 或累计 >8MB 的条目会填 `-1` 占位（不压缩数组，
+     * 保证 model3 里的顺序/索引不变），runtime 遇到 `-1` 直接跳过。
+     */
+    private fun loadMotions(
+        modelJson: JSONObject,
+        modelBase: File,
+        root: File,
+    ): Pair<JSONArray, JSONObject> {
+        val motions = JSONArray()
+        val groups = JSONObject()
+
+        val refs = modelJson.optJSONObject("FileReferences") ?: return motions to groups
+        val motionRefs = refs.optJSONObject("Motions") ?: return motions to groups
+
+        var totalBytes = 0L
+        for (groupName in motionRefs.keys()) {
+            val items = motionRefs.optJSONArray(groupName) ?: continue
+            val indices = JSONArray()
+
+            for (i in 0 until items.length()) {
+                val item = items.optJSONObject(i)
+                val relative = item?.optString("File")?.trim().orEmpty()
+                val file = if (relative.isEmpty()) null else resolveInside(modelBase, relative, root)
+
+                if (file == null || !file.isFile ||
+                    file.length() > MAX_MOTION_BYTES ||
+                    totalBytes + file.length() > MAX_MOTIONS_TOTAL_BYTES
+                ) {
+                    indices.put(-1)
+                    continue
+                }
+
+                val json = runCatching { JSONObject(file.readText()) }.getOrNull()
+                if (json == null) {
+                    indices.put(-1)
+                    continue
+                }
+
+                totalBytes += file.length()
+                val index = motions.length()
+                motions.put(
+                    JSONObject().apply {
+                        put("name", "$groupName/$i")
+                        put("json", json)
+                        put("fadeIn", item.optDouble("FadeInTime", 0.5))
+                        put("fadeOut", item.optDouble("FadeOutTime", 0.5))
+                    },
+                )
+                indices.put(index)
+            }
+
+            if (indices.length() > 0) groups.put(groupName, indices)
+        }
+        return motions to groups
+    }
+
+    /**
+     * 读 model3 里声明的 `physics3.json` 原文（给 runtime 自己求值）。
+     *
+     * ⚠️ 物理坏了不能连累导入：缺文件 / 解析失败 / 超过 2MB 一律返回 null，
+     * runtime 那边就当"这个模型没有物理"，画面仍然正常。
+     */
+    private fun loadPhysics(
+        modelJson: JSONObject,
+        modelBase: File,
+        root: File,
+    ): JSONObject? {
+        val relative = modelJson.optJSONObject("FileReferences")
+            ?.optString("Physics")
+            ?.trim()
+            .orEmpty()
+        if (relative.isEmpty()) return null
+
+        val file = resolveInside(modelBase, relative, root) ?: return null
+        if (!file.isFile || file.length() > MAX_PHYSICS_BYTES) {
+            AppLog.w(TAG, "physics 跳过：${file.name}（不存在或超过 2MB）")
+            return null
+        }
+        return runCatching { JSONObject(file.readText()) }
+            .onFailure { AppLog.w(TAG, "physics 解析失败：${file.name}") }
+            .getOrNull()
     }
 
     /**
@@ -918,6 +1081,115 @@ object Live2DModelImporter {
      * ⚠️ 这条语义是从 Axon 的 `mverComboBindings` 抄过来的（它就是这么解的），
      * 不是我们猜的:它对每个内层数组调用 `mverKeyCombo`，把数字当 VK 翻成键名。
      */
+    /**
+     * 读包配置里"按键组合 → 动作"的绑定。
+     *
+     * Mver 的 `config.json` 每个模式有两段：
+     * - `l2d_motion`：普通动作，对应 `CAT_motion` 组；
+     * - `l2d_motion_lockhand`：会锁手的动作，对应 `CAT_motion_lock` 组。
+     *
+     * 外层下标 = 组内动作下标；内层是 Windows 虚拟键码，必须**一起按下**。
+     * 卡提的 19 条注释（变身/窗户/猫耳…）正好对应 19 条 motion3。
+     */
+    private fun loadMotionBindings(
+        packageRoot: File,
+        mode: String?,
+    ): JSONArray {
+        val result = JSONArray()
+        val json = loadPackageConfig(packageRoot) ?: return result
+        val section = json.optJSONObject(mode ?: "standard")
+            ?: json.optJSONObject("keyboard")
+            ?: return result
+
+        for ((field, group) in listOf("l2d_motion" to "CAT_motion", "l2d_motion_lockhand" to "CAT_motion_lock")) {
+            val combos = section.optJSONArray(field) ?: continue
+            for (index in 0 until combos.length()) {
+                val combo = combos.optJSONArray(index) ?: continue
+                val keys = JSONArray()
+                for (k in 0 until combo.length()) {
+                    vkKeyName(combo.optInt(k, -1))?.let { keys.put(it) }
+                }
+                if (keys.length() == 0) continue
+                result.put(
+                    JSONObject().apply {
+                        put("keys", keys)
+                        put("group", group)
+                        put("index", index)
+                    },
+                )
+            }
+        }
+        return result
+    }
+
+    /**
+     * 读 Mver 的手部贴图（`lefthand` / `righthand`）。
+     *
+     * ⚠️ 这类包"按键盘有反应"**不是**靠模型动作，而是靠一张张手部 PNG：
+     * 按下哪个键，就把对应编号的手盖在模型上，同时把模型自己的手臂参数设为 1 收起来。
+     * 我们之前只做了"收手臂"、没画 PNG，于是按键看起来像没反应（手直接没了）。
+     */
+    /** 只给单测用：暴露手部解析结果，避免为了测试去起 Android Context */
+    @androidx.annotation.VisibleForTesting
+    internal fun debugHandSprites(
+        packageRoot: File,
+        mode: String?,
+        variantRoot: File?,
+    ): JSONObject? = loadHandSprites(packageRoot, mode, variantRoot)
+
+    private fun loadHandSprites(
+        packageRoot: File,
+        mode: String?,
+        variantRoot: File?,
+    ): JSONObject? {
+        val json = loadPackageConfig(packageRoot) ?: return null
+        val section = json.optJSONObject(mode ?: "keyboard")
+            ?: json.optJSONObject("keyboard")
+            ?: return null
+
+        fun side(field: String, dir: String): JSONObject? {
+            /* ⚠️ 没有对应目录就别写绑定：否则手臂被收起、手图却 404，手就真没了 */
+            if (variantRoot != null && !File(variantRoot, dir).isDirectory) return null
+            val combos = section.optJSONArray(field) ?: return null
+            if (combos.length() == 0) return null
+            val bindings = JSONArray()
+            for (index in 0 until combos.length()) {
+                val combo = combos.optJSONArray(index) ?: continue
+                val keys = JSONArray()
+                for (k in 0 until combo.length()) {
+                    vkKeyName(combo.optInt(k, -1))?.let { keys.put(it) }
+                }
+                if (keys.length() == 0) continue
+                bindings.put(
+                    JSONObject().apply {
+                        put("keys", keys)
+                        put("index", index)
+                    },
+                )
+            }
+            return if (bindings.length() == 0) {
+                null
+            } else {
+                JSONObject().apply {
+                    put("dir", dir)
+                    put("bindings", bindings)
+                }
+            }
+        }
+
+        val left = side("lefthand", "lefthand")
+        val right = side("righthand", "righthand")
+        if (left == null && right == null) return null
+        return JSONObject().apply {
+            left?.let { put("left", it) }
+            right?.let { put("right", it) }
+        }
+    }
+
+    /** 读包根的 config.json（允许 `//` 注释；没有就返回 null） */
+    private fun loadPackageConfig(packageRoot: File): JSONObject? =
+        Live2DMverConfig.loadConfig(packageRoot)
+
     private fun loadExpressionBindings(
         packageRoot: File,
         mode: String?,
@@ -1396,7 +1668,7 @@ object Live2DModelImporter {
              * 的原因（模型加载期间回退图一直在显示，加载完才 hidden）。
              * 藏掉之后加载期间窗口是全透明的，不会出现误导性的画面。
              */
-            "#background, #fallback, #leftKey, #rightKey { display: none !important; }"
+            "#fallback, #leftKey, #rightKey { display: none !important; }"
         } else {
             ""
         }
@@ -1439,6 +1711,13 @@ object Live2DModelImporter {
         #fallback { z-index: 1; }
         #live2dCanvas { z-index: 2; }
         #leftKey, #rightKey { z-index: 3; }
+        /* Mver 手部贴图：铺在模型画布上，按 1400×1400 画布坐标定位 */
+        #leftHand, #rightHand {
+            position: absolute;
+            object-fit: fill;
+            pointer-events: none;
+            z-index: 4;
+        }
         .hidden { display: none !important; }
 
         /* 由 buildHtml 按布局注入；只有角色的模型在这里压掉内置键盘美术 */
@@ -1452,6 +1731,8 @@ object Live2DModelImporter {
     <canvas id="live2dCanvas" class="layer"></canvas>
     <img id="leftKey" class="layer hidden">
     <img id="rightKey" class="layer hidden">
+    <img id="leftHand" class="hidden">
+    <img id="rightHand" class="hidden">
 </div>
 <script src="$ASSET_CORE_JS"></script>
 <script src="./${Live2DModels.ENTRY_MODEL_DATA}"></script>

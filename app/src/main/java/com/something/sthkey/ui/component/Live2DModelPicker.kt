@@ -156,6 +156,11 @@ fun Live2DModelPickerDialog(
                             /* ⚠️ 库模式不显示「已选中」标记 —— 库里没有选中这回事 */
                             selected = !libraryMode && model.id == selectedId,
                             enabled = !busy,
+                            /*
+                             * 库模式（设置 → 库 → Live2D 库）只用来**查看**已有模型：
+                             * 不显示左侧单选按钮、点模型也不切换任何东西。
+                             */
+                            selectable = !libraryMode,
                             onClick = { if (!libraryMode) onSelect(model.id) },
                             onRename = { renaming = model },
                             onDelete = { deleting = model },
@@ -286,6 +291,13 @@ private fun ModelRow(
     onDelete: () -> Unit,
     /** 多模式模型切换模式；单模式模型不会调用 */
     onVariantSelect: (String) -> Unit = {},
+    /**
+     * 是否允许选中/切换。
+     *
+     * ⚠️ **库模式为 false**：Live2D 库只用于查看已导入的模型，
+     * 点模型、点模式都不该产生任何实际效果（切换只在配置编辑里做）。
+     */
+    selectable: Boolean = true,
 ) {
     /* 展开状态只影响这一个条目，默认收起（库里条目多，不该一进来就一屏模式按钮） */
     var modesExpanded by remember(model.id) { mutableStateOf(false) }
@@ -297,11 +309,15 @@ private fun ModelRow(
             .padding(vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        RadioButton(
-            selected = selected,
-            onClick = { if (enabled) onClick() },
-            enabled = enabled,
-        )
+        if (selectable) {
+            RadioButton(
+                selected = selected,
+                onClick = { if (enabled) onClick() },
+                enabled = enabled,
+            )
+        } else {
+            Spacer(modifier = Modifier.width(12.dp))
+        }
 
         ModelThumbnail(model)
 
@@ -375,18 +391,57 @@ private fun ModelRow(
         }
 
         if (modesExpanded) {
-            Row(
+            /*
+             * 展开后是**纵向的模式列表**：每一项与单模式模型行同构
+             * （单选 + 预览图 + 名称），而不是一排 chip。
+             */
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 40.dp, bottom = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    .padding(start = 28.dp, bottom = 4.dp),
             ) {
                 model.variants.forEach { variant ->
-                    FilterChip(
-                        selected = variant.pageDir == model.variant,
-                        onClick = { if (enabled) onVariantSelect(variant.pageDir) },
-                        label = { Text(variant.name) },
-                    )
+                    val current = variant.pageDir == model.variant
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(enabled = selectable && enabled) {
+                                onVariantSelect(variant.pageDir)
+                            }
+                            .padding(vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (selectable) {
+                            RadioButton(
+                                selected = current,
+                                onClick = { if (enabled) onVariantSelect(variant.pageDir) },
+                                enabled = enabled,
+                            )
+                        } else {
+                            Spacer(modifier = Modifier.width(12.dp))
+                        }
+                        Live2DModelThumbnail(
+                            modelId = model.id,
+                            widthDp = 56f,
+                            heightDp = 32f,
+                            pageDir = variant.pageDir,
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = variant.name,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (current) {
+                            Text(
+                                text = "使用中",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -396,11 +451,12 @@ private fun ModelRow(
 
 /** 列表里的预览图：共用 [Live2DModelThumbnail]，尺寸用列表的小图规格 */
 @Composable
-private fun ModelThumbnail(model: Live2DModelEntry) {
+private fun ModelThumbnail(model: Live2DModelEntry, pageDir: String = "") {
     Live2DModelThumbnail(
         modelId = model.id,
         widthDp = 64f,
         heightDp = 37f,
+        pageDir = pageDir,
     )
 }
 

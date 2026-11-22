@@ -103,9 +103,16 @@ class Model3SelectionTest {
     }
 
     @Test
-    fun `深度上限与 Axon 一致`() {
-        /* Axon 的 findFilesBySuffix(root, ".model3.json", 5) */
-        assertEquals(5, Model3Selection.MAX_DEPTH)
+    fun `深度上限放宽到 10`() {
+        /*
+         * ⚠️ 不再是 Axon 的 5：实测样本 `星野桌宠猫猫2K` 是
+         * `星野桌宠猫猫2K/2K/img/keyboard/cat_model/cat.model3.json`（深度 5），
+         * Kotlin 的 maxDepth(5) 在那个结构上**一个都找不到**（已用 kotlinc 实测），
+         * 于是用户得到的是"包里没有 model3"这种误导性报错。
+         *
+         * ⚠️ 这条断言钉住的是"**至少** 10"：只要不往回收就行。
+         */
+        assertTrue(Model3Selection.MAX_DEPTH >= 10)
     }
 
     @Test

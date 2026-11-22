@@ -68,6 +68,27 @@ object Live2DSemantics {
      * 这里是输入设备层面的原始键码，直接用数字并分组注释，与 JS 资源命名一一对应。
      */
     private val TABLE: Map<Int, String> = mapOf(
+        // ---- 手柄（evdev BTN_* 段）----
+        // ⚠️ 手柄不参与键帽绘制（keyCapNames 用不到），但**必须**能映射出名字，
+        // 否则 overlay 的 `of(code)` 返回 null，事件会被直接丢掉。
+        0x130 to "GamepadA",
+        0x131 to "GamepadB",
+        0x133 to "GamepadY",
+        0x134 to "GamepadX",
+        0x136 to "GamepadLB",
+        0x137 to "GamepadRB",
+        0x138 to "GamepadLT",
+        0x139 to "GamepadRT",
+        0x13A to "GamepadBack",
+        0x13B to "GamepadStart",
+        0x13C to "GamepadGuide",
+        0x13D to "GamepadL3",
+        0x13E to "GamepadR3",
+        0x220 to "GamepadDpadUp",
+        0x221 to "GamepadDpadDown",
+        0x222 to "GamepadDpadLeft",
+        0x223 to "GamepadDpadRight",
+
         // ---- 字母（evdev 16..50，注意中间夹着别的键，不是连续的）----
         16 to "KeyQ", 17 to "KeyW", 18 to "KeyE", 19 to "KeyR", 20 to "KeyT",
         21 to "KeyY", 22 to "KeyU", 23 to "KeyI", 24 to "KeyO", 25 to "KeyP",

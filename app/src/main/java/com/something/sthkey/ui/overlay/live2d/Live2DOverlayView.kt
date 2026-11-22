@@ -133,6 +133,11 @@ class Live2DOverlayView(context: Context) : FrameLayout(context) {
     private var currentMouseMask = 0
     private var pendingMouseMask = 0
 
+    /** 手柄摇杆：最近一次收到的值（也用于页面就绪后补发） */
+    private var latestStick: FloatArray? = null
+    /** 这一次待发送的摇杆值；null = 没有变化 */
+    private var pendingStick: FloatArray? = null
+
     /**
      * 鼠标位移：已经转发到 JS 的量，以及这一帧待发送的位移。
      *
@@ -252,6 +257,28 @@ class Live2DOverlayView(context: Context) : FrameLayout(context) {
      * 所以第一个值必然是 0），不是单次事件的增量 —— 这里差分出新增量再按帧合并。
      * 这样即使中间被合并掉了若干次回调，位移也不会丢。
      */
+    /**
+     * 推入手柄摇杆值（-1..1，Y 向上为正）。
+     *
+     * ⚠️ 与鼠标位移同理：**按帧合并**，一帧只发一条 `gamepadAxes`；
+     * 值没变就不发。
+     */
+    fun updateSticks(lx: Float, ly: Float, rx: Float, ry: Float) {
+        val next = floatArrayOf(lx, ly, rx, ry)
+        val previous = latestStick
+        if (previous != null &&
+            kotlin.math.abs(previous[0] - lx) < 0.01f &&
+            kotlin.math.abs(previous[1] - ly) < 0.01f &&
+            kotlin.math.abs(previous[2] - rx) < 0.01f &&
+            kotlin.math.abs(previous[3] - ry) < 0.01f
+        ) {
+            return
+        }
+        latestStick = next
+        pendingStick = next
+        if (pageReady) schedulePush()
+    }
+
     fun updateMouseMotion(totalDx: Long, totalDy: Long) {
         val dx = totalDx - sentMotionDx
         val dy = totalDy - sentMotionDy
@@ -373,7 +400,11 @@ class Live2DOverlayView(context: Context) : FrameLayout(context) {
 
     private fun flushPending() {
         val hasMotion = pendingMotionDx != 0L || pendingMotionDy != 0L
-        if (pending.isEmpty() && !hasMotion && pendingMouseMask == currentMouseMask) return
+        if (pending.isEmpty() && !hasMotion && pendingMouseMask == currentMouseMask &&
+            pendingStick == null
+        ) {
+            return
+        }
 
         /*
          * 页面没就绪时**直接丢弃**这次变化量，而不是攒着。
@@ -389,6 +420,7 @@ class Live2DOverlayView(context: Context) : FrameLayout(context) {
             pending.clear()
             pendingMotionDx = 0
             pendingMotionDy = 0
+            pendingStick = null
             return
         }
 
@@ -410,6 +442,19 @@ class Live2DOverlayView(context: Context) : FrameLayout(context) {
             currentMouseMask = pendingMouseMask
             dispatchMouseButtons(currentMouseMask)
         }
+
+        pendingStick?.let { stick ->
+            pendingStick = null
+            dispatchSticks(stick)
+        }
+    }
+
+    /** 发一条摇杆值；四个轴各 -1..1 */
+    private fun dispatchSticks(stick: FloatArray) {
+        dispatchRaw(
+            "window.AxonBongoCat&&AxonBongoCat.gamepadAxes(" +
+                "${stick[0]},${stick[1]},${stick[2]},${stick[3]})",
+        )
     }
 
     /**
@@ -480,6 +525,9 @@ class Live2DOverlayView(context: Context) : FrameLayout(context) {
 
         currentMouseMask = pendingMouseMask
         dispatchMouseButtons(currentMouseMask)
+
+        /* 摇杆也要补发一次：页面就绪前摇杆可能已经被推着 */
+        latestStick?.let { dispatchSticks(it) }
     }
 
     private fun dispatchRaw(script: String) {

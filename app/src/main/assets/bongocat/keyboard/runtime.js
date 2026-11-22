@@ -29,6 +29,142 @@
   const EXPRESSIONS = Array.isArray(window.__BONGO_EXPRESSIONS) ? window.__BONGO_EXPRESSIONS : [];
   /* `[{"keys":["Alt","Numpad1"],"index":0}]` —— 按下这组键就切到第 0 个表情 */
   const EXPR_BINDINGS = Array.isArray(window.__BONGO_EXPR_BINDINGS) ? window.__BONGO_EXPR_BINDINGS : [];
+
+  /*
+   * ============================================================
+   * 物理（Cubism 标准 `physics3.json`，由导入器内联）
+   * ============================================================
+   * ⚠️ 这里自己实现，不引第三方 runtime：
+   * 算法照 Cubism 的"摆锤 + 粒子链"规范（Normalization → Input → Particles → Output），
+   * 只做**单步积分**，不做官方的多帧插值（视觉上足够，代码量小很多）。
+   */
+  const PHYSICS_JSON = window.__BONGO_PHYSICS || null;
+  const PHYSICS_MAX_WEIGHT = 100;
+  const PHYSICS_AIR_RESISTANCE = 5;
+  const PHYSICS_MOVEMENT_THRESHOLD = 0.001;
+
+  /*
+   * ============================================================
+   * 动作（Cubism 标准 `motion3.json`，由导入器内联）
+   * ============================================================
+   * 曲线四种类型（Linear / Bezier / Stepped / InverseStepped）在这里求值。
+   */
+  const MOTIONS = Array.isArray(window.__BONGO_MOTIONS) ? window.__BONGO_MOTIONS : [];
+  const MOTION_GROUPS = (window.__BONGO_MOTION_GROUPS && typeof window.__BONGO_MOTION_GROUPS === 'object')
+    ? window.__BONGO_MOTION_GROUPS
+    : {};
+  /* 按键组合 → 动作（Mver config.json 的 l2d_motion / l2d_motion_lockhand） */
+  const MOTION_BINDINGS = Array.isArray(window.__BONGO_MOTION_BINDINGS) ? window.__BONGO_MOTION_BINDINGS : [];
+
+  /*
+   * Mver 手部贴图：按下哪个键就把对应编号的手 PNG 盖在模型上，
+   * 同时把模型手臂参数设为 1 收起来（不然两双手会同时出现）。
+   */
+  const HANDS = (window.__BONGO_HANDS && typeof window.__BONGO_HANDS === 'object') ? window.__BONGO_HANDS : null;
+  const LAYOUT_PARAMS = (window.__BONGO_LAYOUT && typeof window.__BONGO_LAYOUT === 'object')
+    ? window.__BONGO_LAYOUT
+    : null;
+  /* Mver 设计画布（decoration.window_size）：所有 full-frame 贴图的坐标原点 */
+  const MVER_DESIGN = (window.__BONGO_DESIGN && typeof window.__BONGO_DESIGN === 'object')
+    ? window.__BONGO_DESIGN
+    : null;
+  const pressedKeyOrder = [];
+
+  /**
+   * 手图图层**按需创建**。
+   *
+   * ⚠️ 不能只在页面里找现成的 `#leftHand`：老模型页没有这两个元素，
+   * 那样 `getElementById` 是 null，手图永远画不出来（表现就是"按键没反应"）。
+   */
+  function ensureHandLayer(id) {
+    let element = document.getElementById(id);
+    if (!element) {
+      element = document.createElement('img');
+      element.id = id;
+      element.style.position = 'absolute';
+      element.style.pointerEvents = 'none';
+      element.style.objectFit = 'fill';
+      element.style.zIndex = '4';
+      const stage = document.getElementById('stage') || document.body;
+      stage.appendChild(element);
+    }
+    /*
+     * ⚠️ 页面模板里的 `<img id="leftHand" class="hidden">` 带 `hidden` 类，
+     * 而 `.hidden { display: none !important }` —— 内联 `style.display='block'` 压不过它。
+     * 结果就是：标准模式的动态图层能显示，键盘模式的左右手永远看不见，
+     * 同时手臂参数已被置 1 → 表现成"按一下手直接消失"。
+     */
+    element.classList.remove('hidden');
+    element.style.display = 'none';
+    return element;
+  }
+  const leftHandImage = HANDS ? ensureHandLayer('leftHand') : null;
+  const rightHandImage = HANDS ? ensureHandLayer('rightHand') : null;
+  const singleHandImage = HANDS ? ensureHandLayer('handLayer') : null;
+
+  /*
+   * 手柄摇杆贴图（`stick_offset_L/R` + left_stick.png / right_stick.png）。
+   *
+   * 坐标是**设计画布像素**：中心 = (x + lx*radius, y + ly*radius)，
+   * 半径来自配置第三个数。按下 L3/R3 时换成 `*_down.png`。
+   */
+  /*
+   * 手柄摇杆：**不画 PNG 贴图**，而是驱动模型参数。
+   *
+   * ⚠️ 这是对照 Axon 的 `syncGamepadStickHandParameters` 后才改对的：
+   * Mver 的 `left_stick.png` 是**纯贴图模式**用的；Live2D 模型自己的手/摇杆
+   * 由 `CatParamStickLX/LY/RX/RY`、`CatParamStickShow*Hand`、`CatParamStick*Down`
+   * 这些参数控制。之前我拿 PNG 盖上去，所以位置和效果都不对。
+   */
+  function applyGamepadStickParameters() {
+    if (!renderer) return;
+    const axisIds = ['CatParamStickLX', 'CatParamStickLY', 'CatParamStickRX', 'CatParamStickRY'];
+    if (!axisIds.some((id) => renderer.range(id))) return;
+
+    const setAxis = (id, raw) => {
+      const range = renderer.range(id);
+      if (!range) return;
+      const normalized = Math.max(-1, Math.min(1, Number(raw) || 0));
+      const value = normalized >= 0 ? normalized * range[1] : (-normalized) * range[0];
+      renderer.setOverride(id, value);
+    };
+    setAxis('CatParamStickLX', state.stickLeft.x);
+    setAxis('CatParamStickLY', state.stickLeft.y);
+    setAxis('CatParamStickRX', state.stickRight.x);
+    setAxis('CatParamStickRY', state.stickRight.y);
+
+    const leftDown = state.pressedKeys.has('GamepadL3');
+    const rightDown = state.pressedKeys.has('GamepadR3');
+    const leftActive = Math.abs(state.stickLeft.x) > 0.04 ||
+      Math.abs(state.stickLeft.y) > 0.04 || leftDown;
+    const rightActive = Math.abs(state.stickRight.x) > 0.04 ||
+      Math.abs(state.stickRight.y) > 0.04 || rightDown;
+
+    if (renderer.range('CatParamStickShowLeftHand')) {
+      /*
+       * ⚠️ 按键手优先：只要这一侧正在显示按键手图，就不要再显示"摇杆手"。
+       * 否则会同时冒出两只手（用户实测：推着摇杆按 A，左摇杆手 + 按键手一起出现）。
+       * 摇杆的 LX/LY 仍然照常写，所以手收起来之后摇杆动作不会断。
+       */
+      renderer.setOverride(
+        'CatParamStickShowLeftHand',
+        leftActive && !state.handSpriteLeft ? 1 : 0,
+      );
+    }
+    if (renderer.range('CatParamStickShowRightHand')) {
+      renderer.setOverride(
+        'CatParamStickShowRightHand',
+        rightActive && !state.handSpriteRight ? 1 : 0,
+      );
+    }
+    if (renderer.range('CatParamStickLeftDown')) {
+      renderer.setOverride('CatParamStickLeftDown', leftDown ? 1 : 0);
+    }
+    if (renderer.range('CatParamStickRightDown')) {
+      renderer.setOverride('CatParamStickRightDown', rightDown ? 1 : 0);
+    }
+  }
+
   // When an arbitrary Live2D character is imported without a matching BongoCat keyboard skin,
   // place the visible character where the built-in cat lives instead of preserving an unrelated
   // desktop-model canvas offset (which commonly puts the character off-screen/right).
@@ -95,6 +231,12 @@
     pressedKeys: new Set(),
     /* 当前表情下标；-1 = 没有表情 */
     expressionIndex: -1,
+    /* 手柄摇杆（-1..1，Y 向上为正） */
+    stickLeft: { x: 0, y: 0 },
+    stickRight: { x: 0, y: 0 },
+    /* 当前左右手图是否正在显示（按键手优先于摇杆手） */
+    handSpriteLeft: false,
+    handSpriteRight: false,
     ready: false,
   };
 
@@ -123,7 +265,25 @@
 
   // Imported model packs can carry their own keyboard/cover. Apply the skin as one unit.
   // Individual missing files fall back to the bundled BongoCat resources instead of blanking.
-  setImageWithFallback(document.getElementById('background'), 'background.png');
+  const backgroundImage = document.getElementById('background');
+  const modelBackground = typeof window.__BONGO_BACKGROUND === 'string'
+    ? window.__BONGO_BACKGROUND
+    : null;
+  if (modelBackground) {
+    /*
+     * Mver 的桌面/键盘底图（standard: mousebg/tabletbg，其它: bg）。
+     * 它和窗口同比例（如 1600×1000），所以直接铺满；没有它时人物就只剩上半身。
+     */
+    backgroundImage.classList.remove('hidden');
+    backgroundImage.style.objectFit = 'fill';
+    backgroundImage.style.display = 'block';
+    backgroundImage.src = modelBackground;
+  } else if (IMPORTED_MODEL) {
+    /* 导入的模型没带底图：不要露出内置猫的键盘背景 */
+    backgroundImage.classList.add('hidden');
+  } else {
+    setImageWithFallback(backgroundImage, 'background.png');
+  }
   setImageWithFallback(fallback, 'cover.png');
 
   let renderer = null;
@@ -248,6 +408,96 @@
    * ⚠️ 匹配不上时**不做任何事**:不能让"按 A"把表情重置掉，
    * 那样普通按键会把用户刚切的表情清掉。
    */
+  /**
+   * 按键组合 → 动作（Mver 的 `l2d_motion` / `l2d_motion_lockhand`）。
+   *
+   * ⚠️ 只在**组合刚凑齐**时触发一次：按住不放不会每帧重播。
+   * 松开任意一个键后清空状态，同一组合可以再次触发。
+   */
+  let activeMotionBinding = -1;
+  function evaluateMotionBindings(pressed) {
+    if (!renderer || !renderer.motionPlayer || MOTION_BINDINGS.length === 0) return;
+
+    if (!pressed) {
+      if (activeMotionBinding >= 0) {
+        const keys = MOTION_BINDINGS[activeMotionBinding].keys || [];
+        if (!keys.every((key) => state.pressedKeys.has(String(key)))) {
+          activeMotionBinding = -1;
+        }
+      }
+      return;
+    }
+
+    for (let i = 0; i < MOTION_BINDINGS.length; i++) {
+      if (i === activeMotionBinding) continue;
+      const binding = MOTION_BINDINGS[i];
+      const keys = Array.isArray(binding.keys) ? binding.keys : [];
+      if (keys.length === 0) continue;
+      if (!keys.every((key) => state.pressedKeys.has(String(key)))) continue;
+
+      const group = String(binding.group || 'CAT_motion');
+      const index = Number(binding.index) || 0;
+      if (renderer.motionPlayer.playedGroup(group, index, false)) {
+        activeMotionBinding = i;
+      }
+      return;
+    }
+  }
+
+  function applyHandSprites() {
+    if (!HANDS || !renderer) return;
+
+    const resolve = (config, element) => {
+      if (!config || !element) return false;
+      let chosen = -1;
+      for (let i = pressedKeyOrder.length - 1; i >= 0; i--) {
+        const key = pressedKeyOrder[i];
+        if (!state.pressedKeys.has(key)) continue;
+        const binding = (config.bindings || []).find((item) => {
+          const keys = item.keys || [];
+          return keys.includes(key) && keys.every((k) => state.pressedKeys.has(String(k)));
+        });
+        if (binding) {
+          chosen = Number(binding.index);
+          break;
+        }
+      }
+
+      if (chosen < 0) {
+        element.style.display = 'none';
+        return false;
+      }
+
+      const src = String(config.dir || '') + '/' + chosen + '.png';
+      if (element.getAttribute('src') !== src) element.setAttribute('src', src);
+      element.style.display = 'block';
+
+      /*
+       * Mver 的 full-frame 贴图（手/脸/键盘/背景）都是**设计画布窗口尺寸**的整幅图，
+       * 从 (0,0) 以原始像素大小绘制 —— 不是按模型画布拉伸的。
+       * （卡提 1400²/1400²、星野 1600×1000/1600×1000、超天酱 612×352/612×354）
+       */
+      const dpr = Math.max(1, devicePixelRatio || 1);
+      const scale = renderer.designScale || renderer.scale;
+      const naturalWidth = Math.max(1, element.naturalWidth || 0);
+      const naturalHeight = Math.max(1, element.naturalHeight || 0);
+      element.style.left = ((renderer.designX || 0) + (renderer.handOffsetX || 0) * scale) / dpr + 'px';
+      element.style.top = ((renderer.designY || 0) + (renderer.handOffsetY || 0) * scale) / dpr + 'px';
+      element.style.width = (naturalWidth * scale / dpr) + 'px';
+      element.style.height = (naturalHeight * scale / dpr) + 'px';
+      return true;
+    };
+
+    const left = resolve(HANDS.left, leftHandImage);
+    const right = resolve(HANDS.right, rightHandImage);
+    /* standard 等单层包：一张图同时代表双手 */
+    const single = resolve(HANDS.hand, singleHandImage);
+    state.handSpriteLeft = Boolean(left || single);
+    state.handSpriteRight = Boolean(right || single);
+    renderer.setOverride('CatParamLeftHandDown', state.handSpriteLeft ? 1 : 0);
+    renderer.setOverride('CatParamRightHandDown', state.handSpriteRight ? 1 : 0);
+  }
+
   function evaluateExpressionBindings() {
     if (EXPR_BINDINGS.length === 0 || state.pressedKeys.size === 0) return;
     for (const binding of EXPR_BINDINGS) {
@@ -303,8 +553,14 @@
      * ⚠️ 显式置 0（而不是"不碰"）:上一次按键可能已经把它设成 1。
      */
     if (IMPORTED_MODEL) {
-      renderer.setOverride('CatParamLeftHandDown', 0);
-      renderer.setOverride('CatParamRightHandDown', 0);
+      /*
+       * 有手部贴图：由 `applyHandSprites()` 根据按键决定"显示哪只手 + 收不收手臂"；
+       * 没有手部贴图：继续强制 0，避免把模型手臂收起来却没人接手（老 bug）。
+       */
+      if (!HANDS) {
+        renderer.setOverride('CatParamLeftHandDown', 0);
+        renderer.setOverride('CatParamRightHandDown', 0);
+      }
       return;
     }
     renderer.setOverride('CatParamLeftHandDown', state.leftKey ? 1 : 0);
@@ -387,6 +643,54 @@
     expressionNames() {
       return EXPRESSIONS.map((item) => String(item.name || ''));
     },
+
+    /**
+     * 播放动作：`motion("Idle", 0)`。
+     *
+     * @param group 组名（model3 里的键，例如 Idle / CAT_motion_lock）
+     * @param index 组内第几条；省略 = 第 0 条
+     * @return 是否真的播起来了
+     */
+    motion(group, index) {
+      return renderer && renderer.motionPlayer
+        ? renderer.motionPlayer.playedGroup(String(group), index)
+        : false;
+    },
+
+    /** 这个模型有哪些动作组 */
+    motionGroups() {
+      return Object.keys(MOTION_GROUPS);
+    },
+
+    /** 当前动作状态（调试/探针用） */
+    motionState() {
+      const player = renderer && renderer.motionPlayer;
+      if (!player || !player.current) return null;
+      return {
+        name: player.current.name,
+        time: Number(player.time.toFixed(3)),
+        duration: Number(player.duration.toFixed(3)),
+        loop: player.loop,
+        weight: Number(player.lastWeight.toFixed(3)),
+      };
+    },
+
+    /**
+     * 只给验证台用：手动推进若干秒的渲染（无头 Chrome 的 rAF 不一定跑得够多）。
+     * 没打开 `__BONGO_DEBUG` 时是空操作。
+     */
+    debugTick(seconds) {
+      if (!window.__BONGO_DEBUG || !renderer) return false;
+      renderer.render(Math.max(0.001, Number(seconds) || 0.016));
+      return true;
+    },
+
+    /** 只给验证台用：直接改一个参数覆盖值，观察模型反应 */
+    debugParam(id, value) {
+      if (!window.__BONGO_DEBUG || !renderer) return false;
+      renderer.setOverride(String(id), Number(value));
+      return true;
+    },
     key(key, pressed) {
       const rawValue = String(key || '');
       /*
@@ -396,6 +700,16 @@
       if (pressed) state.pressedKeys.add(rawValue);
       else state.pressedKeys.delete(rawValue);
       evaluateExpressionBindings();
+      evaluateMotionBindings(pressed);
+
+      /* 手部贴图：按下/松开都要重算（同一侧只显示最后按下的那个键） */
+      if (pressed) pressedKeyOrder.push(rawValue);
+      else {
+        const at = pressedKeyOrder.indexOf(rawValue);
+        if (at >= 0) pressedKeyOrder.splice(at, 1);
+      }
+      applyHandSprites();
+      applyGamepadStickParameters();
 
       const rawSide = keySide(rawValue);
       if (!rawSide) return;
@@ -426,6 +740,14 @@
       // values; setOverride intentionally becomes a no-op when the parameter is absent.
       renderer.setOverride('ParamMouseLeftDown', (state.mouseButtons & 1) ? 1 : 0);
       renderer.setOverride('ParamMouseRightDown', (state.mouseButtons & 2) ? 1 : 0);
+    },
+
+    /** 手柄摇杆：四个轴各 -1..1（Y 向上为正） */
+    gamepadAxes(lx, ly, rx, ry) {
+      const clampAxis = (value) => Math.max(-1, Math.min(1, Number(value) || 0));
+      state.stickLeft = { x: clampAxis(lx), y: clampAxis(ly) };
+      state.stickRight = { x: clampAxis(rx), y: clampAxis(ry) };
+      applyGamepadStickParameters();
     },
 
     mouseDelta(dx, dy, screenWidth, screenHeight) {
@@ -505,6 +827,446 @@
     return shader;
   }
 
+  /* ---------------- 动作：曲线求值 ---------------- */
+
+  function cubicBezierValue(t0, v0, c1t, c1v, c2t, c2v, t1, v1, time) {
+    const x = (s) => {
+      const u = 1 - s;
+      return u * u * u * t0 + 3 * u * u * s * c1t + 3 * u * s * s * c2t + s * s * s * t1;
+    };
+    const y = (s) => {
+      const u = 1 - s;
+      return u * u * u * v0 + 3 * u * u * s * c1v + 3 * u * s * s * c2v + s * s * s * v1;
+    };
+
+    let low = 0;
+    let high = 1;
+    let s = 0.5;
+    for (let i = 0; i < 30; i++) {
+      s = (low + high) / 2;
+      if (x(s) < time) low = s;
+      else high = s;
+    }
+    return y(s);
+  }
+
+  /**
+   * 在一条曲线（`Segments` 一维数组）上取 time 处的值。
+   *
+   * 段格式：
+   * - `[0, t0,v0, t1,v1, …]` 折线
+   * - `[1, t0,v0, c1t,c1v, c2t,c2v, t1,v1]` 一段贝塞尔（连续多段各带 type=1）
+   * - `[2, t0,v0, t1,v1]` 阶梯
+   * - `[3, t0,v0, t1,v1]` 反向阶梯
+   */
+  function sampleMotionCurve(segments, time) {
+    if (!segments || segments.length < 3) return null;
+    let i = 0;
+
+    while (i < segments.length) {
+      const type = segments[i];
+
+      if (type === 0) {
+        /* 折线：找夹住 time 的两个点 */
+        let previousT = segments[i + 1];
+        let previousV = segments[i + 2];
+        if (time <= previousT) return previousV;
+
+        let j = i + 3;
+        while (j + 1 < segments.length) {
+          const nextT = segments[j];
+          const nextV = segments[j + 1];
+          if (time <= nextT) {
+            const span = Math.max(1e-6, nextT - previousT);
+            return previousV + (nextV - previousV) * ((time - previousT) / span);
+          }
+          previousT = nextT;
+          previousV = nextV;
+          j += 2;
+        }
+        return previousV;
+      }
+
+      if (type === 1) {
+        const t0 = segments[i + 1];
+        const v0 = segments[i + 2];
+        const c1t = segments[i + 3];
+        const c1v = segments[i + 4];
+        const c2t = segments[i + 5];
+        const c2v = segments[i + 6];
+        const t1 = segments[i + 7];
+        const v1 = segments[i + 8];
+        if (time >= t0 && time <= t1) {
+          return cubicBezierValue(t0, v0, c1t, c1v, c2t, c2v, t1, v1, time);
+        }
+        i += 8;
+        continue;
+      }
+
+      if (type === 2 || type === 3) {
+        const t0 = segments[i + 1];
+        const v0 = segments[i + 2];
+        const t1 = segments[i + 3];
+        const v1 = segments[i + 4];
+        if (time <= t1) return type === 2 ? v0 : (time < t1 ? v0 : v1);
+        i += 5;
+        continue;
+      }
+
+      /* 认不出的段类型：不再往下走，避免死循环 */
+      break;
+    }
+    return null;
+  }
+
+  /** 一条动作的播放状态（时间、淡入淡出、循环） */
+  class MotionPlayer {
+    constructor() {
+      this.current = null;
+      this.time = 0;
+      this.duration = 0;
+      this.loop = false;
+      this.lastWeight = 0;
+    }
+
+    playedGroup(group, index, loop) {
+      const ids = MOTION_GROUPS[group];
+      if (!Array.isArray(ids) || ids.length === 0) return false;
+      const position = index === undefined || index === null ? 0 : Math.max(0, Math.min(ids.length - 1, index | 0));
+      const motionIndex = ids[position];
+      if (motionIndex < 0 || motionIndex >= MOTIONS.length) return false;
+      return this.playMotion(MOTIONS[motionIndex], loop);
+    }
+
+    playMotion(motion, loop) {
+      const json = motion && motion.json;
+      if (!json) return false;
+      this.current = motion;
+      this.time = 0;
+      this.duration = Math.max(0, Number(json.Meta && json.Meta.Duration) || 0);
+      /*
+       * ⚠️ 不能 `|| this.loop`：那样上一次的循环状态会污染这一次。
+       * 不传 loop 时才用动作自己的 `Meta.Loop`。
+       */
+      this.loop = loop === undefined ? Boolean(json.Meta && json.Meta.Loop) : Boolean(loop);
+      this.lastWeight = 0;
+      return this.duration > 0;
+    }
+
+    apply(renderer, deltaSeconds) {
+      if (!this.current) return;
+      const motion = this.current;
+      const json = motion.json;
+      const curves = Array.isArray(json.Curves) ? json.Curves : [];
+
+      this.time += Math.max(0, deltaSeconds);
+      if (this.duration <= 0) {
+        this.current = null;
+        return;
+      }
+      if (this.time >= this.duration) {
+        if (this.loop) this.time %= this.duration;
+        else {
+          this.current = null;
+          return;
+        }
+      }
+
+      const fadeIn = Math.max(0.05, Number(motion.fadeIn) || 0.5);
+      const fadeOut = Math.max(0.05, Number(motion.fadeOut) || 0.5);
+      let weight = 1;
+      if (this.time < fadeIn) weight = this.time / fadeIn;
+      if (!this.loop && this.time > this.duration - fadeOut) {
+        weight = Math.min(weight, (this.duration - this.time) / fadeOut);
+      }
+      weight = Math.max(0, Math.min(1, weight));
+      this.lastWeight = weight;
+      if (weight <= 0) return;
+
+      for (const curve of curves) {
+        if (!curve || curve.Target !== 'Parameter') continue;
+        const index = renderer.paramIndex.get(String(curve.Id || ''));
+        if (index === undefined) continue;
+        const value = sampleMotionCurve(curve.Segments, this.time);
+        if (value === null || !Number.isFinite(value)) continue;
+        const current = renderer.parameters.values[index];
+        renderer.parameters.values[index] = renderer.clamp(
+          index,
+          current * (1 - weight) + value * weight,
+        );
+      }
+    }
+  }
+
+  /* ---------------- 物理：参数归一化 / 方向计算 ---------------- */
+
+  function physicsClamp(value, min, max) {
+    const lo = Math.min(min, max);
+    const hi = Math.max(min, max);
+    return Math.max(lo, Math.min(hi, value));
+  }
+
+  /**
+   * 把参数值映射到 Normalization 区间。
+   *
+   * ⚠️ 最后一行**照抄 Cubism 的符号约定**：未勾 Reflect 时返回负值
+   * （参数增大 = 重力的反方向），不要"顺手改成正数"，否则物理方向会反。
+   */
+  function normalizeParameterValue(
+    value, parameterMin, parameterMax, parameterDefault,
+    normMin, normMax, normDefault, inverted,
+  ) {
+    const minValue = Math.min(parameterMin, parameterMax);
+    const maxValue = Math.max(parameterMin, parameterMax);
+    const clamped = physicsClamp(Number(value) || 0, minValue, maxValue);
+    const minNorm = Math.min(normMin, normMax);
+    const maxNorm = Math.max(normMin, normMax);
+    const middleNorm = Number(normDefault) || 0;
+    const middleValue = minValue + (maxValue - minValue) / 2;
+    const offset = clamped - middleValue;
+
+    let result = middleNorm;
+    if (offset > 0) {
+      const length = maxNorm - middleNorm;
+      const span = maxValue - middleValue;
+      if (span !== 0) result = middleNorm + offset * (length / span);
+    } else if (offset < 0) {
+      const length = minNorm - middleNorm;
+      const span = minValue - middleValue;
+      if (span !== 0) result = middleNorm + offset * (length / span);
+    }
+    return inverted ? result : -result;
+  }
+
+  function directionToRadian(from, to) {
+    const a = Math.atan2(from.y, from.x);
+    const b = Math.atan2(to.y, to.x);
+    let radian = b - a;
+    while (radian < -Math.PI) radian += Math.PI * 2;
+    while (radian > Math.PI) radian -= Math.PI * 2;
+    return radian;
+  }
+
+  /**
+   * 一轮物理。每个 PhysicsSetting 一条粒子链（摆锤）。
+   *
+   * 结构：Input（参数 → 位移/角度）→ Particles（链式积分）→ Output（位移/角度 → 参数）。
+   */
+  class PhysicsRig {
+    constructor(json) {
+      this.fps = Math.max(1, Math.min(120, Number(json && json.Meta && json.Meta.Fps) || 30));
+      const list = json && Array.isArray(json.PhysicsSettings) ? json.PhysicsSettings : [];
+      this.settings = list.map((raw) => this.parseSetting(raw)).filter((s) => s.particles.length > 1);
+      this.accumulator = 0;
+    }
+
+    parseSetting(raw) {
+      const normalization = raw.Normalization || {};
+      const positionNorm = normalization.Position || { Minimum: -10, Maximum: 10, DefaultValue: 0 };
+      const angleNorm = normalization.Angle || { Minimum: -10, Maximum: 10, DefaultValue: 0 };
+
+      const particles = (raw.Vertices || raw.Particles || []).map((vertex) => ({
+        radius: Math.max(0, Number(vertex.Radius) || 0),
+        mobility: Number(vertex.Mobility) || 1,
+        delay: Number(vertex.Delay) || 1,
+        acceleration: Number(vertex.Acceleration) || 1,
+        position: { x: 0, y: 0 },
+        lastPosition: { x: 0, y: 0 },
+        velocity: { x: 0, y: 0 },
+        /*
+         * ⚠️ 初始重力是 (0, 1)，不是 (0, -1)。
+         * 官方 `initialize()` 写的是 `(0,-1)` 之后立刻 `*= -1`，等价于 (0,1)；
+         * 漏掉这一步，第一帧会按 π 旋转粒子链，头发/尾巴会直接贴在极限角上。
+         */
+        lastGravity: { x: 0, y: 1 },
+      }));
+
+      /* 初始姿态：第 0 个粒子在原点，之后沿 -Y 串起来 */
+      for (let i = 1; i < particles.length; i++) {
+        particles[i].position.x = particles[i - 1].position.x;
+        particles[i].position.y = particles[i - 1].position.y + particles[i].radius;
+        particles[i].lastPosition.x = particles[i].position.x;
+        particles[i].lastPosition.y = particles[i].position.y;
+      }
+
+      return {
+        inputs: Array.isArray(raw.Input) ? raw.Input : [],
+        outputs: Array.isArray(raw.Output) ? raw.Output : [],
+        positionNorm,
+        angleNorm,
+        particles,
+      };
+    }
+
+    /** 先跑若干步让链子稳定，避免第一帧"弹一下" */
+    stabilize(renderer, steps = 20) {
+      const step = 1 / this.fps;
+      for (let i = 0; i < steps; i++) this.update(renderer, step);
+      this.accumulator = 0;
+    }
+
+    evaluate(renderer, deltaSeconds) {
+      if (this.settings.length === 0) return;
+      const step = 1 / this.fps;
+      this.accumulator += Math.max(0, Math.min(0.1, deltaSeconds));
+      let guard = 0;
+      while (this.accumulator >= step && guard < 4) {
+        this.update(renderer, step);
+        this.accumulator -= step;
+        guard += 1;
+      }
+    }
+
+    update(renderer, deltaSeconds) {
+      const parameters = renderer.parameters;
+      const index = renderer.paramIndex;
+
+      for (const setting of this.settings) {
+        let translateX = 0;
+        let translateY = 0;
+        let totalAngle = 0;
+
+        for (const input of setting.inputs) {
+          const id = String((input.Source && input.Source.Id) || '');
+          const parameterIndex = index.get(id);
+          if (parameterIndex === undefined) continue;
+
+          const weight = (Number(input.Weight) || PHYSICS_MAX_WEIGHT) / PHYSICS_MAX_WEIGHT;
+          const norm = input.Type === 'Angle' ? setting.angleNorm : setting.positionNorm;
+          const value = normalizeParameterValue(
+            parameters.values[parameterIndex],
+            parameters.minimumValues[parameterIndex],
+            parameters.maximumValues[parameterIndex],
+            parameters.defaultValues[parameterIndex],
+            Number(norm.Minimum) || 0,
+            Number(norm.Maximum) || 0,
+            /* ⚠️ physics3 的键名是 `Default`（不是 DefaultValue）；两种都兼容 */
+            Number(norm.Default ?? norm.DefaultValue) || 0,
+            Boolean(input.Reflect),
+          );
+
+          if (input.Type === 'X') translateX += value * weight;
+          else if (input.Type === 'Y') translateY += value * weight;
+          else if (input.Type === 'Angle') totalAngle += value * weight;
+        }
+
+        /* 照官方：把总位移按 -角度 旋转 */
+        const angleRadian = (-totalAngle * Math.PI) / 180;
+        const rotatedX = translateX * Math.cos(angleRadian) - translateY * Math.sin(angleRadian);
+        const rotatedY = translateX * Math.sin(angleRadian) + translateY * Math.cos(angleRadian);
+
+        const particles = setting.particles;
+        particles[0].position.x = rotatedX;
+        particles[0].position.y = rotatedY;
+
+        const gravity = { x: Math.sin((totalAngle * Math.PI) / 180), y: Math.cos((totalAngle * Math.PI) / 180) };
+        const gravityLength = Math.hypot(gravity.x, gravity.y) || 1;
+        gravity.x /= gravityLength;
+        gravity.y /= gravityLength;
+
+        const threshold = PHYSICS_MOVEMENT_THRESHOLD * (Number(setting.positionNorm.Maximum) || 10);
+
+        for (let i = 1; i < particles.length; i++) {
+          const particle = particles[i];
+          const previous = particles[i - 1];
+
+          const forceX = gravity.x * particle.acceleration;
+          const forceY = gravity.y * particle.acceleration;
+
+          particle.lastPosition.x = particle.position.x;
+          particle.lastPosition.y = particle.position.y;
+
+          const delay = particle.delay * deltaSeconds * 30;
+          const radian = directionToRadian(particle.lastGravity, gravity) / PHYSICS_AIR_RESISTANCE;
+
+          let dirX = particle.position.x - previous.position.x;
+          let dirY = particle.position.y - previous.position.y;
+          const cos = Math.cos(radian);
+          const sin = Math.sin(radian);
+          const rotatedDirX = cos * dirX - dirY * sin;
+          const rotatedDirY = sin * dirX + dirY * cos;
+
+          let x = previous.position.x + rotatedDirX;
+          let y = previous.position.y + rotatedDirY;
+
+          x += particle.velocity.x * delay + forceX * delay * delay;
+          y += particle.velocity.y * delay + forceY * delay * delay;
+
+          let length = Math.hypot(x - previous.position.x, y - previous.position.y);
+          if (length <= 0) length = 1;
+          const unitX = (x - previous.position.x) / length;
+          const unitY = (y - previous.position.y) / length;
+
+          particle.position.x = previous.position.x + unitX * particle.radius;
+          particle.position.y = previous.position.y + unitY * particle.radius;
+
+          if (Math.abs(particle.position.x) < threshold) particle.position.x = 0;
+
+          if (delay !== 0) {
+            particle.velocity.x =
+              ((particle.position.x - particle.lastPosition.x) / delay) * particle.mobility;
+            particle.velocity.y =
+              ((particle.position.y - particle.lastPosition.y) / delay) * particle.mobility;
+          }
+
+          particle.lastGravity.x = gravity.x;
+          particle.lastGravity.y = gravity.y;
+        }
+
+        for (const output of setting.outputs) {
+          const vertexIndex = Number(output.VertexIndex) || 0;
+          if (vertexIndex < 1 || vertexIndex >= particles.length) continue;
+
+          const destination = String((output.Destination && output.Destination.Id) || '');
+          const parameterIndex = index.get(destination);
+          if (parameterIndex === undefined) continue;
+
+          const previous = particles[vertexIndex - 1].position;
+          const current = particles[vertexIndex].position;
+          const translationX = current.x - previous.x;
+          const translationY = current.y - previous.y;
+
+          const type = output.Type;
+          let value;
+          if (type === 'X') {
+            value = translationX;
+          } else if (type === 'Y') {
+            value = translationY;
+          } else {
+            let parentGravity;
+            if (vertexIndex >= 2) {
+              const grand = particles[vertexIndex - 2].position;
+              parentGravity = { x: previous.x - grand.x, y: previous.y - grand.y };
+            } else {
+              /*
+               * 第 1 个粒子：参考方向就是"当前重力方向"。
+               *
+               * ⚠️ 不能取反：链子的初始姿态是 y + radius，重力方向 (0,1) 与它同向；
+               * 取反会得到 π，角度输出直接顶到最大/最小（表现为头发永远贴在极限位置）。
+               */
+              parentGravity = { x: gravity.x, y: gravity.y };
+            }
+            value = directionToRadian(parentGravity, { x: translationX, y: translationY });
+          }
+          if (output.Reflect) value *= -1;
+
+          if (window.__BONGO_DEBUG) {
+            this.debug = this.debug || {};
+            this.debug[destination] = Number(value.toFixed(4));
+          }
+
+          const scale = Number(output.Scale) || 0;
+          const weight = (Number(output.Weight) || PHYSICS_MAX_WEIGHT) / PHYSICS_MAX_WEIGHT;
+          const min = parameters.minimumValues[parameterIndex];
+          const max = parameters.maximumValues[parameterIndex];
+          const target = physicsClamp(value * scale, min, max);
+          parameters.values[parameterIndex] =
+            parameters.values[parameterIndex] * (1 - weight) + target * weight;
+        }
+      }
+    }
+  }
+
   class CoreRenderer {
     constructor(core, model, images) {
       this.core = core;
@@ -519,6 +1281,16 @@
       this.defaults = Array.from(this.parameters.defaultValues);
       this.eyeBlink = 1;
       this.elapsedSeconds = 0;
+      /* 物理：没有 physics3 就是 null（内置模型与旧页面行为完全不变） */
+      this.physics = PHYSICS_JSON ? new PhysicsRig(PHYSICS_JSON) : null;
+    /*
+     * 物理固定步长（Cubism 物理是按固定 dt 设计的）。
+     * 之前直接把每帧的 deltaSeconds 丢进去：帧时间一抖，头发就"一抽一抽"。
+     */
+    this.physicsStep = 1 / 60;
+    this.physicsAccumulator = 0;
+      /* 动作：没有 motion3 就是 null */
+      this.motionPlayer = MOTIONS.length > 0 ? new MotionPlayer() : null;
 
       for (let i = 0; i < this.parameters.count; i++) {
         this.paramIndex.set(String(this.parameters.ids[i]), i);
@@ -658,6 +1430,45 @@
         return;
       }
 
+      /*
+       * 手部贴图包：整张 1400×1400 手图是按**设计画布**画的，
+       * 所以模型也必须按画布等比例铺（不能按内容包围盒放大），否则手会对不上。
+       */
+      if (HANDS) {
+        const canvasWidth = Math.max(1, Number(this.canvasInfo.CanvasWidth) || DESIGN_WIDTH);
+        const canvasHeight = Math.max(1, Number(this.canvasInfo.CanvasHeight) || DESIGN_HEIGHT);
+        const designWidth = MVER_DESIGN ? Math.max(1, Number(MVER_DESIGN.width) || canvasWidth) : canvasWidth;
+        const designHeight = MVER_DESIGN ? Math.max(1, Number(MVER_DESIGN.height) || canvasHeight) : canvasHeight;
+        /*
+         * 设计画布 → 视口
+         */
+        const designScale = Math.min(width / designWidth, height / designHeight);
+        const designX = (width - designWidth * designScale) * 0.5;
+        const designY = (height - designHeight * designScale) * 0.5;
+        this.designScale = designScale;
+        this.designX = designX;
+        this.designY = designY;
+        this.handOffsetX = MVER_DESIGN ? (Number(MVER_DESIGN.handOffsetX) || 0) : 0;
+        this.handOffsetY = MVER_DESIGN ? (Number(MVER_DESIGN.handOffsetY) || 0) : 0;
+
+        /*
+         * 模型按设计画布 contain（和 Axon 完全一致）。
+         *
+         * ⚠️ 不要乘 `l2d_correct`：它不是"模型放大倍数"，而是 **Mver 的屏幕缩放矫正**
+         * （Windows 显示缩放 125%/150% 之类），官方文档的原话是"矫正桌面分辨率/
+         * 缩放值"。卡提的 correct=1.987，乘上去模型直接 2 倍、被裁掉一大半 —— 实测踩过。
+         *
+         * `l2d_offset` 同理先不参与布局（Axon 也是把它夹在 letterbox 内，
+         * 我们的窗口比例已经等于设计画布，夹完就是 0）。
+         */
+        const modelFit = Math.min(designWidth / canvasWidth, designHeight / canvasHeight);
+        this.scale = modelFit * designScale;
+        this.offsetX = designX + (designWidth - canvasWidth * modelFit) * 0.5 * designScale;
+        this.offsetY = designY + (designHeight - canvasHeight * modelFit) * 0.5 * designScale;
+        reportContentAspect(designWidth, designHeight);
+        return;
+      }
+
       if (IMPORTED_MODEL && this.contentBounds) {
         /*
          * ============================================================
@@ -738,6 +1549,12 @@
         this.parameters.values[i] = this.defaults[i];
       }
 
+      /*
+       * 动作在呼吸之前：动作提供"基础姿势"，呼吸再往上叠。
+       * 顺序反了的话，动作会被呼吸的加值顶偏，看起来像"动作幅度不对"。
+       */
+      if (this.motionPlayer) this.motionPlayer.apply(this, deltaSeconds);
+
       // EffectController.setupBreath() from easy-live2d v0.4.4.
       const t = this.elapsedSeconds * 2 * Math.PI;
       this.addValue('ParamAngleX', 15 * Math.sin(t / 6.5345), 0.5);
@@ -756,6 +1573,20 @@
       }
 
       this.applyExpression();
+
+      /*
+       * 物理放在**最后**：它读的是"呼吸/眨眼/覆盖/表情"算完之后的参数，
+       * 再把结果写给头发/尾巴这类输出参数。
+       */
+      if (this.physics) {
+        this.physicsAccumulator = Math.min(0.25, this.physicsAccumulator + deltaSeconds);
+        let steps = 0;
+        while (this.physicsAccumulator >= this.physicsStep && steps < 6) {
+          this.physics.evaluate(this, this.physicsStep);
+          this.physicsAccumulator -= this.physicsStep;
+          steps += 1;
+        }
+      }
     }
 
     /**
@@ -927,7 +1758,27 @@
       if (!model) throw new Error('model init failed');
 
       renderer = new CoreRenderer(core, model, textures);
+      if (HANDS) {
+        console.info('[hands] loaded', JSON.stringify({
+          left: (HANDS.left && HANDS.left.bindings ? HANDS.left.bindings.length : 0),
+          right: (HANDS.right && HANDS.right.bindings ? HANDS.right.bindings.length : 0),
+          hand: (HANDS.hand && HANDS.hand.bindings ? HANDS.hand.bindings.length : 0),
+        }));
+      }
+      /*
+       * 有 Idle 组就自动循环播放（Cubism 的标准做法）。
+       * 没有 Idle 的包（比如 Mver 键盘猫）保持静止，等按键/外部调用。
+       */
+      if (renderer.motionPlayer) {
+        const idleGroup = Object.keys(MOTION_GROUPS)
+          .find((name) => name.toLowerCase() === 'idle');
+        if (idleGroup) renderer.motionPlayer.playedGroup(idleGroup, 0);
+      }
+      if (renderer.physics) renderer.physics.stabilize(renderer);
+      /* 验证台用：把 renderer 暴露出来读参数（只有显式打开 __BONGO_DEBUG 才生效） */
+      if (window.__BONGO_DEBUG) window.__STHKEY_RENDERER = renderer;
       syncHandOverrides();
+      applyHandSprites();
       renderer.setOverride('ParamMouseLeftDown', (state.mouseButtons & 1) ? 1 : 0);
       renderer.setOverride('ParamMouseRightDown', (state.mouseButtons & 2) ? 1 : 0);
       fallback.classList.add('hidden');

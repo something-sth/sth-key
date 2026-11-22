@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.something.sthkey.data.live2d.Live2DPreviewStore
 import com.something.sthkey.domain.live2d.Live2DModels
 import java.io.File
 
@@ -58,10 +59,12 @@ fun Live2DModelThumbnail(
     heightDp: Float,
     modifier: Modifier = Modifier,
     drawBackground: Boolean = true,
+    /** 多模式模型：指定要显示哪一套的预览（空 = 当前选中的那套） */
+    pageDir: String = "",
 ) {
     val context = LocalContext.current
-    val bitmap = remember(modelId, widthDp, heightDp) {
-        loadThumbnail(context, modelId, widthDp, heightDp)
+    val bitmap = remember(modelId, widthDp, heightDp, pageDir) {
+        loadThumbnail(context, modelId, widthDp, heightDp, pageDir)
     }
 
     Box(
@@ -111,13 +114,18 @@ private fun loadThumbnail(
     modelId: String,
     widthDp: Float,
     heightDp: Float,
+    pageDir: String = "",
 ): Bitmap? {
     val entry = Live2DModels.find(modelId)
     val source = when {
         // 内置模型：直接从 assets 读
         entry?.dir == null -> builtinCover(entry?.id ?: modelId)
-        // 导入模型：先找皮肤包的 cover，再退回 icon
-        else -> findFirstFile(entry.dir, "cover.png") ?: findFirstFile(entry.dir, "icon.png")
+        /*
+         * 导入模型：优先用**运行时抓的按模式预览图**（preview/<pageDir>.png），
+         * 没有才退回 cover/icon。
+         */
+        else -> generatedPreview(entry.dir, pageDir) ?: findFirstFile(entry.dir, "cover.png")
+            ?: findFirstFile(entry.dir, "icon.png")
     } ?: return null
 
     return runCatching {
@@ -149,6 +157,13 @@ private fun findFirstFile(dir: File, fileName: String): ThumbSource? =
         dir.walkTopDown()
             .firstOrNull { it.isFile && it.name.equals(fileName, ignoreCase = true) }
             ?.let { ThumbSource.Local(it) }
+    }.getOrNull()
+
+/** 运行时抓的按模式预览图：`preview/<pageDir>.png` */
+private fun generatedPreview(dir: File, pageDir: String): ThumbSource? =
+    runCatching {
+        val file = Live2DPreviewStore.previewFile(dir, pageDir)
+        if (file.isFile) ThumbSource.Local(file) else null
     }.getOrNull()
 
 private fun openStream(context: Context, source: ThumbSource): java.io.InputStream? =

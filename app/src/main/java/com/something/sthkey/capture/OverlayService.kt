@@ -1540,6 +1540,20 @@ runCatching { if (old.host.parent != null) windowManager.removeView(old.host) }
         }
 
         /*
+         * 手柄摇杆：与按键同一处扇出，但**按帧合并**在 View 里（见 updateSticks）。
+         * 摇杆是连续量，不能每帧发很多条。
+         */
+        scope.launch {
+            CaptureSession.sticks.collect { sticks ->
+                live2dViews().forEach { it.updateSticks(sticks.lx, sticks.ly, sticks.rx, sticks.ry) }
+            }
+        }
+        /* 新开的窗口要先拿到当前值，否则"先推住摇杆再开窗"会一直不动 */
+        CaptureSession.sticks.value.let { sticks ->
+            live2dViews().forEach { it.updateSticks(sticks.lx, sticks.ly, sticks.rx, sticks.ry) }
+        }
+
+        /*
          * 鼠标位移：**每个窗口一条订阅**，订阅的是它自己的那条位移流。
          *
          * ============================================================

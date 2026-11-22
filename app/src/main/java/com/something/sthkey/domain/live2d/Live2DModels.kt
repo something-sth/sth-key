@@ -189,7 +189,12 @@ object Live2DModels {
             id = IMPORTED_PREFIX + record.id,
             displayName = record.displayName,
             kind = Live2DModelKind.IMPORTED,
-            subtitle = "${record.layoutLabel} · ${directorySizeLabel(dir)}",
+            /*
+             * ⚠️ 不再显示"仅角色/自带键帽资源"这类布局标签：
+             * 那个判断是按资源目录猜的，复杂包的目录结构五花八门，经常猜错，
+             * 显示出来只会误导用户。副标题只保留占用大小。
+             */
+            subtitle = directorySizeLabel(dir),
             /*
              * ⚠️ 多模式模型:页面在各变体自己的目录里（`<variant>/index.html`），
              * 因为那里的相对路径（`cat_model/…`、`bg.png`、`left-keys/`）才是对的。
@@ -493,12 +498,6 @@ object Live2DModels {
         /** 内容宽高比（宽/高）；0 = 还没测到。见 [Live2DModelEntry.contentAspect] */
         val contentAspect: Float = 0f,
     ) {
-        val layoutLabel: String
-            get() = when (layout) {
-                LAYOUT_FULL -> "自带键帽资源"
-                LAYOUT_CAT -> "仅角色"
-                else -> "导入"
-            }
     }
 
     /** 模型根目录；未初始化上下文时返回一个不存在的目录，调用方自然会当作"没有模型" */

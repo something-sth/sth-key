@@ -447,6 +447,14 @@ internal class GamepadNativeMonitor(
 
     /** 上一次的状态，用来做**去抖**（只在变化时回调） */
     private var current: GamepadNativeProtocol.State? = null
+
+    /* 诊断日志用：上次记录的轴值与时间 */
+    private var lastStateLogAt = 0L
+    private var loggedLx = Int.MIN_VALUE
+    private var loggedLy = Int.MIN_VALUE
+    private var loggedRx = Int.MIN_VALUE
+    private var loggedRy = Int.MIN_VALUE
+    private var loggedButtons = Long.MIN_VALUE
     private var loggedLines = 0
 
     /** 上一次发出的按键集合与轴值 */
@@ -476,6 +484,32 @@ internal class GamepadNativeMonitor(
      * - 轴只在值变了才发。
      */
     private fun dispatch(state: GamepadNativeProtocol.State) {
+        /*
+         * 诊断日志：0.5 秒最多一条（且只在轴变化时）。
+         *
+         * ⚠️ "左摇杆没反应但右摇杆正常"这种情况，必须能看到**原生 helper 到底发了什么**：
+         * 是 lx/ly 一直是 0（采集层/原生的问题），还是 lx 有值但我们映射错了。
+         */
+        val now = System.currentTimeMillis()
+        if (state.lx != loggedLx || state.ly != loggedLy ||
+            state.rx != loggedRx || state.ry != loggedRy ||
+            state.buttons != loggedButtons
+        ) {
+            if (now - lastStateLogAt >= 500) {
+                lastStateLogAt = now
+                loggedLx = state.lx
+                loggedLy = state.ly
+                loggedRx = state.rx
+                loggedRy = state.ry
+                loggedButtons = state.buttons
+                AppLog.d(
+                    TAG,
+                    "GAMEPAD lx=${state.lx} ly=${state.ly} rx=${state.rx} ry=${state.ry} " +
+                        "lt=${state.lt} rt=${state.rt} buttons=${state.buttons}",
+                )
+            }
+        }
+
         /* ---------- 按键边沿 ---------- */
 
         GamepadNativeProtocol.canonicalButtons(state.buttons, nextButtons)
