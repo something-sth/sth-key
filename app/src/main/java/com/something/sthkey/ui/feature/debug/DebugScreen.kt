@@ -396,9 +396,8 @@ fun DebugScreen(
 
         item {
             SectionHint(
-                text = "Shizuku 通道需要：Shizuku 正在运行 → 本应用已授权 → " +
-                    "至少能读到一个输入设备。哪一步显示异常，问题就在那一步。" +
-                    "若采集仍启动不了，用上面的「检测直连通道」做一次自检。",
+                text = "Shizuku 通道：服务在运行 → 已授权 → 能读到输入设备；" +
+                    "哪一步异常就是问题所在。",
             )
         }
 
@@ -488,7 +487,7 @@ fun DebugScreen(
                 SettingItem(
                     title = "悬浮窗边界数据",
                     leadingIcon = Icons.Rounded.Straighten,
-                    subtitle = "复制显示器尺寸、系统最大窗口区域与每个窗口的实际/请求位置",
+                    subtitle = "复制显示器与窗口的位置信息。",
                     trailing = {
                         OutlinedButton(
                             onClick = {
@@ -612,7 +611,7 @@ fun DebugScreen(
                 SettingItem(
                     title = "全部关闭",
                     leadingIcon = Icons.Rounded.Close,
-                    subtitle = "一次关掉所有悬浮窗（等价于把主页的开关逐个关掉）",
+                    subtitle = "一次关掉所有悬浮窗。",
                     trailing = {
                         OutlinedButton(
                             onClick = { viewModel.clearAllOverlays() },
@@ -997,7 +996,7 @@ fun DebugScreen(
 
         item {
             SectionHint(
-                text = "日志时间戳精确到毫秒。长按任意一行可复制单条日志；导出只包含当前级别与关键字筛选结果。",
+                text = "长按任意一行可复制；导出只包含当前筛选结果。",
             )
         }
 

@@ -165,7 +165,7 @@ enum class EditMode(val id: String, val label: String, val description: String) 
     ON_SAVE(
         id = "on_save",
         label = "保存生效",
-        description = "编辑页底部会出现保存按钮；不保存直接退出则放弃本次修改",
+        description = "保存按钮在编辑页底部；直接退出会放弃修改",
     ),
     ;
 
@@ -261,7 +261,7 @@ object AppLinks {
      * ⚠️ 这是**本项目的**仓库地址，不要写回旧项目（Sth-Android-KeyStrokes）。
      *
      * 从旧项目搬运"关于"页时这两个常量被一起带了过来，于是应用里
-     * 「GitHub 开源仓库」与「MIT 许可证」都指向旧项目 —— 用户点进去
+     * 「GitHub 开源仓库」与「GPLv3 许可证」都指向旧项目 —— 用户点进去
      * 看到的是一份**不相关的代码**，而这类链接错了很难被自己发现
      * （不报错、不崩溃，只是悄悄指错地方）。
      */

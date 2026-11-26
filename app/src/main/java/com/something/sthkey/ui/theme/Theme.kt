@@ -6,9 +6,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import com.materialkolor.dynamiccolor.ColorSpec
 import com.something.sthkey.domain.ui.AppearanceColorMode
 import com.something.sthkey.domain.ui.AppearancePalette
@@ -48,6 +51,8 @@ fun SthKeyTheme(
     seedColor: Int = 0,
     palette: AppearancePalette = AppearancePalette.DEFAULT,
     colorSpec: ColorSpecOption = ColorSpecOption.DEFAULT,
+    /** 页面缩放百分比（70..130）；只缩放界面，不影响悬浮窗 */
+    uiScalePercent: Int = 100,
     content: @Composable () -> Unit,
 ) {
     val systemDark = isSystemInDarkTheme()
@@ -62,11 +67,30 @@ fun SthKeyTheme(
         isAmoled = colorMode.isBlack,
     )
 
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = AppTypography,
-        content = content,
-    )
+    /*
+     * 页面缩放：改 **density** 而不是 fontScale ——
+     * 这样 dp 尺寸、文字、图标、间距一起缩放，和 SukiSU 的"页面缩放"观感一致；
+     * 只改 fontScale 会变成"字变大、控件不变"，很别扭。
+     *
+     * ⚠️ 必须在 MaterialTheme **外层**提供：里面的所有 Composable
+     * 都要读到新 density。
+     */
+    val baseDensity = LocalDensity.current
+    val scale = (uiScalePercent.coerceIn(70, 130)) / 100f
+    val scaledDensity = remember(baseDensity, scale) {
+        Density(
+            density = baseDensity.density * scale,
+            fontScale = baseDensity.fontScale,
+        )
+    }
+
+    CompositionLocalProvider(LocalDensity provides scaledDensity) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = AppTypography,
+            content = content,
+        )
+    }
 }
 
 /**

@@ -72,7 +72,7 @@ fun ExportMethodDialog(
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    text = "选一种方式。勾选下面的开关后，下次点导出就不再问。",
+                    text = "选一种方式；勾选开关后不再询问。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -131,7 +131,7 @@ fun ExportMethodDialog(
                 }
 
                 Text(
-                    text = "想改回来：设置 → 配置导出 → 导出方式（选「每次询问」即可恢复这个窗口）",
+                    text = "想改回来：设置 → 配置导出 → 导出方式。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

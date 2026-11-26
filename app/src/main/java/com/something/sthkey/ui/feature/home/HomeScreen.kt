@@ -265,7 +265,7 @@ fun HomeScreen(
 
     ScreenScaffold(
         title = "主页",
-        subtitle = "打开某个配置的开关，即可在屏幕上看到它的悬浮窗（可同时开多个）",
+        subtitle = "打开配置开关即可显示悬浮窗（可多开）。",
         modifier = modifier,
     ) { innerPadding ->
         /*
@@ -493,7 +493,7 @@ fun HomeScreen(
                 StatusCard(
                     isError = false,
                     title = "建议忽略电池优化",
-                    description = "系统可能在后台冻结本应用，导致按键显示时有时无。",
+                    description = "系统可能冻结后台，导致按键显示中断。",
                     actionLabel = "去设置",
                     onAction = { PermissionHelper.requestIgnoreBatteryOptimizations(context) },
                 )
@@ -507,7 +507,7 @@ fun HomeScreen(
              * ============================================================
              */
 
-            SectionHint(text = "提示：每个配置的键位、颜色与不透明度在「配置」页调整，改动会立即应用到它的悬浮窗。")
+            SectionHint(text = "提示：键位、颜色与不透明度在「配置」页调整，立即生效。")
 
             Spacer(modifier = Modifier.height(24.dp))
         }

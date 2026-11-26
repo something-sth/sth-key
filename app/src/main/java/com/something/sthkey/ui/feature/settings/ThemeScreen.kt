@@ -33,6 +33,7 @@ import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.rounded.Colorize
+import androidx.compose.material.icons.rounded.AspectRatio
 import androidx.compose.material.icons.rounded.MenuOpen
 import androidx.compose.material.icons.rounded.Style
 import androidx.compose.material.icons.rounded.ViewCarousel
@@ -45,9 +46,11 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -78,6 +81,7 @@ import com.something.sthkey.ui.component.SwitchItem
 import com.something.sthkey.ui.theme.rememberEffectiveSeed
 import com.something.sthkey.ui.theme.rememberSeededColorScheme
 import com.something.sthkey.ui.theme.toSpecVersion
+import kotlin.math.roundToInt
 
 /**
  * **主题设置** —— 从「设置 → 外观」点进来。
@@ -192,9 +196,7 @@ fun ThemeScreen(
 
         item {
             SectionHint(
-                "规格 2025 是 Material 3 Expressive 的规则；" +
-                    "但只有「柔和 / 素净 / 鲜艳 / 表现力」支持它，" +
-                    "其余风格会自动按 2021 推导。",
+                "规格 2025 仅「柔和 / 素净 / 鲜艳 / 表现力」支持，其余按 2021 推导。",
             )
         }
 
@@ -203,35 +205,43 @@ fun ThemeScreen(
 
         item {
             SettingsCard {
-                /*
-                 * 侧边栏是**开关**，不是强制：SukiSU 在平板上默认就是 rail，
-                 * 但有人就喜欢底栏，所以这里让用户自己选。
-                 */
-                SwitchItem(
-                    title = "侧边导航栏",
-                    subtitle = "平板 / 横屏更顺手；开启后不显示底栏，" +
-                        "悬浮底栏同时停用（左侧浮一条胶囊没有意义）",
-                    leadingIcon = Icons.Rounded.MenuOpen,
-                    checked = viewModel.navigationRail,
-                    onCheckedChange = viewModel::applyNavigationRail,
-                )
-                SettingDropdownItem(
-                    title = "底栏样式",
-                    leadingIcon = Icons.Rounded.ViewCarousel,
-                    subtitle = if (viewModel.navigationRail) {
-                        "已开启侧边导航栏，底栏不显示；这里的选择会保留"
-                    } else {
-                        viewModel.bottomBarStyle.description
-                    },
-                    items = BottomBarStyle.entries.map { it.label },
-                    selectedIndex = BottomBarStyle.entries.indexOf(viewModel.bottomBarStyle),
-                    enabled = !viewModel.navigationRail,
-                    onItemSelected = { index ->
-                        BottomBarStyle.entries.getOrNull(index)?.let(
-                            viewModel::applyBottomBarStyle,
+                Column(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = "底栏样式",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    /*
+                     * 标准底栏已移除：只剩「悬浮底栏 / 侧边底栏」两种，
+                     * 用分段按钮表达（与项目里其它“二选一”一致）。
+                     */
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        SegmentedButton(
+                            selected = !viewModel.navigationRail,
+                            onClick = {
+                                viewModel.applyNavigationRail(false)
+                                viewModel.applyBottomBarStyle(BottomBarStyle.FLOATING)
+                            },
+                            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                            label = { Text("悬浮底栏") },
                         )
-                    },
-                )
+                        SegmentedButton(
+                            selected = viewModel.navigationRail,
+                            onClick = { viewModel.applyNavigationRail(true) },
+                            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                            label = { Text("侧边底栏") },
+                        )
+                    }
+                    Text(
+                        text = "手机默认悬浮底栏，平板默认侧边底栏；" +
+                            "侧边栏下切换页面直接跳转，不做滚动动画。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
 
@@ -244,18 +254,77 @@ fun ThemeScreen(
                      * 改完如果不预览，屏幕上**什么都看不到**。所以这里放**真组件**，
                      * 不是示意图（示意图迟早和真实观感脱节）。
                      */
-                    ThemeBottomBarPreview(style = viewModel.bottomBarStyle)
+                    ThemeBottomBarPreview()
                 }
             }
         }
 
         item {
             Text(
-                text = "上面的底栏预览可以点。改完立刻生效，不用重启。",
+                text = "底栏预览可点，改完立即生效。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
             )
+        }
+
+        /* ---------------- 页面缩放 ---------------- */
+        item {
+            SettingsCard {
+                /*
+                 * 样式参照 SukiSU：左侧图标 + 标题/说明 + 右侧百分比，下面一条**自由滑块**。
+                 *
+                 * ⚠️ 拖动时只改本地值，**松手才应用**（`onValueChangeFinished`）：
+                 * 每动一下就改 density 会让整个页面不停重新测量，拖动会明显发涩。
+                 */
+                var sliderValue by remember(viewModel.uiScalePercent) {
+                    mutableFloatStateOf(viewModel.uiScalePercent.toFloat())
+                }
+
+                Column(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.AspectRatio,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "页面缩放",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Text(
+                                text = "整体缩放设置界面，松手后生效",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Text(
+                            text = "${sliderValue.roundToInt()}%",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Slider(
+                        value = sliderValue,
+                        onValueChange = { sliderValue = it },
+                        onValueChangeFinished = {
+                            viewModel.applyUiScalePercent(sliderValue.roundToInt())
+                        },
+                        valueRange = 70f..130f,
+                        /* 不分档：像 SukiSU 一样自由拖动 */
+                        steps = 0,
+                    )
+                }
+            }
         }
     }
 
@@ -402,7 +471,7 @@ private fun ThemePreviewCard(
                                 .clip(CircleShape)
                                 .background(scheme.primary),
                         )
-                        repeat(3) {
+                        repeat(2) {
                             Box(
                                 Modifier
                                     .size(6.dp)
@@ -671,40 +740,16 @@ private fun AppearanceColorMode.icon() = when (this) {
  * 再加一次导航栏高度会多出一大块空白。
  */
 @Composable
-private fun ThemeBottomBarPreview(style: BottomBarStyle) {
+private fun ThemeBottomBarPreview() {
     var previewIndex by remember { mutableIntStateOf(0) }
     val tabs = previewTabs()
 
-    when (style) {
-        BottomBarStyle.FLOATING -> MaterialFloatingBottomBar(
-            tabs = tabs,
-            selectedIndex = previewIndex,
-            onSelect = { previewIndex = it },
-            applyWindowInsets = false,
-        )
-
-        BottomBarStyle.STANDARD -> NavigationBar(
-            modifier = Modifier.padding(top = 8.dp),
-        ) {
-            tabs.forEachIndexed { index, tab ->
-                NavigationBarItem(
-                    selected = previewIndex == index,
-                    onClick = { previewIndex = index },
-                    icon = {
-                        Icon(
-                            imageVector = if (previewIndex == index) {
-                                tab.selectedIcon
-                            } else {
-                                tab.unselectedIcon
-                            },
-                            contentDescription = tab.label,
-                        )
-                    },
-                    label = { Text(tab.label) },
-                )
-            }
-        }
-    }
+    MaterialFloatingBottomBar(
+        tabs = tabs,
+        selectedIndex = previewIndex,
+        onSelect = { previewIndex = it },
+        applyWindowInsets = false,
+    )
 }
 
 private fun previewTabs(): List<FloatingTab> = listOf(

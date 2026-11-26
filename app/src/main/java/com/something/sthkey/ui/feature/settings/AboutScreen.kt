@@ -40,7 +40,7 @@ import com.something.sthkey.ui.feature.announcement.AppAnnouncement
 /**
  * 关于页。
  *
- * 内容沿用旧项目的"关于"：GitHub 仓库、MIT 许可证、QQ 交流群、开发者信息。
+ * 内容沿用旧项目的"关于"：GitHub 仓库、GPLv3 许可证、QQ 交流群、开发者信息。
  * 链接统一走 [PermissionHelper.openUrl]，内部会捕获"没有浏览器"这类异常，
  * 不会出现点了没反应或直接崩溃。
  */
@@ -97,8 +97,8 @@ fun AboutScreen(
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = "通过 root 或 Shizuku 读取外接键盘的原始输入事件，" +
-                            "并在悬浮窗中实时显示按键状态的 Android 应用。",
+                        text = "读取外接键盘、鼠标与手柄输入，并在悬浮窗中实时显示按键状态。" +
+                            "支持 root / Shizuku / 无障碍三种通道。",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     if (BuildConfig.DEBUG) {
@@ -156,9 +156,9 @@ fun AboutScreen(
                 CardDivider()
 
                 SettingItem(
-                    title = "MIT License",
+                    title = "GPL-3.0 License",
                     leadingIcon = Icons.Rounded.Description,
-                    subtitle = "查看项目开源许可证",
+                    subtitle = "查看项目开源许可证（GPLv3）",
                     onClick = { PermissionHelper.openUrl(context, AppLinks.LICENSE) },
                     trailing = { Chevron() },
                 )
@@ -185,8 +185,7 @@ fun AboutScreen(
 
         item {
             SectionHint(
-                text = "点击 QQ 群链接会尝试直接唤起 QQ；若没有反应，" +
-                    "可在 QQ 中搜索群号 ${AppLinks.QQ_GROUP_NUMBER} 加入。",
+                text = "唤不起 QQ 时搜群号 ${AppLinks.QQ_GROUP_NUMBER}。",
             )
         }
 

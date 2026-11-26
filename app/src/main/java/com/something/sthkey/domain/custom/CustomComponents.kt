@@ -256,6 +256,12 @@ data class KeyComponent(
      */
     val inputKeyCodes: List<Int>,
 
+    /**
+     * 组合键：内层一组必须**同时按下**，外层任意一组满足即可。
+     * 与 [inputKeyCodes] 是"或"，空列表 = 没有组合键绑定（老配置）。
+     */
+    val inputCombos: List<List<Int>> = emptyList(),
+
     override val textScalePercent: Int = 100,
     override val textOffsetX: Float = 0f,
     override val textOffsetY: Float = 0f,

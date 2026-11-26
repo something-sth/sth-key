@@ -161,6 +161,31 @@ def load_hand_sprites(model_root):
     return result or None
 
 
+def load_face_sprites(model_root):
+    """Mver 表情贴图：配置 face → face/ 下标。"""
+    root = find_package_root(model_root)
+    if not root:
+        return None
+    try:
+        import re
+
+        text = open(os.path.join(root, "config.json"), "r", encoding="utf-8-sig").read()
+        config = json.loads(re.sub(r"//[^\n]*", "", text))
+    except Exception:
+        return None
+
+    lowered = model_root.lower()
+    mode = "keyboard" if "keyboard" in lowered else ("gamepad" if "gamepad" in lowered else "standard")
+    section = config.get(mode) or {}
+    combos = section.get("face") or []
+    bindings = []
+    for index, combo in enumerate(combos):
+        keys = [vk_name(int(v)) for v in combo if vk_name(int(v))]
+        if keys:
+            bindings.append({"keys": keys, "index": index})
+    return {"dir": "face", "bindings": bindings} if bindings else None
+
+
 def find_background(model_root):
     """Mver 桌面/键盘底图：standard 用 mousebg/tabletbg，其它用 bg。"""
     variant = os.path.dirname(model_root)
@@ -300,6 +325,7 @@ def main():
         "window.__BONGO_BACKGROUND=" + json.dumps(background) + ";",
         "window.__BONGO_LAYOUT=" + json.dumps(find_layout(model_root)) + ";",
         "window.__BONGO_DESIGN=" + json.dumps(find_design(model_root)) + ";",
+        "window.__BONGO_FACE=" + json.dumps(load_face_sprites(model_root), ensure_ascii=False) + ";",
     ]
     with open(os.path.join(out_dir, "modeldata.js"), "w", encoding="utf-8") as f:
         f.write("\n".join(data))

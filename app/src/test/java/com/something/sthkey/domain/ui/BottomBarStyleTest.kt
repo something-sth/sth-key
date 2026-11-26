@@ -14,29 +14,30 @@ import org.junit.Test
  *
  * | 事件 | 后果（如果没有约束） |
  * |---|---|
- * | 以后在枚举中间插一个成员 | 存 `ordinal` 的话所有人的设置会**整体错位**，底栏突然变成另一种样式 |
- * | 改了某个成员的 id | 老用户存的旧 id 认不出来 → 静默回落默认值，用户以为自己没改过 |
+ * | 以后在枚举中间插一个成员 | 存 `ordinal` 的话所有人的设置会**整体错位** |
+ * | 改了某个成员的 id | 老用户存的旧 id 认不出来 → 静默回落默认值 |
  *
  * ⚠️ 所以 id 一旦发布就不能改 —— 这几条测试就是用来**卡住**这件事的。
+ *
+ * ⚠️ 2026-11-26：**标准底栏已移除**，只剩悬浮底栏。
+ * 老用户存的 `"standard"` 必须安静地回落成悬浮（而不是崩/空白），
+ * 所以下面专门保留了这条迁移断言。
  */
 class BottomBarStyleTest {
 
     @Test
     fun `id 是稳定的字符串，不是序号`() {
-        assertEquals("standard", BottomBarStyle.STANDARD.id)
         assertEquals("floating", BottomBarStyle.FLOATING.id)
     }
 
     @Test
-    fun `只有标准和悬浮两种`() {
+    fun `只剩悬浮底栏一种`() {
         /*
-         * ⚠️ 刻意**没有**第三种（液态玻璃）:
-         * 那需要 `miuix-blur 0.9.1+`（minSdk 32 / Kotlin 2.4），
-         * 为了它把 minSdk 从 28 抬上去不划算。
-         * 加回第三种时这条会失败 —— 那是**有意的提醒**:
-         * 加之前先想清楚"选了不生效"的问题。
+         * 标准底栏已删除：用户明确说"太丑、也不好用"，只保留
+         * 悬浮底栏 + 侧边底栏（侧边栏是另一个开关，不在这里）。
          */
-        assertEquals(2, BottomBarStyle.entries.size)
+        assertEquals(1, BottomBarStyle.entries.size)
+        assertEquals(BottomBarStyle.FLOATING, BottomBarStyle.DEFAULT)
     }
 
     @Test
@@ -45,20 +46,20 @@ class BottomBarStyleTest {
          * ⚠️ `AppPrefs` 里"没设置过"返回的是**空串**（`getString(..., null).orEmpty()`），
          * 不是 null。所以 `fromId` 必须把空串也当成"没设置过"。
          */
-        assertEquals(BottomBarStyle.STANDARD, BottomBarStyle.fromId(null))
-        assertEquals(BottomBarStyle.STANDARD, BottomBarStyle.fromId(""))
+        assertEquals(BottomBarStyle.FLOATING, BottomBarStyle.fromId(null))
+        assertEquals(BottomBarStyle.FLOATING, BottomBarStyle.fromId(""))
     }
 
     @Test
     fun `认不出的值静默回落到默认值`() {
         /*
-         * ⚠️ 降级安装（装了新版本、又退回旧版本）会遇到这个:
-         * 新版本写了一个旧版本不认识的 id。
-         * 那时必须**安静地**回落 —— 抛异常的话应用一开就崩，
+         * ⚠️ 降级安装、或者老配置里的 `standard` 都会走到这里。
+         * 必须**安静地**回落 —— 抛异常的话应用一开就崩，
          * 用户连设置页都进不去，也就无法自救。
          */
-        assertEquals(BottomBarStyle.STANDARD, BottomBarStyle.fromId("glass"))
-        assertEquals(BottomBarStyle.STANDARD, BottomBarStyle.fromId("classic"))
+        assertEquals(BottomBarStyle.FLOATING, BottomBarStyle.fromId("standard"))
+        assertEquals(BottomBarStyle.FLOATING, BottomBarStyle.fromId("glass"))
+        assertEquals(BottomBarStyle.FLOATING, BottomBarStyle.fromId("classic"))
     }
 
     @Test

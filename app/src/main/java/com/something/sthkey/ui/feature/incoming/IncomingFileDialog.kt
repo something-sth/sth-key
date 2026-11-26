@@ -181,7 +181,7 @@ fun IncomingFileDialog(
                         if (current.results.any { it is ItemResult.FontOk || it is ItemResult.ModelOk }) {
                             Spacer(modifier = Modifier.height(10.dp))
                             Text(
-                                text = "字体与模型都可以在「设置 → 库」里查看、改名或删除。",
+                                text = "字体与模型在「设置 → 库」里管理。",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )

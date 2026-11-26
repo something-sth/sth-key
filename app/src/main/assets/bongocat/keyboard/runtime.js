@@ -3,7 +3,7 @@
 
   const DESIGN_WIDTH = 612;
   const DESIGN_HEIGHT = 354;
-  const FRAME_INTERVAL = 1000 / 60;
+  let FRAME_INTERVAL = 1000 / 60;
   const DAMPING_DECAY = 0.75;
   const BUILTIN_RESOURCE_BASE = 'file:///android_asset/bongocat/keyboard/resources';
   const IMPORTED_MODEL = Boolean(window.__BONGO_IMPORTED_MODEL);
@@ -61,6 +61,8 @@
    * 同时把模型手臂参数设为 1 收起来（不然两双手会同时出现）。
    */
   const HANDS = (window.__BONGO_HANDS && typeof window.__BONGO_HANDS === 'object') ? window.__BONGO_HANDS : null;
+  /* Mver 表情贴图：face/ 整幅图，按键组合触发 */
+  const FACE = (window.__BONGO_FACE && typeof window.__BONGO_FACE === 'object') ? window.__BONGO_FACE : null;
   const LAYOUT_PARAMS = (window.__BONGO_LAYOUT && typeof window.__BONGO_LAYOUT === 'object')
     ? window.__BONGO_LAYOUT
     : null;
@@ -101,6 +103,7 @@
   const leftHandImage = HANDS ? ensureHandLayer('leftHand') : null;
   const rightHandImage = HANDS ? ensureHandLayer('rightHand') : null;
   const singleHandImage = HANDS ? ensureHandLayer('handLayer') : null;
+  let faceLayer = null;
 
   /*
    * 手柄摇杆贴图（`stick_offset_L/R` + left_stick.png / right_stick.png）。
@@ -237,6 +240,8 @@
     /* 当前左右手图是否正在显示（按键手优先于摇杆手） */
     handSpriteLeft: false,
     handSpriteRight: false,
+    /* 当前显示的表情贴图下标；-1 = 没有（Mver 的 face 是开关语义） */
+    faceIndex: -1,
     ready: false,
   };
 
@@ -498,6 +503,68 @@
     renderer.setOverride('CatParamRightHandDown', state.handSpriteRight ? 1 : 0);
   }
 
+  /**
+   * Mver 的表情是**开关**语义（不是按住显示）：
+   * 组合键按下的瞬间切换"显示/隐藏"，而且同一时间只亮一个。
+   * 见 Mver `catfunc.cpp` 的 `drawface()`（state 翻转，其余全清）。
+   */
+  function toggleFaceOnPress() {
+    if (!FACE) return;
+    for (const binding of FACE.bindings || []) {
+      const keys = binding.keys || [];
+      if (keys.length === 0) continue;
+      if (!keys.every((k) => state.pressedKeys.has(String(k)))) continue;
+      const index = Number(binding.index);
+      state.faceIndex = state.faceIndex === index ? -1 : index;
+      return;
+    }
+  }
+
+  function applyFaceSprites() {
+    if (!FACE || !renderer) return;
+    const element = ensureFaceLayer();
+
+    if (state.faceIndex < 0) {
+      element.style.display = 'none';
+      return;
+    }
+
+    const src = String(FACE.dir || 'face') + '/' + state.faceIndex + '.png';
+    if (element.getAttribute('src') !== src) element.setAttribute('src', src);
+    element.style.display = 'block';
+
+    /*
+     * Mver 的 face 贴图**不做任何定位/缩放**（`drawface` 里直接 window.draw）：
+     * 就在窗口 (0,0) 以原始像素画。别挪到设计画布中心，否则对不上。
+     */
+    const dpr = Math.max(1, devicePixelRatio || 1);
+    const scale = renderer.designScale || renderer.scale;
+    const naturalWidth = Math.max(1, element.naturalWidth || 0);
+    const naturalHeight = Math.max(1, element.naturalHeight || 0);
+    element.style.left = ((renderer.designX || 0)) / dpr + 'px';
+    element.style.top = ((renderer.designY || 0)) / dpr + 'px';
+    element.style.width = (naturalWidth * scale / dpr) + 'px';
+    element.style.height = (naturalHeight * scale / dpr) + 'px';
+  }
+
+  function ensureFaceLayer() {
+    if (faceLayer) return faceLayer;
+    let element = document.getElementById('faceLayer');
+    if (!element) {
+      element = document.createElement('img');
+      element.id = 'faceLayer';
+      element.style.position = 'absolute';
+      element.style.pointerEvents = 'none';
+      element.style.objectFit = 'fill';
+      element.style.zIndex = '7';
+      const stage = document.getElementById('stage') || document.body;
+      stage.appendChild(element);
+    }
+    element.classList.remove('hidden');
+    faceLayer = element;
+    return element;
+  }
+
   function evaluateExpressionBindings() {
     if (EXPR_BINDINGS.length === 0 || state.pressedKeys.size === 0) return;
     for (const binding of EXPR_BINDINGS) {
@@ -630,6 +697,17 @@
 
   window.AxonBongoCat = {
     /** 手动切表情（下标对应 model3 的 Expressions 顺序；-1 取消） */
+    /**
+     * 设置渲染帧率（30..120）。
+     *
+     * ⚠️ 只是取消/收紧 rAF 的节流，**能不能真跑到 120 取决于屏幕刷新率**；
+     * 60Hz 屏设 120 仍然只有 60。
+     */
+    setFrameRate(fps) {
+      const value = Math.max(1, Math.min(240, Number(fps) || 60));
+      FRAME_INTERVAL = 1000 / value;
+    },
+
     setExpression(index) {
       applyExpression(index);
     },
@@ -709,6 +787,8 @@
         if (at >= 0) pressedKeyOrder.splice(at, 1);
       }
       applyHandSprites();
+      if (pressed) toggleFaceOnPress();
+      applyFaceSprites();
       applyGamepadStickParameters();
 
       const rawSide = keySide(rawValue);
@@ -1054,7 +1134,12 @@
    */
   class PhysicsRig {
     constructor(json) {
-      this.fps = Math.max(1, Math.min(120, Number(json && json.Meta && json.Meta.Fps) || 30));
+      /*
+       * ⚠️ 不要用 `Meta.Fps`：Mver 的 physics3 里基本**没有**这个字段，
+       * 之前的默认值 30 会让头发每 2 帧才更新一次 —— 60Hz 画面里就是
+       * "一抽一抽"。物理按 60Hz 固定步长跑，和渲染帧率对齐。
+       */
+      this.fps = 60;
       const list = json && Array.isArray(json.PhysicsSettings) ? json.PhysicsSettings : [];
       this.settings = list.map((raw) => this.parseSetting(raw)).filter((s) => s.particles.length > 1);
       this.accumulator = 0;
@@ -1105,16 +1190,15 @@
       this.accumulator = 0;
     }
 
+    /**
+     * 单步推进（由 CoreRenderer 的固定步长累加器调用）。
+     *
+     * ⚠️ 这里**不再自己累加**：以前 CoreRenderer 和 PhysicsRig 各有一个累加器，
+     * 两次取整叠加会导致"有时走两步、有时不走"，表现为抽搐。
+     */
     evaluate(renderer, deltaSeconds) {
       if (this.settings.length === 0) return;
-      const step = 1 / this.fps;
-      this.accumulator += Math.max(0, Math.min(0.1, deltaSeconds));
-      let guard = 0;
-      while (this.accumulator >= step && guard < 4) {
-        this.update(renderer, step);
-        this.accumulator -= step;
-        guard += 1;
-      }
+      this.update(renderer, Math.max(1 / 240, Math.min(0.1, deltaSeconds)));
     }
 
     update(renderer, deltaSeconds) {
@@ -1579,13 +1663,23 @@
        * 再把结果写给头发/尾巴这类输出参数。
        */
       if (this.physics) {
-        this.physicsAccumulator = Math.min(0.25, this.physicsAccumulator + deltaSeconds);
-        let steps = 0;
-        while (this.physicsAccumulator >= this.physicsStep && steps < 6) {
-          this.physics.evaluate(this, this.physicsStep);
-          this.physicsAccumulator -= this.physicsStep;
-          steps += 1;
-        }
+        /*
+         * ⚠️⚠️ 物理**每帧走一步**，步长 = 这一帧的真实间隔
+         * ============================================================
+         * 之前固定 `1/60` + 累加器：60fps 时每帧正好一步，所以顺。
+         * 但设成 90/120 后，会出现"有的帧走一步、有的帧一步都不走"
+         * （90fps 尤其明显：1.5 帧才够一个 60Hz 步长），
+         * 饰品位置就变成 0/1/0/1 地跳 —— 看起来就是"抽"。
+         *
+         * 现在每帧只走一步、步长取真实帧间隔（夹在 1/240..1/30）：
+         * - 渲染多少帧，物理就走多少步，**一一对应**，不再有取整跳变；
+         * - 物理公式本身按时间积分，步长变细不改变手感；
+         * - 掉到 30fps 以下时步长封顶，避免一步太大导致弹簧发散。
+         *
+         * ⚠️ 不要改回"固定步长 + 累加器"：那正是 90/120 下饰品抽的原因。
+         */
+        const physicsStep = Math.min(1 / 30, Math.max(1 / 240, deltaSeconds));
+        this.physics.evaluate(this, physicsStep);
       }
     }
 
@@ -1779,6 +1873,7 @@
       if (window.__BONGO_DEBUG) window.__STHKEY_RENDERER = renderer;
       syncHandOverrides();
       applyHandSprites();
+      applyFaceSprites();
       renderer.setOverride('ParamMouseLeftDown', (state.mouseButtons & 1) ? 1 : 0);
       renderer.setOverride('ParamMouseRightDown', (state.mouseButtons & 2) ? 1 : 0);
       fallback.classList.add('hidden');

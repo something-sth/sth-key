@@ -552,15 +552,14 @@ fun ConfigListScreen(
 
         item {
             SectionHint(
-                text = "「Default」为内置配置，无法删除或改名，用于恢复出厂设置。" +
+                text = "「Default」为内置配置，不可删除或改名。" +
                     "复制任意配置后可以在编辑页里随意调整。",
             )
         }
 
         item {
             SectionHint(
-                text = "要在屏幕上显示某个配置，请到主页打开它那一行的开关；" +
-                    "可以同时开多个，各自有独立的悬浮窗。",
+                text = "到主页打开配置开关即可显示悬浮窗，可同时多开。",
             )
         }
     }
@@ -1141,7 +1140,7 @@ internal fun CreateConfigDialog(
                 }
 
                 Text(
-                    text = "不同样式的配置互不通用，创建后不能切换样式。",
+                    text = "不同样式互不通用，创建后不能切换。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

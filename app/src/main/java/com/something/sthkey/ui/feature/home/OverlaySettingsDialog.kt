@@ -186,8 +186,7 @@ fun OverlaySettingsDialog(
                 }
 
                 Text(
-                    text = "位置与偏移只保存在本机，不随配置导出 —— " +
-                        "它们跟屏幕尺寸绑定，换台设备就不对了。",
+                    text = "位置与偏移仅存本机，不随配置导出。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

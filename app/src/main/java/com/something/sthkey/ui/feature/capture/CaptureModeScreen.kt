@@ -256,8 +256,7 @@ fun CaptureModeScreen(
                     Text(
                         text = when (fpsMode) {
                             FpsMonitor.Mode.CHOREOGRAPHER ->
-                                "默认通道:测屏幕节拍上限，不需要任何权限。" +
-                                    "数值代表「屏幕能跑多快」，不是游戏真实帧率。"
+                                "测屏幕刷新上限，无需权限；不是游戏真实帧率。"
 
                             FpsMonitor.Mode.SURFACE_FLINGER ->
                                 "强制读 Surfaceflinger。没有 Shizuku/root 时**不显示数字**（N/A），" +
@@ -312,6 +311,44 @@ fun CaptureModeScreen(
          * ⚠️ 摊在主页上会有两个坏处:把好端端的大卡片挤成一整块信息面板；
          * 而且"读不到手柄"这种话，用户想改的时候才需要看，那时他正要点这张卡。
          */
+        /* ---------------- Live2D 渲染帧率 ---------------- */
+        item { SectionHeader("Live2D 渲染帧率") }
+
+        item {
+            SettingsCard {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(
+                        text = "目标帧率",
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    val options = listOf(30, 60, 90, 120)
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        options.forEachIndexed { index, fps ->
+                            SegmentedButton(
+                                selected = viewModel.live2dFps == fps,
+                                onClick = { viewModel.applyLive2DFps(fps) },
+                                shape = SegmentedButtonDefaults.itemShape(
+                                    index = index,
+                                    count = options.size,
+                                ),
+                                label = { Text("$fps") },
+                            )
+                        }
+                    }
+                    Text(
+                        text = "只影响 Live2D 悬浮窗的渲染频率。" +
+                            "实际上限取决于屏幕刷新率：60Hz 屏即使选 120 也只跑到 60。" +
+                            "30 更省电；120 更顺，但更耗电、发热更明显。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+
         item { SectionHeader("当前环境") }
 
         item {
@@ -413,7 +450,7 @@ fun CaptureModeScreen(
         item {
             SectionHint(
                 text = "「自动」按 root → Shizuku → 无障碍 逐级尝试；" +
-                    "手动指定某个模式时不会自动回退，失败原因会直接记录到日志里。",
+                    "手动指定时不会回退。",
             )
         }
     }

@@ -77,6 +77,13 @@ data class Live2DModelEntry(
      * `0f` = 还没测到（按 612×354 兜底）。
      */
     val contentAspect: Float = 0f,
+    /**
+     * 模型自带的表情名称（model3 `Expressions` 的顺序）。
+     *
+     * 配置编辑页的「表情」分区靠它判断"这个模型有没有表情、列哪些项"；
+     * 空列表 = 没有表情（内置模型、老导入模型都是这样）。
+     */
+    val expressions: List<String> = emptyList(),
 )
 
 /**
@@ -213,6 +220,7 @@ object Live2DModels {
             variants = record.variants,
             variant = record.variant,
             contentAspect = record.contentAspect,
+            expressions = record.expressions,
         )
     }
 
@@ -258,6 +266,22 @@ object Live2DModels {
      * @param dirId 目录名（导入器生成的 uuid），与 [Live2DModelEntry.id] 不同：
      *   id 会写进配置，目录名只在本地用
      */
+    /**
+     * 多模式模型导入后的默认变体：优先 **standard**。
+     *
+     * 判断同时看 `pageDir`（目录名）与 `name`（中文标签），
+     * 因为不同模型包的目录命名不完全一致（`standard` / `Standard` / `标准`）。
+     * 找不到 standard 时退回第一个（单模式模型走这里，行为不变）。
+     */
+    internal fun defaultVariant(variants: List<Live2DVariant>): String {
+        if (variants.isEmpty()) return ""
+        val standard = variants.firstOrNull {
+            it.pageDir.substringAfterLast('/').equals("standard", ignoreCase = true) ||
+                it.name == "标准"
+        }
+        return (standard ?: variants.first()).pageDir
+    }
+
     fun registerImported(
         dirId: String,
         displayName: String,
@@ -265,6 +289,7 @@ object Live2DModels {
         layout: String,
         supportedKeys: Set<String> = emptySet(),
         variants: List<Live2DVariant> = emptyList(),
+        expressions: List<String> = emptyList(),
     ): Live2DModelEntry {
         val records = readImported().filterNot { it.id == dirId }.toMutableList()
         records += Record(
@@ -274,8 +299,15 @@ object Live2DModels {
             layout = layout,
             supportedKeys = supportedKeys,
             variants = variants,
-            /* ⚠️ 默认选第一个:导入时排序规则已经把 keyboard 排在最前 */
-            variant = variants.firstOrNull()?.pageDir.orEmpty(),
+            expressions = expressions,
+            /*
+             * ⚠️ 多模式模型默认选**标准**，不是"第一个"。
+             *
+             * 大量模型包只有 standard 是认真做的，keyboard / gamepad 那两套
+             * 只是占位的默认 bongocat。按目录顺序排的话默认会落到 keyboard，
+             * 用户看到的是一套假画面，还得自己去切模式。
+             */
+            variant = defaultVariant(variants),
         )
         writeImported(records)
         AppLog.i(
@@ -497,6 +529,8 @@ object Live2DModels {
         val variant: String = "",
         /** 内容宽高比（宽/高）；0 = 还没测到。见 [Live2DModelEntry.contentAspect] */
         val contentAspect: Float = 0f,
+        /** 模型自带表情名称 */
+        val expressions: List<String> = emptyList(),
     ) {
     }
 
@@ -542,6 +576,14 @@ object Live2DModels {
                             }.orEmpty(),
                             variant = item.optString("variant"),
                             contentAspect = item.optDouble("contentAspect", 0.0).toFloat(),
+                            expressions = item.optJSONArray("expressions")?.let { array ->
+                                buildList {
+                                    for (index in 0 until array.length()) {
+                                        val name = array.optString(index)
+                                        if (name.isNotEmpty()) add(name)
+                                    }
+                                }
+                            }.orEmpty(),
                             supportedKeys = item.optJSONArray("supportedKeys")
                                 ?.let { array ->
                                     buildSet {
@@ -594,6 +636,12 @@ object Live2DModels {
                     }
                     if (record.contentAspect > 0f) {
                         put("contentAspect", record.contentAspect.toDouble())
+                    }
+                    if (record.expressions.isNotEmpty()) {
+                        put(
+                            "expressions",
+                            JSONArray().apply { record.expressions.forEach { put(it) } },
+                        )
                     }
                 },
             )

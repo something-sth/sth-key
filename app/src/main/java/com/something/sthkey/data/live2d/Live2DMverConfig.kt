@@ -161,6 +161,43 @@ internal object Live2DMverConfig {
     }
 
     /**
+     * 表情贴图（Mver 的 `face/`）。
+     *
+     * 和手部同一套规则：配置里的 `face` 是"按键组合 → 贴图下标"，
+     * 图是**设计画布尺寸的整幅图**，从 (0,0) 以原始像素绘制。
+     * 例如 `[[17,97],[17,98],[17,99],[17,100]]` = Ctrl + 小键盘 1~4。
+     */
+    fun loadFaceSprites(packageRoot: File, mode: String?, variantRoot: File?): JSONObject? {
+        if (mode == null || variantRoot == null) return null
+        if (!File(variantRoot, "face").isDirectory) return null
+        val json = loadConfig(packageRoot) ?: return null
+        val section = json.optJSONObject(mode) ?: return null
+        val combos = section.optJSONArray("face") ?: return null
+        if (combos.length() == 0) return null
+
+        val bindings = org.json.JSONArray()
+        for (index in 0 until combos.length()) {
+            val combo = combos.optJSONArray(index) ?: continue
+            val keys = org.json.JSONArray()
+            for (k in 0 until combo.length()) {
+                vkKeyName(combo.optInt(k, -1))?.let { keys.put(it) }
+            }
+            if (keys.length() == 0) continue
+            bindings.put(
+                JSONObject().apply {
+                    put("keys", keys)
+                    put("index", index)
+                },
+            )
+        }
+        if (bindings.length() == 0) return null
+        return JSONObject().apply {
+            put("dir", "face")
+            put("bindings", bindings)
+        }
+    }
+
+    /**
      * 手柄摇杆贴图（`stick_offset_L/R` + `left_stick.png` / `right_stick.png`）。
      *
      * 配置格式：`stick_offset_L: [x, y, 半径]`（设计画布像素）。

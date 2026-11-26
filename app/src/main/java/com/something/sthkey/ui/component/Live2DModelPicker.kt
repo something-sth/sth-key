@@ -227,7 +227,7 @@ fun Live2DModelPickerDialog(
 
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = "导入的模型对所有配置可用；会跟随着配置文件一起导出。",
+                    text = "导入的模型所有配置可用，随配置导出。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

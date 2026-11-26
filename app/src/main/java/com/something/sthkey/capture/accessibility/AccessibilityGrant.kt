@@ -11,6 +11,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 
@@ -195,7 +197,23 @@ internal object AccessibilityGrant {
      * @param forceRebind `true` = 先摘掉再加回来（服务卡死时用）
      * @param timeoutMs 等"服务连上"最多等多久
      */
+    /**
+     * 串行化授权：启动时 `refreshCapabilities` 和用户点悬浮窗可能**同时**调进来
+     * （日志里能看到两条"尝试用 root 开启无障碍"挨着出现）。
+     * 两个 `su` + 两轮 `settings put` 会互相踩，甚至把刚写好的列表覆盖回空。
+     */
+    private val grantMutex = Mutex()
+
     suspend fun grant(
+        context: Context,
+        useRoot: Boolean,
+        forceRebind: Boolean = false,
+        timeoutMs: Long = 4000L,
+    ): Result = grantMutex.withLock {
+        grantLocked(context, useRoot, forceRebind, timeoutMs)
+    }
+
+    private suspend fun grantLocked(
         context: Context,
         useRoot: Boolean,
         forceRebind: Boolean = false,
@@ -214,7 +232,7 @@ internal object AccessibilityGrant {
         AppLog.i(TAG, "尝试用 ${if (useRoot) "root" else "Shizuku"} 开启无障碍")
 
         /* ① 读现状 */
-        val current = runShell(useRoot, "settings get secure $KEY_ENABLED_SERVICES")
+        val current = runShell(useRoot, "settings --user current get secure $KEY_ENABLED_SERVICES")
         if (current == null) {
             AppLog.w(TAG, "读不到无障碍启用列表（shell 执行失败）")
             return@withContext Result(
@@ -250,6 +268,22 @@ internal object AccessibilityGrant {
         }
         AppLog.i(TAG, "已写入无障碍启用列表：$merged")
 
+        /*
+         * ③.5 **读回校验**：某些 ROM 上 `settings put` 返回 0，但值被系统改回去
+         * （权限管理/无障碍管理器自己重写）。不校验的话就会出现
+         * "提示已启动、实际没开"——必须确认列表里真的有我们。
+         */
+        val verify = runShell(useRoot, "settings --user current get secure $KEY_ENABLED_SERVICES")
+        val verified = verify?.contains(service) == true
+        AppLog.i(TAG, "读回校验：${if (verified) "通过" else "失败"}（$verify）")
+        if (!verified) {
+            return@withContext Result(
+                writeSucceeded = false,
+                connected = SthKeyAccessibilityService.isConnected(),
+                detail = "写入系统设置后被系统改回（读回校验失败）",
+            )
+        }
+
         /* ④ **必须等它真的连上** —— settings 写成功不等于服务起来了 */
         val connected = awaitConnected(timeoutMs)
 
@@ -278,19 +312,23 @@ internal object AccessibilityGrant {
      * ⚠️ 列表为空时用 `settings delete` 而不是 `put ""`:
      * 某些 ROM 上留一个空条目会让整个无障碍系统判成配置损坏。
      */
-    private suspend fun writeList(useRoot: Boolean, list: String): Boolean {
+    private suspend fun writeList(useRoot: Boolean, list: String): Boolean =
+        runShell(useRoot, buildWriteCommand(list)) != null
+
+    /**
+     * 拼"写入已启用列表 + 打开总开关"的 shell 命令。
+     *
+     * ⚠️ 抽出来是为了**单测能覆盖**：之前 `--user current` 前缀被拼了两次，
+     * 变成 `settings --user current settings --user current put …` ——
+     * 命令返回 0 但什么都没写，表现为"读回校验失败、列表里只有别人的服务"。
+     */
+    internal fun buildWriteCommand(list: String): String {
         val putServices = if (list.isEmpty()) {
-            "settings delete secure $KEY_ENABLED_SERVICES"
+            "settings --user current delete secure $KEY_ENABLED_SERVICES"
         } else {
-            /*
-             * ⚠️ 用**单引号**包住列表 —— 组件名里有 `/` 和 `.`，
-             * 单引号里它们都是普通字符，不需要转义。
-             * ⚠️ 组件名里**不可能**有单引号（包名与类名不允许），所以这样是安全的。
-             */
-            "settings put secure $KEY_ENABLED_SERVICES '$list'"
+            "settings --user current put secure $KEY_ENABLED_SERVICES '$list'"
         }
-        val command = "$putServices; settings put secure $KEY_ACCESSIBILITY_ENABLED 1"
-        return runShell(useRoot, command) != null
+        return "$putServices; settings --user current put secure $KEY_ACCESSIBILITY_ENABLED 1"
     }
 
     /*
@@ -351,14 +389,25 @@ internal object AccessibilityGrant {
      * （实测有的 100 多毫秒、有的要一秒以上）。
      */
     private suspend fun awaitConnected(timeoutMs: Long): Boolean {
+        /*
+         * ⚠️ 不能"第一次 true 就算成功"：有的 ROM 上服务会先连上、随后被系统
+         * 立刻回收（或无障碍列表被改写）。所以要求**连续稳定**一段时间。
+         */
+        val stableMs = 600L
         val step = 100L
         var waited = 0L
+        var stable = 0L
         while (waited <= timeoutMs) {
-            if (SthKeyAccessibilityService.isConnected()) return true
+            if (SthKeyAccessibilityService.isConnected()) {
+                stable += step
+                if (stable >= stableMs) return true
+            } else {
+                stable = 0
+            }
             delay(step)
             waited += step
         }
-        return SthKeyAccessibilityService.isConnected()
+        return false
     }
 
     /*

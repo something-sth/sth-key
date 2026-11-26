@@ -93,6 +93,9 @@ enum class CanvasColorPreset(
  */
 class AppPrefs private constructor(context: Context) {
 
+    /** 只用于"首次启动的默认值"判断（平板默认侧边栏），不持有 Activity */
+    private val appContext: Context = context.applicationContext
+
     private val prefs: SharedPreferences =
         context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -713,12 +716,44 @@ class AppPrefs private constructor(context: Context) {
         }
 
     /**
+     * 页面缩放百分比（70..130，默认 100）。
+     *
+     * ⚠️ 只影响**界面**（Compose 的 density），不影响悬浮窗大小 ——
+     * 悬浮窗有自己的一套 `KeyLayout.uiScale`，两者是不同用途。
+     */
+    var uiScalePercent: Int
+        get() = prefs.getInt(KEY_UI_SCALE_PERCENT, 100).coerceIn(70, 130)
+        set(value) {
+            prefs.edit().putInt(KEY_UI_SCALE_PERCENT, value.coerceIn(70, 130)).apply()
+        }
+
+    /**
+     * Live2D 渲染帧率（30 / 60 / 90 / 120，默认 60）。
+     *
+     * ⚠️ 这只是"让 WebView 别按 60 节流"，**实际上限取决于屏幕刷新率**：
+     * 60Hz 屏设 120 也只能跑到 60；120Hz 屏 + 高性能模式才可能真到 120。
+     */
+    var live2dFps: Int
+        get() = prefs.getInt(KEY_LIVE2D_FPS, 60).coerceIn(30, 120)
+        set(value) {
+            prefs.edit().putInt(KEY_LIVE2D_FPS, value.coerceIn(30, 120)).apply()
+        }
+
+    /**
      * 侧边导航栏（平板 / 横屏）。默认**关**。
      *
      * ⚠️ 开启后底栏整条不显示（悬浮样式同时停用），见 `MainActivity` 的 `navigationRail`。
      */
     var appearanceNavigationRail: Boolean
-        get() = prefs.getBoolean(KEY_APPEARANCE_NAV_RAIL, false)
+        get() = if (prefs.contains(KEY_APPEARANCE_NAV_RAIL)) {
+            prefs.getBoolean(KEY_APPEARANCE_NAV_RAIL, false)
+        } else {
+            /*
+             * 首次启动的默认值：**平板默认侧边栏、手机默认悬浮底栏**。
+             * 用 `smallestScreenWidthDp >= 600` 判定平板（与 Android 的资源限定符一致）。
+             */
+            appContext.resources.configuration.smallestScreenWidthDp >= 600
+        }
         set(value) {
             prefs.edit().putBoolean(KEY_APPEARANCE_NAV_RAIL, value).apply()
         }
@@ -820,6 +855,8 @@ class AppPrefs private constructor(context: Context) {
     private const val KEY_BOTTOM_BAR_STYLE = "bottom_bar_style"
     private const val KEY_CONFIG_GROUPS = "config_groups"
     private const val KEY_SEED_COLOR = "seed_color"
+    private const val KEY_LIVE2D_FPS = "live2d_fps"
+    private const val KEY_UI_SCALE_PERCENT = "ui_scale_percent"
     private const val KEY_APPEARANCE_PALETTE = "appearance_palette"
     private const val KEY_APPEARANCE_COLOR_SPEC = "appearance_color_spec"
     private const val KEY_APPEARANCE_NAV_RAIL = "appearance_nav_rail"

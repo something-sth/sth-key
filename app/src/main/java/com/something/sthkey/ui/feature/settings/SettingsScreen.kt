@@ -226,8 +226,7 @@ fun SettingsScreen(
             SettingsCard {
                 SettingItem(
                     title = "v${AppAnnouncement.latest.version} 更新公告",
-                    subtitle = "发布于 ${AppAnnouncement.latest.date}，" +
-                        "点开可以往前翻看历史版本",
+                    subtitle = "发布于 ${AppAnnouncement.latest.date}",
                     leadingIcon = Icons.Default.Campaign,
                     onClick = { showAnnouncement = true },
                 )
@@ -462,9 +461,8 @@ fun SettingsScreen(
                      * 每次自己在系统选择器里挑（那条路一直正常）。
                      */
                     Text(
-                        text = "「${ExportMethod.DOWNLOAD.label}」会存到 " +
-                            "下载/sthkeyconfigs（不需要任何存储权限）。" +
-                            "想存到别处就用「${ExportMethod.MANUAL.label}」。",
+                        text = "「${ExportMethod.DOWNLOAD.label}」存到 下载/sthkeyconfigs；" +
+                            "存别处用「${ExportMethod.MANUAL.label}」。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -524,13 +522,6 @@ fun SettingsScreen(
             }
         }
 
-        item {
-            SectionHint(
-                text = "库里的资源是**全局**的：导入一次，所有配置都能用。" +
-                    "编辑配置时仍然在原来的位置「选择」用哪一个。",
-            )
-        }
-
         /*
          * ============================================================
          * 诊断
@@ -548,13 +539,6 @@ fun SettingsScreen(
                     onClick = onOpenDebug,
                 )
             }
-        }
-
-        item {
-            SectionHint(
-                text = "遇到按键无反应、悬浮窗不显示等问题时，先到调试页查看日志，" +
-                    "日志记录了每次权限检测与模式切换的结果。",
-            )
         }
 
         /*
@@ -585,7 +569,8 @@ fun SettingsScreen(
             ) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "按键显示依赖外接键盘并使用 root 或 Shizuku 读取原始输入事件。",
+                    text = "读取外接键盘、鼠标与手柄的输入事件：" +
+                        "root / Shizuku 可读全部，无障碍仅支持键盘。",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

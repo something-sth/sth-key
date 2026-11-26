@@ -97,7 +97,7 @@ fun KeyGrid(
         ),
     ) {
         KeyLayout.keys(config, cpsBySlot).forEach { box ->
-            val pressed = box.codes.any { it in pressedCodes }
+            val pressed = isBoxPressed(box, config, pressedCodes, emptySet())
             OverlayKey(
                 box = box,
                 pressed = pressed,
@@ -152,10 +152,29 @@ internal fun OverlayKeySlot(
 ) {
     OverlayKey(
         box = box,
-        pressed = box.codes.any { it in pressedCodes } || box.slotId in pressedSlots,
+        pressed = isBoxPressed(box, config, pressedCodes, pressedSlots),
         config = config,
         scale = scale,
     )
+}
+
+/**
+ * 一个键位是否点亮。
+ *
+ * - `box.codes`：单键语义是"任意一个按下就亮"（左右 Shift 都能亮）；
+ * - `inputCombos`：内层必须**全部按下**，外层任意一组满足即可。
+ */
+private fun isBoxPressed(
+    box: KeyBox,
+    config: KeyStrokesConfig,
+    pressedCodes: Set<Int>,
+    pressedSlots: Set<String>,
+): Boolean {
+    if (box.codes.any { it in pressedCodes }) return true
+    if (box.slotId in pressedSlots) return true
+    val combos = config.keyMappings.firstOrNull { it.id == box.slotId }?.inputCombos
+        ?: return false
+    return combos.any { combo -> combo.isNotEmpty() && combo.all { it in pressedCodes } }
 }
 
 /**

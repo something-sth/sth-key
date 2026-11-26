@@ -51,7 +51,17 @@ class SthKeyAccessibilityService : AccessibilityService() {
          * 那时按键还没来，窗口却得先能建出来。
          */
         OverlayWindowHost.attach(this)
-        AppLog.i(TAG, "无障碍服务已连接（按键通道 + 窗口宿主就绪）")
+        /*
+         * 诊断：把服务能力打出来。
+         * "连上了但收不到按键"最常见的原因是 flagRequestFilterKeyEvents 没生效
+         * （系统缓存了旧的 serviceInfo，或 XML 里漏了 canRequestFilterKeyEvents）。
+         */
+        val info = runCatching { serviceInfo }.getOrNull()
+        AppLog.i(
+            TAG,
+            "无障碍服务已连接（按键通道 + 窗口宿主就绪）@${System.currentTimeMillis()} " +
+                "flags=${info?.flags} eventTypes=${info?.eventTypes}",
+        )
     }
 
     /**
@@ -122,13 +132,13 @@ class SthKeyAccessibilityService : AccessibilityService() {
          * 由它们各自提示"需要无障碍服务"（见那边的说明）。
          */
         OverlayWindowHost.detach()
-        AppLog.i(TAG, "无障碍服务已断开（窗口宿主随之失效）")
+        AppLog.i(TAG, "无障碍服务已断开（窗口宿主随之失效）@${System.currentTimeMillis()}")
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
         OverlayWindowHost.detach()
-        AppLog.i(TAG, "无障碍服务已销毁")
+        AppLog.i(TAG, "无障碍服务已销毁 @${System.currentTimeMillis()}")
         super.onDestroy()
     }
 

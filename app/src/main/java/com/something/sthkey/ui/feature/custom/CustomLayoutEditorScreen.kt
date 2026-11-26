@@ -107,6 +107,7 @@ import com.something.sthkey.domain.keys.KeyCodes
 import com.something.sthkey.ui.component.BitmapFontPickerDialog
 import com.something.sthkey.ui.component.ExpressiveSwitch
 import com.something.sthkey.ui.component.FontPickerDialog
+import com.something.sthkey.ui.component.KeyBindingSetDialog
 import com.something.sthkey.ui.component.KeyPickerDialog
 import com.something.sthkey.ui.component.MultiKeyPickerDialog
 import com.something.sthkey.ui.component.PendingBitmapImportDialog
@@ -684,22 +685,19 @@ fun CustomLayoutEditorScreen(
      * 它没有 evdev 键码，是采集层从摇杆向量算出来的内部码，只对自定义组件有意义。
      */
     editingListenFor?.let { key ->
-        MultiKeyPickerDialog(
+        /*
+         * 与键位映射统一：添加按键 = 采集；采集里可以手动勾选。
+         * 单键是"任意按下"，组合键是"必须同时按下"。
+         */
+        KeyBindingSetDialog(
             title = "选择「${key.label.ifBlank { "按键" }}」监听的键",
-            hint = "可以绑定多个物理键，任意一个按下都会点亮这个组件。" +
-                "例如左右 Shift 是两个不同的键码，两个都选上才会都亮。" +
-                "\n\n也可以加「左/右摇杆（八段式）」——推方向时组件会亮，" +
-                "按键组件的 CPS 也一起统计。",
-            initialCodes = key.inputKeyCodes,
-            emptyHint = "当前未绑定任何按键（这个组件不会亮）",
-            /*
-             * ⚠️ 只有按键组件/文本组件允许摇杆八段式；摇杆组件的四向键位
-             * 与 Key 样式的键位映射都保持默认 false（见对话框参数说明）。
-             */
-            allowStickDirections = true,
+            hint = "单键任一按下即亮；组合键需同时按下。" +
+                "例如左右 Shift 各绑一个单键，两个都能亮；Ctrl+A 要两个一起按。",
+            initialSingles = key.inputKeyCodes,
+            initialCombos = key.inputCombos,
             onDismiss = { editingListenFor = null },
-            onConfirm = { codes ->
-                draft.replace(key.withInputKeyCodes(codes))
+            onConfirm = { singles, combos ->
+                draft.replace(key.copy(inputKeyCodes = singles, inputCombos = combos))
                 editingListenFor = null
             },
         )
@@ -932,7 +930,7 @@ fun CustomLayoutEditorScreen(
 
                     EditorOptionSwitch(
                         title = "悬浮窗尺寸预览",
-                        subtitle = "画出内容包围盒，也就是悬浮窗在屏幕上会有多大。" +
+                        subtitle = "画出内容包围盒（悬浮窗占用范围）。" +
                             "组件贴到线外就会被裁，建议保持开启",
                         checked = showWindowFrame,
                         onCheckedChange = onShowWindowFrameChange,

@@ -3,6 +3,7 @@ package com.something.sthkey.ui.feature.config
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -39,6 +40,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
@@ -63,6 +65,8 @@ import com.something.sthkey.capture.accessibility.SthKeyAccessibilityService
 import com.something.sthkey.capture.touch.TouchRegionContainerService
 import com.something.sthkey.core.log.AppLog
 import com.something.sthkey.data.permission.PermissionHelper
+import com.something.sthkey.domain.config.ExpressionBinding
+import com.something.sthkey.domain.keys.KeyCodes
 import com.something.sthkey.domain.config.ANIMATION_DURATION_MAX
 import com.something.sthkey.domain.config.ANIMATION_DURATION_MIN
 import com.something.sthkey.domain.config.AnimationMode
@@ -89,6 +93,8 @@ import com.something.sthkey.ui.component.collapsibleSection
 import com.something.sthkey.ui.component.EditableSliderRow
 import com.something.sthkey.ui.component.FontPickerDialog
 import com.something.sthkey.ui.component.HexColorRow
+import com.something.sthkey.ui.component.KeyCaptureDialog
+import com.something.sthkey.ui.component.KeyComboPickerDialog
 import com.something.sthkey.ui.component.KeyMappingEditor
 import com.something.sthkey.ui.component.Live2DModelPickerDialog
 import com.something.sthkey.ui.component.PendingBitmapImportDialog
@@ -1705,7 +1711,7 @@ fun ConfigEditorScreen(
 
         item {
             SectionHint(
-                text = "正值是往右、往下。图片字体在不同图集里的基线位置会有差别，" +
+                text = "正值是往右、往下，用来微调图片字体的文字位置。" +
                     "用它把文字挪到合适的位置。范围与自定义 Key 的文字偏移一致，" +
                     "所以两者之间互相转换时位置不会跑偏。\n\n" +
                     "个别键如果和别的不一样（比如空格显示的是非 ASCII 横线、" +
@@ -1779,7 +1785,7 @@ fun ConfigEditorScreen(
 
         item {
             SectionHint(
-                text = "百分比是相对字号算的，以后改字号不用重新调。\n\n" +
+                text = "百分比相对字号，改字号后不用重调。\n\n" +
                     "行间距收紧有下限（不会把两行压在一起）；" +
                     "字间距可以收成负值 —— 有些字体的字形自带较宽的左侧留白，" +
                     "需要收回来才好看。",
@@ -1837,7 +1843,7 @@ fun ConfigEditorScreen(
 
         item {
             SectionHint(
-                text = "这里只改每个位置**显示什么文字** —— " +
+                text = "这里只改每个位置显示的文字；显示哪些位置是固定的。" +
                     "悬浮窗上显示哪些位置是固定的。" +
                     "触屏不读物理按键，所以没有「绑定按键」这一项；" +
                     "手指按哪里算操作轮盘由「触屏设置」里的**触摸区域**决定。",
@@ -1867,7 +1873,7 @@ fun ConfigEditorScreen(
 
         item {
             SectionHint(
-                text = "悬浮窗显示哪些按键是固定的，这里只调整每个位置「显示什么文字」" +
+                text = "这里只改每个位置的显示文字与绑定的物理键。" +
                     "和「绑定哪些物理键」。一个位置可以绑定多个键（例如 Shift 可同时绑左右 Shift）。" +
                     "按键使用 Linux 输入事件码：W=17、A=30、空格=57。",
             )
@@ -2242,10 +2248,166 @@ private fun LazyListScope.live2DStyleSections(
 
     item {
         SectionHint(
-            text = "切换模型会重新加载一次悬浮窗页面，需要几百毫秒。" +
+            text = "切换模型会重载悬浮窗页（几百毫秒）。" +
                 "颜色、键位映射、字体等属于「Key」样式的设置，在 Live2D 下不显示也不生效。",
         )
     }
+
+    /* 表情分区：只有模型自带表情时才出现（模型元数据在导入时写入） */
+    val expressions = Live2DModels.resolve(editable.live2d.modelId).expressions
+    if (expressions.isNotEmpty()) {
+        item { SectionHeader("表情") }
+        item {
+            Live2DExpressionCard(
+                editable = editable,
+                expressions = expressions,
+                applyChange = applyChange,
+            )
+        }
+    }
+}
+
+/**
+ * 表情卡片：顶部选当前表情，下面每个表情一行、点一下绑快捷键。
+ *
+ * 绑定的是**一组组合键**（必须同时按下），保存后按它切到该表情；
+ * 表情是固定切换，不是循环。
+ */
+@Composable
+private fun Live2DExpressionCard(
+    editable: KeyStrokesConfig,
+    expressions: List<String>,
+    applyChange: ((KeyStrokesConfig) -> KeyStrokesConfig) -> Unit,
+) {
+    var pickingExpression by remember { mutableStateOf(false) }
+    var editingIndex by remember { mutableStateOf<Int?>(null) }
+    var manualForIndex by remember { mutableStateOf<Int?>(null) }
+
+    val settings = editable.live2d
+    SettingsCard {
+        SettingItem(
+            title = "当前表情",
+            subtitle = expressions.getOrNull(settings.expression) ?: "不使用",
+            onClick = { pickingExpression = true },
+        )
+        expressions.forEachIndexed { index, name ->
+            val keys = settings.expressionBindings.firstOrNull { it.index == index }?.keys.orEmpty()
+            CardDivider()
+            SettingItem(
+                title = name,
+                subtitle = if (keys.isEmpty()) {
+                    "未设置快捷键"
+                } else {
+                    keys.joinToString(" + ") { KeyCodes.displayName(it) }
+                },
+                onClick = { editingIndex = index },
+            )
+        }
+    }
+
+    if (pickingExpression) {
+        AlertDialog(
+            onDismissRequest = { pickingExpression = false },
+            title = { Text("选择表情") },
+            text = {
+                Column {
+                    listOf(-1 to "不使用").forEach { (index, label) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    applyChange {
+                                        it.copy(live2d = it.live2d.copy(expression = index))
+                                    }
+                                    pickingExpression = false
+                                }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = settings.expression == index,
+                                onClick = {
+                                    applyChange {
+                                        it.copy(live2d = it.live2d.copy(expression = index))
+                                    }
+                                    pickingExpression = false
+                                },
+                            )
+                            Text(label)
+                        }
+                    }
+                    expressions.forEachIndexed { index, name ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    applyChange {
+                                        it.copy(live2d = it.live2d.copy(expression = index))
+                                    }
+                                    pickingExpression = false
+                                }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = settings.expression == index,
+                                onClick = {
+                                    applyChange {
+                                        it.copy(live2d = it.live2d.copy(expression = index))
+                                    }
+                                    pickingExpression = false
+                                },
+                            )
+                            Text(name)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { pickingExpression = false }) { Text("关闭") }
+            },
+        )
+    }
+
+    editingIndex?.let { index ->
+        if (manualForIndex == index) {
+            KeyComboPickerDialog(
+                title = "表情快捷键 · ${expressions.getOrNull(index) ?: ""}",
+                initial = settings.expressionBindings.firstOrNull { it.index == index }?.keys.orEmpty(),
+                onDismiss = { manualForIndex = null },
+                onConfirm = { keys ->
+                    setExpressionBinding(editable, expressions.size, index, keys, applyChange)
+                    manualForIndex = null
+                    editingIndex = null
+                },
+            )
+        } else {
+            KeyCaptureDialog(
+                title = "表情快捷键 · ${expressions.getOrNull(index) ?: ""}",
+                initialCodes = settings.expressionBindings.firstOrNull { it.index == index }?.keys.orEmpty(),
+                onDismiss = { editingIndex = null },
+                onConfirm = { keys ->
+                    setExpressionBinding(editable, expressions.size, index, keys, applyChange)
+                    editingIndex = null
+                },
+                onManual = { manualForIndex = index },
+            )
+        }
+    }
+}
+
+private fun setExpressionBinding(
+    editable: KeyStrokesConfig,
+    expressionCount: Int,
+    index: Int,
+    keys: List<Int>,
+    applyChange: ((KeyStrokesConfig) -> KeyStrokesConfig) -> Unit,
+) {
+    val current = editable.live2d.expressionBindings.filterNot { it.index == index }
+    val next = if (keys.isEmpty()) current else current + ExpressionBinding(index, keys)
+    /* 按下标排序，写出去的 JSON 稳定，用户看也好找 */
+    val sorted = next.sortedBy { it.index }.filter { it.index in 0 until expressionCount }
+    applyChange { it.copy(live2d = it.live2d.copy(expressionBindings = sorted)) }
 }
 
 /**
@@ -2409,7 +2571,7 @@ private fun LazyListScope.customKeyStyleSections(
 
     item {
         SectionHint(
-            text = "在编辑器里摆放按键与文本组件：用 X / Y 滑块定位、逐个调外观与尺寸。" +
+            text = "在编辑器里摆按键与文本：X/Y 定位、逐个调外观。" +
                 "编辑过程中不会改动配置，点保存才写入。",
         )
     }
@@ -2482,7 +2644,7 @@ private fun LazyListScope.customKeyStyleSections(
 
     item {
         SectionHint(
-            text = "打开后是一个悬浮在所有应用之上的编辑面板：点左下角「＋ 添加触摸区域」" +
+            text = "悬浮编辑面板：点左下角「＋ 添加触摸区域」加一块，" +
                 "加一块（轮盘或按键），每块旁边可以「绑定」组件、也可以删掉。" +
                 "拖动方块调位置、下面的滑块调边长，点「保存并退出」才写回配置。",
         )
@@ -2532,17 +2694,10 @@ private fun ConvertToCustomDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    text = "转换后这份配置会变成「自定义 Key」类型，" +
-                        "现有按键会摊开成一个个可以单独编辑的组件。",
+                    text = "转换后变成「自定义 Key」，每个按键拆成可单独编辑的组件。",
                 )
                 Text(
-                    text = "你会得到：每个按键的位置、大小、颜色、不透明度、" +
-                        "描边与阴影都能分别调整，也可以任意增删组件。",
-                )
-                Text(
-                    text = "你会失去：显示 Shift、显示鼠标键、CPS 模式这些" +
-                        "专用开关，以及「一处改、全部生效」的统一调整方式 —— " +
-                        "之后改颜色要一个组件一个组件地改。",
+                    text = "会失去 Shift / 鼠标键 / CPS 等专用开关，颜色需逐个组件改。",
                 )
                 Text(
                     text = "此操作不可逆，转换后无法变回按键样式。",

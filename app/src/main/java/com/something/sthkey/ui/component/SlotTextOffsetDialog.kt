@@ -32,8 +32,7 @@ fun SlotTextOffsetDialog(
     SlotSettingsDialog(
         config = config,
         title = "单独调整每个键的位置",
-        hint = "这里的偏移会**叠加**在整体偏移之上。用它可以修正个别键 —— " +
-            "比如空格显示的是非 ASCII 横线、走的不是图片字体，位置会和别的键不一样。",
+        hint = "偏移叠加在整体偏移之上，用于修正个别键的位置。",
         onDismiss = onDismiss,
         onClearAll = { onOffsetsChange(emptyMap()) },
     ) { slot, _ ->
@@ -77,8 +76,7 @@ fun SlotTextSpacingDialog(
     SlotSettingsDialog(
         config = config,
         title = "单独调整每个键的间距",
-        hint = "会**叠加**在上面的整体间距之上。百分比相对字号算，" +
-            "以后改字号不用重新调。",
+        hint = "叠加在整体间距之上，百分比相对字号（改字号后仍有效）。",
         onDismiss = onDismiss,
         onClearAll = { onSpacingsChange(emptyMap()) },
     ) { slot, _ ->

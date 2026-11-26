@@ -328,7 +328,11 @@ fun SettingsCard(
      * ⚠️ 这就是 SukiSU 截图里「管理器版本」那一块的形状:白卡片 + 细分割线。
      */
     Card(
-        modifier = modifier,
+        /*
+         * ⚠️ 必须 fillMaxWidth：卡片里装的若是纯 Text/Column（例如关于页的介绍卡），
+         * 不撑满时宽度只等于文字宽度 —— 在平板上看起来就是"文字完了卡就没了"。
+         */
+        modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface,

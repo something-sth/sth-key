@@ -167,17 +167,26 @@ sdk.dir=/path/to/Android/Sdk
 
 ## 开源协议
 
-源代码采用 [MIT 许可证](LICENSE)。
+本项目源代码采用 **GNU General Public License v3.0（GPL-3.0-only）** 许可，全文见 [LICENSE](LICENSE)。
+
+这意味着：
+
+- 你可以自由使用、修改、分发本项目；
+- 但**分发修改后的版本时，必须同样以 GPLv3 开放源代码**，不能闭源分发，也不能把改过的版本闭源售卖；
+- 2.8.4 及更早的版本仍按 MIT 许可发布（MIT 不可撤销）；从 2.8.6 起的新代码按 GPLv3 授权。
 
 ### 第三方资源
 
-内置资源各自遵循其原始许可，不由本项目的 MIT 许可覆盖：
+以下资源**不由本项目的 GPLv3 覆盖**，各自遵循其原始许可：
 
 | 资源 | 许可 |
 |---|---|
 | 内置字体 `Minecraft AE.ttf` | 归原作者所有 |
 | Live2D 模型（BongoCat 键盘版 / 鼠标版） | MIT，版权归 ayangweb（见 `app/src/main/assets/bongocat/BONGOCAT_LICENSE.txt`） |
-| Live2D Cubism Core 运行时 | 适用 Live2D 专有软件许可协议 |
+| Live2D Cubism Core 运行时 | 适用 Live2D 专有软件许可协议，**不属于 GPL 覆盖范围，也不得按 GPL 再许可** |
+| 用户导入的第三方模型包（Mver 等） | 由模型作者决定，与本项目许可无关 |
+
+第三方组件的完整声明见 [NOTICE](NOTICE)。
 
 > 本项目免费开源，**请勿进行未经授权的收费售卖**。
 

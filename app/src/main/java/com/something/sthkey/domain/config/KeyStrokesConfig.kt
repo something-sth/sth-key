@@ -226,6 +226,16 @@ data class KeyMapping(
     val id: String,
     val inputKeyCodes: List<Int>,
     val displayText: String,
+    /**
+     * 组合键绑定：内层一组表示"必须**同时按下**"，外层表示"任一组满足即可"。
+     *
+     * 与 [inputKeyCodes] 是**或**的关系：
+     * - `inputKeyCodes = [42, 54]` → 左 Shift 或右 Shift 都触发；
+     * - `inputCombos = [[29, 30]]` → Ctrl + A 同时按下才触发。
+     *
+     * ⚠️ 空列表 = 没有组合键绑定（老配置、绝大多数按键都是这样），行为不变。
+     */
+    val inputCombos: List<List<Int>> = emptyList(),
 )
 
 /**
@@ -700,6 +710,24 @@ data class Live2DSettings(
      * 对一只猫没有意义；猫只有一层画面。
      */
     val opacityPercent: Int = 100,
+    /**
+     * 当前表情下标（对应模型的 Expressions 顺序）；-1 = 不使用表情。
+     *
+     * 表情由**模型**提供，所以配置里只存"选哪个"，模型没表情时这个值无意义。
+     */
+    val expression: Int = -1,
+    /**
+     * 表情快捷键：按下这一组键 → 切到对应表情（固定切换，不是循环）。
+     *
+     * 每个表情最多一组组合键；内层必须同时按下。
+     */
+    val expressionBindings: List<ExpressionBinding> = emptyList(),
+)
+
+/** 表情快捷键绑定：`keys` 是一组"同时按下"的键码 */
+data class ExpressionBinding(
+    val index: Int,
+    val keys: List<Int> = emptyList(),
 )
 
 /*

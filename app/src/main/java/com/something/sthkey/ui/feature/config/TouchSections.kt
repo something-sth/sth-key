@@ -119,9 +119,8 @@ internal fun LazyListScope.touchStyleSections(
 
     item {
         SectionHint(
-            text = "触摸区域决定「手指按在屏幕的哪一块算操作移动轮盘」——" +
-                "它画在**整块屏幕**上，与悬浮窗的位置无关。" +
-                "没有落在任何区域里的滑动都会进视角摇杆。",
+            text = "触摸区域按整块屏幕算，与悬浮窗位置无关；" +
+                "区域外的滑动进入视角摇杆。",
         )
     }
 }

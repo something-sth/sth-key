@@ -138,9 +138,15 @@ fun KeyMappingEditor(
         KeyBindingDialog(
             mapping = editing,
             onDismiss = { editingId = null },
-            onConfirm = { codes ->
+            onConfirm = { codes, combos ->
                 onChange(
-                    mappings.map { if (it.id == editing.id) it.copy(inputKeyCodes = codes) else it },
+                    mappings.map {
+                        if (it.id == editing.id) {
+                            it.copy(inputKeyCodes = codes, inputCombos = combos)
+                        } else {
+                            it
+                        }
+                    },
                 )
                 editingId = null
             },
@@ -205,24 +211,35 @@ private fun KeyMappingRow(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
 
-                if (mapping.inputKeyCodes.isEmpty()) {
+                /*
+                 * 外显统一：不管底层存的是单键还是组合键，这里只列"这一行绑了哪些按键"，
+                 * 组合键用 ` + ` 连接；不再标注"单键/组合键"（用户明确说那套很反人类）。
+                 */
+                val bindings = buildList {
+                    mapping.inputKeyCodes.forEach { add(KeyCodes.labelWithCode(it)) }
+                    mapping.inputCombos.forEach { combo ->
+                        if (combo.isNotEmpty()) {
+                            add(combo.joinToString(" + ") { KeyCodes.displayName(it) })
+                        }
+                    }
+                }
+
+                if (bindings.isEmpty()) {
                     Text(
                         text = "未绑定（该按键不会亮起）",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 } else {
-                    // 一个位置可以绑多个物理键，用流式布局换行展示
+                    // 一个位置可以绑多个物理键/组合，用流式布局换行展示
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        mapping.inputKeyCodes.forEach { code ->
+                        bindings.forEach { label ->
                             AssistChip(
                                 onClick = {},
-                                label = {
-                                    Text(KeyCodes.labelWithCode(code))
-                                },
+                                label = { Text(label) },
                             )
                         }
                     }
@@ -242,19 +259,124 @@ private fun KeyMappingRow(
  * 这里保留了"一个位置绑多个键"的能力 —— 例如 Shift 需要同时接受
  * 左 Shift(42) 与右 Shift(54)，只绑一个的话另一边按下去不亮。
  */
+private enum class BindingStage { LIST, CAPTURE, PICKER }
+
+/**
+ * 绑定按键对话框。
+ *
+ * 流程（用户明确要求）：
+ * ```
+ * 已绑定列表 --「添加按键」--> 采集对话框
+ *                               ├─ 保存     → 加一组组合键，回列表
+ *                               └─ 手动选择 → 勾选选择框 → 回列表
+ * ```
+ */
 @Composable
 private fun KeyBindingDialog(
     mapping: KeyMapping,
     onDismiss: () -> Unit,
-    onConfirm: (List<Int>) -> Unit,
+    onConfirm: (List<Int>, List<List<Int>>) -> Unit,
 ) {
-    MultiKeyPickerDialog(
-        title = "绑定按键 · ${mapping.displayText.ifBlank { mapping.id }}",
-        hint = "这个位置可以绑定多个物理键，任意一个按下都会点亮它。",
-        initialCodes = mapping.inputKeyCodes,
-        emptyHint = "当前未绑定任何按键",
-        onDismiss = onDismiss,
-        onConfirm = onConfirm,
+    var stage by remember { mutableStateOf(BindingStage.LIST) }
+    var singles by remember { mutableStateOf(mapping.inputKeyCodes) }
+    var combos by remember { mutableStateOf(mapping.inputCombos) }
+    val label = "绑定按键 · ${mapping.displayText.ifBlank { mapping.id }}"
+
+    if (stage == BindingStage.CAPTURE) {
+        KeyCaptureDialog(
+            title = label,
+            initialCodes = emptyList(),
+            onDismiss = { stage = BindingStage.LIST },
+            onConfirm = { combo ->
+                if (combo.isNotEmpty()) combos = combos + listOf(combo)
+                stage = BindingStage.LIST
+            },
+            onManual = { stage = BindingStage.PICKER },
+        )
+        return
+    }
+
+    if (stage == BindingStage.PICKER) {
+        KeyComboPickerDialog(
+            title = label,
+            initial = emptyList(),
+            onDismiss = { stage = BindingStage.LIST },
+            onConfirm = { combo ->
+                if (combo.isNotEmpty()) combos = combos + listOf(combo)
+                stage = BindingStage.LIST
+            },
+        )
+        return
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(label) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "组合键需同时按下；单键之间是「或」。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                combos.forEachIndexed { index, combo ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = combo.joinToString(" + ") { KeyCodes.displayName(it) },
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        IconButton(onClick = { combos = combos.filterIndexed { i, _ -> i != index } }) {
+                            Icon(Icons.Default.Close, contentDescription = "移除")
+                        }
+                    }
+                }
+
+                singles.forEach { code ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = KeyCodes.displayName(code),
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        IconButton(onClick = { singles = singles - code }) {
+                            Icon(Icons.Default.Close, contentDescription = "移除")
+                        }
+                    }
+                }
+
+                if (combos.isEmpty() && singles.isEmpty()) {
+                    Text("当前未绑定任何按键", style = MaterialTheme.typography.bodyMedium)
+                }
+
+                TextButton(
+                    onClick = { stage = BindingStage.CAPTURE },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("添加按键")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    /*
+                     * 归一化：只有**一个键**的"组合"其实就是一个普通键，
+                     * 折回 inputKeyCodes —— 否则新绑一个 W 会写成
+                     * `inputCombos: [["KEY_W"]]`，和旧配置的 `[KEY_W]` 两套形状。
+                     */
+                    val singleFromCombos = combos.filter { it.size == 1 }.map { it.first() }
+                    val realCombos = combos.filter { it.size > 1 }
+                    onConfirm((singles + singleFromCombos).distinct(), realCombos)
+                },
+            ) { Text("保存") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
     )
 }
 
@@ -296,6 +418,25 @@ fun MultiKeyPickerDialog(
 ) {
     var codes by remember(initialCodes) { mutableStateOf(initialCodes) }
     var picking by remember { mutableStateOf(false) }
+    /*
+     * 采集对话框是**这个对话框的子流程**：入口仍然是"添加按键"，
+     * 而不是一进来就强制采集（用户明确要求）。
+     */
+    var capturing by remember { mutableStateOf(false) }
+
+    if (capturing) {
+        KeyCaptureDialog(
+            title = title,
+            initialCodes = codes,
+            onDismiss = { capturing = false },
+            onConfirm = { picked ->
+                codes = picked
+                capturing = false
+            },
+            onManual = { capturing = false },
+        )
+        return
+    }
 
     /**
      * 已选中的大类；`null` = 还没选（也就是停在"大类选择"那一层）。
@@ -362,7 +503,10 @@ fun MultiKeyPickerDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(codes) }) { Text("保存") }
+            Row {
+                TextButton(onClick = { capturing = true }) { Text("按键采集") }
+                TextButton(onClick = { onConfirm(codes) }) { Text("保存") }
+            }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("取消") }
@@ -768,7 +912,7 @@ private fun StickDirectionPickerDialog(
                 }
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "选完会回到已选列表；要继续加别的方向，再点「添加一个按键」。",
+                    text = "选完回到列表；加方向再点「添加一个按键」。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

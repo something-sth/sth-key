@@ -135,8 +135,7 @@ private fun BitmapFontNameDialog(
         text = {
             Column {
                 Text(
-                    text = "字体图的名字通常都是 ascii.png，所以需要你另起一个 —— " +
-                        "否则导入几张之后列表里会全是同名条目。",
+                    text = "起个名字，避免导入多张后列表里全是同名条目。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

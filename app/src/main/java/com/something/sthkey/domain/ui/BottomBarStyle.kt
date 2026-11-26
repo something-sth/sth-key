@@ -25,14 +25,7 @@ enum class BottomBarStyle(
     val label: String,
     val description: String,
 ) {
-    /** 贴底的整条底栏 */
-    STANDARD(
-        id = "standard",
-        label = "标准",
-        description = "贴着屏幕底边的整条底栏，图标在上、文字在下",
-    ),
-
-    /** 悬浮胶囊底栏 */
+    /** 悬浮胶囊底栏（现在**唯一**的底栏样式；标准底栏已移除） */
     FLOATING(
         id = "floating",
         label = "悬浮",
@@ -41,7 +34,7 @@ enum class BottomBarStyle(
     ;
 
     companion object {
-        val DEFAULT: BottomBarStyle = STANDARD
+        val DEFAULT: BottomBarStyle = FLOATING
 
         /**
          * 从偏好里的字符串 id 还原。

@@ -640,6 +640,7 @@ private fun CustomComponent.isPressed(
     touchInput: TouchInputState?,
 ): Boolean = when (this) {
     is KeyComponent -> inputKeyCodes.any { it in pressedCodes } ||
+        inputCombos.any { combo -> combo.isNotEmpty() && combo.all { it in pressedCodes } } ||
         touchInput?.pressedComponentIds?.contains(id) == true
 
     /* ⚠️ 文本组件**不亮** —— 它的绑定只用来让 CPS 加（见上面那段说明） */

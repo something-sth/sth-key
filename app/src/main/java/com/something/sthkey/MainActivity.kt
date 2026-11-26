@@ -262,6 +262,7 @@ class MainActivity : ComponentActivity() {
                 seedColor = appViewModel.seedColor,
                 palette = appViewModel.appearancePalette,
                 colorSpec = appViewModel.appearanceColorSpec,
+                uiScalePercent = appViewModel.uiScalePercent,
             ) {
                 /*
                  * ⚠️ **全局**的导出/导入进度对话框。
@@ -761,10 +762,14 @@ private fun MainScaffold(
             pagerState.currentPage != TopDestination.HOME.ordinal,
     ) {
         scope.launch {
-            pagerState.animateScrollToPage(
-                page = TopDestination.HOME.ordinal,
-                animationSpec = tween(PAGER_SCROLL_DURATION_MS),
-            )
+            if (viewModel.navigationRail) {
+                pagerState.scrollToPage(TopDestination.HOME.ordinal)
+            } else {
+                pagerState.animateScrollToPage(
+                    page = TopDestination.HOME.ordinal,
+                    animationSpec = tween(PAGER_SCROLL_DURATION_MS),
+                )
+            }
         }
     }
 
@@ -842,7 +847,8 @@ private fun MainScaffold(
      * 后面所有"悬浮栏预算 / 叠加层 / 系统栏透明"的判断都跟着它走。
      */
     val navigationRail = viewModel.navigationRail
-    val floatingBar = viewModel.bottomBarStyle == BottomBarStyle.FLOATING && !navigationRail
+    /* 标准底栏已移除：底栏只剩悬浮一种，开了侧边栏就不显示 */
+    val floatingBar = !navigationRail
 
     /** 侧边栏只在一级页面显示（和底栏一样，进二级页就收起来） */
     val showRail = navigationRail && showBottomBar
@@ -870,10 +876,17 @@ private fun MainScaffold(
                 "（当前 ${pagerState.currentPage}）",
         )
         scope.launch {
-            pagerState.animateScrollToPage(
-                page = destination.ordinal,
-                animationSpec = tween(PAGER_SCROLL_DURATION_MS),
-            )
+            /*
+             * 侧边栏下**直接跳转**：竖着滚一屏的动画很丑，用户明确要求去掉。
+             */
+            if (navigationRail) {
+                pagerState.scrollToPage(destination.ordinal)
+            } else {
+                pagerState.animateScrollToPage(
+                    page = destination.ordinal,
+                    animationSpec = tween(PAGER_SCROLL_DURATION_MS),
+                )
+            }
         }
     }
 
@@ -940,7 +953,6 @@ private fun MainScaffold(
             if (showBottomBar && !floatingBar && !navigationRail) {
                 SthKeyBottomBar(
                     currentPage = selectedPage,
-                    style = viewModel.bottomBarStyle,
                     onSelect = { destination -> animateTo(destination) },
                 )
             }
@@ -1097,14 +1109,24 @@ private fun MainScaffold(
                     }
 
                     if (navigationRail) {
+                        /*
+                         * ⚠️ 侧边栏模式下**禁止滑动/滚轮翻页**（SukiSU 也是这么隔绝的）。
+                         * 只允许通过侧边栏点击切页：竖着拖动/滚轮划到别的页面会让人
+                         * 以为"页面串了"，而且和侧边栏的选中态对不上。
+                         *
+                         * `userScrollEnabled = false` 之后，程序化的 `scrollToPage`
+                         * 仍然有效 —— 侧边栏点击、返回键回主页都走它。
+                         */
                         VerticalPager(
                             state = pagerState,
                             modifier = Modifier.fillMaxSize(),
+                            userScrollEnabled = false,
                         ) { page -> pageContent(page) }
                     } else {
                         HorizontalPager(
                             state = pagerState,
                             modifier = Modifier.fillMaxSize(),
+                            userScrollEnabled = true,
                         ) { page -> pageContent(page) }
                     }
                 }
@@ -1324,7 +1346,6 @@ private fun MainScaffold(
             if (floatingBar && showBottomBar) {
                 SthKeyBottomBar(
                     currentPage = selectedPage,
-                    style = viewModel.bottomBarStyle,
                     onSelect = { destination -> animateTo(destination) },
                     modifier = Modifier.align(Alignment.BottomCenter),
                 )
@@ -1441,42 +1462,23 @@ private fun BlockInputWhenHidden(
 @Composable
 private fun SthKeyBottomBar(
     currentPage: Int,
-    style: BottomBarStyle,
     onSelect: (TopDestination) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    when (style) {
-        BottomBarStyle.STANDARD -> NavigationBar(modifier = modifier) {
-            TopDestination.entries.forEach { destination ->
-                NavigationBarItem(
-                    selected = currentPage == destination.ordinal,
-                    onClick = { onSelect(destination) },
-                    icon = {
-                        Icon(
-                            imageVector = destination.icon(),
-                            contentDescription = destination.label,
-                        )
-                    },
-                    label = { Text(destination.label) },
-                )
-            }
-        }
-
-        BottomBarStyle.FLOATING -> MaterialFloatingBottomBar(
-            modifier = modifier,
-            tabs = TopDestination.entries.map { destination ->
-                FloatingTab(
-                    label = destination.label,
-                    selectedIcon = destination.selectedIcon(),
-                    unselectedIcon = destination.unselectedIcon(),
-                )
-            },
-            selectedIndex = currentPage,
-            onSelect = { index ->
-                TopDestination.entries.getOrNull(index)?.let(onSelect)
-            },
-        )
-    }
+    MaterialFloatingBottomBar(
+        modifier = modifier,
+        tabs = TopDestination.entries.map { destination ->
+            FloatingTab(
+                label = destination.label,
+                selectedIcon = destination.selectedIcon(),
+                unselectedIcon = destination.unselectedIcon(),
+            )
+        },
+        selectedIndex = currentPage,
+        onSelect = { index ->
+            TopDestination.entries.getOrNull(index)?.let(onSelect)
+        },
+    )
 }
 
 /**

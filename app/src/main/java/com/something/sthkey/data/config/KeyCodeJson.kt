@@ -64,4 +64,32 @@ internal object KeyCodeJson {
     fun putList(array: JSONArray, codes: List<Int>) {
         codes.forEach { put(array, it) }
     }
+
+    /**
+     * 写组合键：外层数组的每一项是"一组同时按下的键"。
+     *
+     * 落盘仍然是**明文 ID**（[KeyIds.encode]），与单键保持同一套约定，
+     * 方便以后多端互通。
+     */
+    fun putCombos(array: JSONArray, combos: List<List<Int>>) {
+        combos.forEach { combo ->
+            array.put(
+                JSONArray().apply { combo.forEach { put(this, it) } },
+            )
+        }
+    }
+
+    /**
+     * 读组合键：允许数字（老配置）与明文字符串混用；
+     * 内层空数组保留 —— "这一组不绑定任何键"是有意义的。
+     */
+    fun readCombos(array: JSONArray?): List<List<Int>> {
+        if (array == null) return emptyList()
+        return buildList {
+            for (index in 0 until array.length()) {
+                val combo = array.optJSONArray(index) ?: continue
+                add(readList(combo))
+            }
+        }
+    }
 }

@@ -192,6 +192,12 @@ object CustomLayoutCodec {
                     "inputKeyCodes",
                     JSONArray().apply { KeyCodeJson.putList(this, component.inputKeyCodes) },
                 )
+                if (component.inputCombos.isNotEmpty()) {
+                    put(
+                        "inputCombos",
+                        JSONArray().apply { KeyCodeJson.putCombos(this, component.inputCombos) },
+                    )
+                }
                 put("textScalePercent", component.textScalePercent)
                 // CPS 那一行的额外缩放（模式 3 的第二行比主文字小）
                 put("cpsTextScalePercent", component.cpsTextScalePercent)
@@ -666,6 +672,7 @@ object CustomLayoutCodec {
                             style = style,
                             label = item.optString("label", "Q").ifBlank { "Q" },
                             inputKeyCodes = decodeKeyCodes(item.optJSONArray("inputKeyCodes")),
+                            inputCombos = KeyCodeJson.readCombos(item.optJSONArray("inputCombos")),
                             textScalePercent = item.optInt("textScalePercent", 100)
                                 .coerceIn(CustomLayout.TEXT_SCALE_MIN, CustomLayout.TEXT_SCALE_MAX),
                             // CPS 行缩放是本版新增的；老组件没有这个字段 → 默认 100（一样大）

@@ -1,0 +1,67 @@
+sth key — 第三方组件与许可声明
+================================
+
+本项目源代码以 GNU General Public License v3.0（GPL-3.0-only）发布，
+全文见仓库根目录 LICENSE。
+
+以下组件**不属于**本项目的 GPL 覆盖范围，各自遵循其原始许可。
+分发本项目（含 APK）时，请同时遵守这些许可。
+
+
+1. Live2D Cubism Core
+---------------------
+
+文件：
+  app/src/main/assets/bongocat/keyboard/live2dcubismcore.min.js
+  app/src/main/assets/bongocat/standard/live2dcubismcore.min.js
+
+版权归 Live2D Inc. 所有，适用 **Live2D 专有软件许可协议**
+（Live2D Proprietary Software License Agreement）。
+
+- 它不是自由软件，不能被本项目的 GPLv3 再许可；
+- 本项目只是把它作为独立的运行时组件随应用分发；
+- 任何再分发者都必须自行遵守 Live2D 的许可条款，包括其
+  Cubism SDK 的发布与商业使用条件；
+- 本项目的 GPLv3 授权**不延伸**到该文件。
+
+
+2. BongoCat 内置模型资源
+------------------------
+
+目录：
+  app/src/main/assets/bongocat/keyboard/
+  app/src/main/assets/bongocat/standard/
+
+内置的 BongoCat 键盘版 / 鼠标版模型与美术资源版权归 ayangweb 所有，
+以 MIT 许可发布，原始许可文本见：
+  app/src/main/assets/bongocat/BONGOCAT_LICENSE.txt
+
+
+3. 内置字体
+-----------
+
+文件：
+  app/src/main/assets/fonts/Minecraft AE.ttf
+
+版权归原作者所有，随项目分发，不适用本项目的 GPLv3。
+
+
+4. Android / Kotlin 依赖
+------------------------
+
+AndroidX、Jetpack Compose、Kotlin 标准库等以 Apache License 2.0 发布。
+Apache-2.0 与本项目的 GPLv3 兼容（Apache-2.0 代码可以并入 GPLv3 作品）。
+
+
+5. 历史版本
+-----------
+
+2.8.4 及更早的版本以 MIT 许可发布。MIT 授权不可撤销，
+这些已发布版本仍可按 MIT 使用；从 2.8.5 之后的新代码起按 GPLv3 授权。
+
+
+6. 用户导入的模型
+-----------------
+
+用户自行导入的第三方 Live2D 模型包（例如 Mver 格式的模型）版权归
+各模型作者所有，不在本项目仓库内，也不受本项目 GPLv3 约束。

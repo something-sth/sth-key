@@ -282,8 +282,7 @@ internal fun LazyListScope.joystickStyleSections(
 
     item {
         SectionHint(
-            text = "「摇杆」组管方框底盘、四条边框与盘内那个圆；" +
-                "圆和描边的**粗细调到 0 就是隐藏它们**。",
+            text = "「摇杆」组管底盘、边框与圆；粗细调到 0 可隐藏。",
         )
     }
 

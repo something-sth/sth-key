@@ -48,8 +48,8 @@ android {
         // targetSdk 保持 36：它决定运行时行为（是否受新版系统限制），
         // 与"用什么 SDK 编译"是两件事，没必要跟着一起升
         targetSdk = 36
-        versionCode = 285
-        versionName = "2.8.5"
+        versionCode = 286
+        versionName = "2.8.6"
 
         buildConfigField("String", "BUILD_TAG", "\"$buildTag\"")
 
@@ -164,6 +164,14 @@ android {
      * `GamepadNativeMonitor.prepareHelper` 的长注释）。
      */
     packaging {
+        /*
+         * ⚠️ dex 默认是**不压缩**存进 APK 的（AGP 为了首次启动速度）。
+         * 我们的 dex 已经 R8 过，压不压缩对运行没影响，但安装包差 1.5MB 左右。
+         * 这里改成压缩存储，优先体积；代价只是安装时多解压一次。
+         */
+        dex {
+            useLegacyPackaging = true
+        }
         jniLibs {
             useLegacyPackaging = true
         }

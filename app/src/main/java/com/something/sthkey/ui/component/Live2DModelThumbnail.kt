@@ -124,7 +124,7 @@ private fun loadThumbnail(
          * 导入模型：优先用**运行时抓的按模式预览图**（preview/<pageDir>.png），
          * 没有才退回 cover/icon。
          */
-        else -> generatedPreview(entry.dir, pageDir) ?: findFirstFile(entry.dir, "cover.png")
+        else -> authoredPreview(entry.dir, pageDir) ?: findFirstFile(entry.dir, "cover.png")
             ?: findFirstFile(entry.dir, "icon.png")
     } ?: return null
 
@@ -159,11 +159,16 @@ private fun findFirstFile(dir: File, fileName: String): ThumbSource? =
             ?.let { ThumbSource.Local(it) }
     }.getOrNull()
 
-/** 运行时抓的按模式预览图：`preview/<pageDir>.png` */
-private fun generatedPreview(dir: File, pageDir: String): ThumbSource? =
+/** 作者自己放的预览图：模型根目录或模式目录下的 `preview.png` */
+private fun authoredPreview(dir: File, pageDir: String): ThumbSource? =
     runCatching {
-        val file = Live2DPreviewStore.previewFile(dir, pageDir)
-        if (file.isFile) ThumbSource.Local(file) else null
+        val variantDir = if (pageDir.isBlank()) dir else File(dir, pageDir)
+        val candidates = listOf(
+            File(variantDir, "preview.png"),
+            File(dir, "preview.png"),
+            Live2DPreviewStore.previewFile(dir, pageDir),
+        )
+        candidates.firstOrNull { it.isFile }?.let { ThumbSource.Local(it) }
     }.getOrNull()
 
 private fun openStream(context: Context, source: ThumbSource): java.io.InputStream? =

@@ -372,6 +372,7 @@ object Live2DModelImporter {
             background = Live2DMverConfig.loadBackground(dir, null, dir),
             placement = Live2DMverConfig.loadLayout(dir),
             design = Live2DMverConfig.loadDesign(dir),
+            face = Live2DMverConfig.loadFaceSprites(dir, null, dir),
         )
         File(dir, Live2DModels.ENTRY_INDEX).writeText(buildHtml(layout))
 
@@ -383,6 +384,7 @@ object Live2DModelImporter {
             layout = layout,
             // 必须在补齐键帽**之后**算，而且要把透明占位排除掉（见 providedKeycaps）
             supportedKeys = resourceDir?.let { providedKeycaps(it) }.orEmpty(),
+            expressions = expressionNames(expressions),
         )
 
         val notes = buildList {
@@ -614,6 +616,7 @@ object Live2DModelImporter {
         var adaptedCount = 0
         var adaptedSample = 1
 
+        var firstExpressions: List<String> = emptyList()
         plan.forEach { variant ->
             val modelFile = variant.modelFile
             val json = runCatching { JSONObject(modelFile.readText()) }.getOrNull()
@@ -652,6 +655,7 @@ object Live2DModelImporter {
             }
 
             val variantExpressions = loadExpressions(json, modelBase, dir)
+            if (firstExpressions.isEmpty()) firstExpressions = expressionNames(variantExpressions)
             val (variantMotions, variantMotionGroups) = loadMotions(json, modelBase, dir)
             writeModelData(
                 dir = variant.root,
@@ -681,6 +685,7 @@ object Live2DModelImporter {
                 ),
                 placement = Live2DMverConfig.loadLayout(dir),
                 design = Live2DMverConfig.loadDesign(dir),
+                face = Live2DMverConfig.loadFaceSprites(dir, variant.configMode(), variant.root),
             )
             File(variant.root, Live2DModels.ENTRY_INDEX).writeText(buildHtml(variant.layout))
             AppLog.i(TAG, "已生成变体页面：${variant.name}（${variant.pageDir}）")
@@ -694,6 +699,7 @@ object Live2DModelImporter {
             layout = plan.first().layout,
             supportedKeys = supportedKeys,
             variants = plan.map { Live2DVariant(name = it.name, pageDir = it.pageDir) },
+            expressions = firstExpressions,
         )
 
         val notes = buildList {
@@ -882,6 +888,8 @@ object Live2DModelImporter {
         placement: JSONObject? = null,
         /** Mver 设计画布 {width, height, handOffsetX, handOffsetY} */
         design: JSONObject? = null,
+        /** Mver 表情贴图（face/） */
+        face: JSONObject? = null,
     ) {
         val texturePaths = JSONArray().apply {
             textures.forEach { put(relativePath(dir, it)) }
@@ -934,6 +942,7 @@ object Live2DModelImporter {
             out.write("window.__BONGO_BACKGROUND=${background?.let { JSONObject.quote(it) } ?: "null"};\n")
             out.write("window.__BONGO_LAYOUT=${placement?.toString() ?: "null"};\n")
             out.write("window.__BONGO_DESIGN=${design?.toString() ?: "null"};\n")
+            out.write("window.__BONGO_FACE=${face?.toString() ?: "null"};\n")
         }
     }
 
@@ -1021,6 +1030,17 @@ object Live2DModelImporter {
         return runCatching { JSONObject(file.readText()) }
             .onFailure { AppLog.w(TAG, "physics 解析失败：${file.name}") }
             .getOrNull()
+    }
+
+    /** 表情数组 → 名字列表（顺序就是运行时下标） */
+    private fun expressionNames(expressions: JSONArray?): List<String> {
+        if (expressions == null) return emptyList()
+        return buildList {
+            for (index in 0 until expressions.length()) {
+                val name = expressions.optJSONObject(index)?.optString("name").orEmpty()
+                add(name.ifBlank { "表情 ${index + 1}" })
+            }
+        }
     }
 
     /**

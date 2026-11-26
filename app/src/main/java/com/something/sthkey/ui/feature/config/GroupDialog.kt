@@ -197,7 +197,7 @@ fun GroupMemberPickerDialog(
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    text = "勾选加入本组合；取消勾选会移出（配置本身不会被删除）。",
+                    text = "勾选加入本组合，取消勾选移出。",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

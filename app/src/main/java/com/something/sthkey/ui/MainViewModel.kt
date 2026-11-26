@@ -394,8 +394,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun ensureAccessibilityForOverlay(): Boolean {
         if (SthKeyAccessibilityService.isConnected()) return true
 
-        val root = capabilities.rootAvailable
-        val shizuku = capabilities.shizukuReady
+        /*
+         * ⚠️⚠️ 不能直接信 UI 的 `capabilities` 快照！
+         *
+         * 它是 `refreshCapabilities()` **跑完之后**才更新的，而那次刷新里
+         * 还要探测 root、再尝试开无障碍 —— 在慢设备/慢 su 上要一两秒。
+         * 用户在这段时间点开悬浮窗，就会读到"rootAvailable=false"的旧快照，
+         * 于是认定"没有 shell 可用"，直接跳设置页、什么都不做。
+         *
+         * 朋友的日志就是这么走的：
+         *   41.44/41.80 root 探测 = true
+         *   43.28  却打"没有 root / Shizuku 可代为开启"（快照还是旧的）
+         *   43.28  取消开启、跳设置页
+         *   43.80  refresh 里的授权才开始跑
+         *
+         * 所以这里：快照说没有 shell 时，**先同步刷新一次再判断**。
+         */
+        var snapshot = CaptureController.capabilities.value
+        if (!snapshot.rootAvailable && !snapshot.shizukuReady) {
+            AppLog.i(TAG, "能力快照里没有 shell，先刷新一次再决定（避免旧快照误判）")
+            runCatching { CaptureController.refreshCapabilities() }
+            snapshot = CaptureController.capabilities.value
+            capabilities = snapshot
+        }
+
+        val root = snapshot.rootAvailable
+        val shizuku = snapshot.shizukuReady
         if (!root && !shizuku) {
             /*
              * ⚠️ 没有 shell 可借 —— 只能让用户自己去系统设置点。
@@ -523,6 +547,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     var seedColor by mutableStateOf(prefs.seedColor)
         private set
+
+    /** 页面缩放百分比（70..130）；只影响界面，不影响悬浮窗 */
+    var uiScalePercent by mutableStateOf(prefs.uiScalePercent)
+        private set
+
+    fun applyUiScalePercent(percent: Int) {
+        val clamped = percent.coerceIn(70, 130)
+        prefs.uiScalePercent = clamped
+        uiScalePercent = clamped
+    }
+
+    /** Live2D 渲染帧率（30/60/90/120）；只影响渲染，不影响物理（物理固定 60） */
+    var live2dFps by mutableStateOf(prefs.live2dFps)
+        private set
+
+    fun applyLive2DFps(fps: Int) {
+        val clamped = fps.coerceIn(30, 120)
+        prefs.live2dFps = clamped
+        live2dFps = clamped
+        OverlayService.applyLive2DFrameRate(clamped)
+        AppLog.i(TAG, "Live2D 渲染帧率 → ${clamped}fps")
+    }
 
     fun applySeedColor(argb: Int) {
         prefs.seedColor = argb

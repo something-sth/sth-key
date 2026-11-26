@@ -138,6 +138,9 @@ class Live2DOverlayView(context: Context) : FrameLayout(context) {
     /** 这一次待发送的摇杆值；null = 没有变化 */
     private var pendingStick: FloatArray? = null
 
+    /** 当前 Live2D 渲染帧率（30..120）；改它只影响 JS 的 rAF 节流 */
+    private var frameRate: Int = 60
+
     /**
      * 鼠标位移：已经转发到 JS 的量，以及这一帧待发送的位移。
      *
@@ -177,6 +180,9 @@ class Live2DOverlayView(context: Context) : FrameLayout(context) {
         isClickable = true
         isFocusable = false
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+
+        /* 渲染帧率是应用级偏好，新建窗口直接沿用 */
+        frameRate = com.something.sthkey.core.prefs.AppPrefs.get(context).live2dFps
 
         webView = createWebView(context)
         addView(webView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
@@ -245,9 +251,45 @@ class Live2DOverlayView(context: Context) : FrameLayout(context) {
         latestCodes = codes
 
         applyDiff(codes)
+        handleExpressionHotkeys(codes)
 
         // 页面没就绪时不必排推送：onPageFinished 会按最新状态整体补发
         if (pageReady) schedulePush()
+    }
+
+    /* 配置里的表情：当前下标 + 每组快捷键对应的表情下标 */
+    private var expressionIndex: Int = -1
+    private var expressionBindings: List<Pair<Int, List<Int>>> = emptyList()
+    private var lastPressedExpressionKeys: Set<Int> = emptySet()
+
+    /**
+     * 应用配置里的表情。
+     *
+     * - [index] 是默认表情；页面就绪后立即设置一次；
+     * - [bindings] 是"按下这一组键 → 切到对应表情"（固定切换，不循环）。
+     */
+    fun applyExpressions(index: Int, bindings: List<Pair<Int, List<Int>>>) {
+        expressionIndex = index.coerceAtLeast(-1)
+        expressionBindings = bindings
+        if (pageReady) dispatchExpression(expressionIndex)
+    }
+
+    /** 组合键**刚凑齐**的那一下切换表情；按住不放不会反复切 */
+    private fun handleExpressionHotkeys(codes: Set<Int>) {
+        if (expressionBindings.isEmpty()) return
+        val pressed = expressionBindings
+            .filter { it.second.isNotEmpty() && it.second.all { key -> key in codes } }
+            .map { it.first }
+            .toSet()
+        val newlyPressed = pressed - lastPressedExpressionKeys
+        lastPressedExpressionKeys = pressed
+        val target = newlyPressed.firstOrNull() ?: return
+        expressionIndex = target
+        if (pageReady) dispatchExpression(target)
+    }
+
+    private fun dispatchExpression(index: Int) {
+        dispatchRaw("window.AxonBongoCat&&AxonBongoCat.setExpression($index)")
     }
 
     /**
@@ -528,6 +570,22 @@ class Live2DOverlayView(context: Context) : FrameLayout(context) {
 
         /* 摇杆也要补发一次：页面就绪前摇杆可能已经被推着 */
         latestStick?.let { dispatchSticks(it) }
+
+        /* 表情：页面就绪后按配置设一次（clear() 不会清掉它） */
+        dispatchExpression(expressionIndex)
+
+        /* 渲染帧率：页面就绪后立刻套用（默认 60，可在采集通道页改） */
+        dispatchFrameRate()
+    }
+
+    /** 当前 Live2D 渲染帧率（30..120）；改它只影响 JS 的 rAF 节流 */
+    fun setFrameRate(fps: Int) {
+        frameRate = fps.coerceIn(30, 120)
+        if (pageReady) dispatchFrameRate()
+    }
+
+    private fun dispatchFrameRate() {
+        dispatchRaw("window.AxonBongoCat&&AxonBongoCat.setFrameRate($frameRate)")
     }
 
     private fun dispatchRaw(script: String) {

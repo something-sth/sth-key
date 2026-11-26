@@ -4,6 +4,7 @@ import com.something.sthkey.domain.config.ANIMATION_DURATION_MAX
 import com.something.sthkey.domain.config.ANIMATION_DURATION_MIN
 import com.something.sthkey.domain.config.AnimationMode
 import com.something.sthkey.domain.config.ColorSet
+import com.something.sthkey.domain.config.ExpressionBinding
 import com.something.sthkey.domain.config.DEFAULT_CPS_TEMPLATE
 import com.something.sthkey.domain.config.DEFAULT_CPS_TEMPLATE_MODE1
 import com.something.sthkey.domain.config.DEFAULT_FONT_ID
@@ -963,6 +964,14 @@ object JsonConfigCodec {
                                         KeyCodeJson.putList(this, mapping.inputKeyCodes)
                                     },
                                 )
+                                if (mapping.inputCombos.isNotEmpty()) {
+                                    put(
+                                        "inputCombos",
+                                        JSONArray().apply {
+                                            KeyCodeJson.putCombos(this, mapping.inputCombos)
+                                        },
+                                    )
+                                }
                             },
                         )
                     }
@@ -986,6 +995,29 @@ object JsonConfigCodec {
                 JSONObject().apply {
                     put("modelId", config.live2d.modelId)
                     put("opacityPercent", config.live2d.opacityPercent)
+                    if (config.live2d.expression >= 0) {
+                        put("expression", config.live2d.expression)
+                    }
+                    if (config.live2d.expressionBindings.isNotEmpty()) {
+                        put(
+                            "expressionBindings",
+                            JSONArray().apply {
+                                config.live2d.expressionBindings.forEach { binding ->
+                                    put(
+                                        JSONObject().apply {
+                                            put("index", binding.index)
+                                            put(
+                                                "keys",
+                                                JSONArray().apply {
+                                                    KeyCodeJson.putList(this, binding.keys)
+                                                },
+                                            )
+                                        },
+                                    )
+                                }
+                            },
+                        )
+                    }
                 },
             )
         }
@@ -1457,6 +1489,22 @@ object JsonConfigCodec {
              */
             opacityPercent = json.optInt("opacityPercent", defaults.opacityPercent)
                 .coerceIn(20, 100),
+            expression = json.optInt("expression", defaults.expression).coerceAtLeast(-1),
+            expressionBindings = json.optJSONArray("expressionBindings")?.let { array ->
+                buildList {
+                    for (index in 0 until array.length()) {
+                        val item = array.optJSONObject(index) ?: continue
+                        val target = item.optInt("index", -1)
+                        if (target < 0) continue
+                        add(
+                            ExpressionBinding(
+                                index = target,
+                                keys = KeyCodeJson.readList(item.optJSONArray("keys")),
+                            ),
+                        )
+                    }
+                }
+            }.orEmpty(),
         )
     }
 
@@ -1560,6 +1608,9 @@ object JsonConfigCodec {
                         id = id,
                         inputKeyCodes = codeList,
                         displayText = item.optString("displayText").ifBlank { id },
+                        /* 组合键：内层每组"同时按下"，摇杆方向同样过滤掉 */
+                        inputCombos = KeyCodeJson.readCombos(item.optJSONArray("inputCombos"))
+                            .map { combo -> combo.filterNot { KeyCodes.isStickDirection(it) } },
                     ),
                 )
             }

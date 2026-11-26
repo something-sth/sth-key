@@ -1101,6 +1101,10 @@ runCatching { if (old.host.parent != null) windowManager.removeView(old.host) }
         if (config.styleId == StyleId.KEYBOARD_CAT) {
             Live2DOverlayView(this).apply {
                 applyTarget(Live2DModels.resolve(config.live2d.modelId))
+                applyExpressions(
+                    config.live2d.expression,
+                    config.live2d.expressionBindings.map { it.index to it.keys },
+                )
                 alpha = config.live2d.opacityPercent.coerceIn(0, 100) / 100f
             }
         } else {
@@ -1193,6 +1197,10 @@ runCatching { if (old.host.parent != null) windowManager.removeView(old.host) }
     private fun applyConfigToView(view: View, config: KeyStrokesConfig) {
         val live2d = view as? Live2DOverlayView ?: return
         live2d.applyTarget(Live2DModels.resolve(config.live2d.modelId))
+        live2d.applyExpressions(
+            config.live2d.expression,
+            config.live2d.expressionBindings.map { it.index to it.keys },
+        )
         live2d.alpha = config.live2d.opacityPercent.coerceIn(0, 100) / 100f
     }
 
@@ -1839,6 +1847,17 @@ runCatching { if (old.host.parent != null) windowManager.removeView(old.host) }
                 val config = window.config
                 "${config.name}(${window.configId.take(8)})"
             }
+        }
+
+        /**
+         * 把新的 Live2D 渲染帧率推给**已经开着**的窗口。
+         *
+         * ⚠️ 不重建 WebView：帧率只是 JS 里的一个变量，
+         * 重建一次要重新解析模型（几百毫秒），为了改个帧率不值。
+         */
+        fun applyLive2DFrameRate(fps: Int) {
+            val service = instance ?: return
+            service.live2dViews().forEach { it.setFrameRate(fps) }
         }
 
         /**
