@@ -54,6 +54,46 @@ object AppAnnouncement {
      */
     val releases: List<Release> = listOf(
         Release(
+            version = "2.8.7",
+            date = "2026-11-27",
+            intro = "这一版内置了 ADB 授权：没有 root、也不用装 Shizuku，" +
+                "用无线调试或 5555 端口就能读按键 / 手柄 / 触摸；" +
+                "并新增 Live2D 去水印，修复上版标准版键帽显示异常的问题。",
+            sections = listOf(
+                Section(
+                    title = "软件内 ADB 授权",
+                    lines = listOf(
+                        "无需额外安装 Shizuku：无线调试配对，或电脑执行 `adb tcpip 5555` 后回软件点「启动」",
+                        "权限引导页新增「Shell 授权」折叠盒：Shizuku 与 ADB 并列，按需选一种",
+                        "ADB 通道能力与 Shizuku 相同：按键 / 鼠标 / 手柄 / 触摸都能读",
+                    ),
+                ),
+                Section(
+                    title = "ADB 激活页",
+                    lines = listOf(
+                        "点「启动」进入独立激活页，按时间线提示完成：检测端口 → 配对 → 连接 → 校验 → 启动采集",
+                        "配对码在通知栏里输入：先搜索到配对端口才弹出输入框，失败自动重试",
+                        "有 5555 端口时跳过配对直接启动；连过一次后冷启动自动重连",
+                        "连接成功后自动开启无障碍并进入主页",
+                    ),
+                ),
+                Section(
+                    title = "Live2D 去水印",
+                    lines = listOf(
+                        "模型在 DisplayInfo 里声明了「水印」参数/部件时，配置页会出现「去水印」开关（默认开）",
+                        "渲染层隐藏水印，关闭开关立即恢复；不修改模型文件",
+                    ),
+                ),
+                Section(
+                    title = "修复",
+                    lines = listOf(
+                        "修复标准版（鼠标版）BongoCat 按键时键帽显示成“图片损坏”占位图的问题",
+                        "删除配置或媒体组件时，会一并清理不再被引用的媒体文件，避免存储空间越占越大",
+                    ),
+                ),
+            ),
+        ),
+        Release(
             version = "2.8.6",
             date = "2026-11-26",
             intro = "这一版补齐了 Live2D 的表情与渲染帧率，重做了底栏和页面缩放；" +

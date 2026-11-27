@@ -24,6 +24,7 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -357,6 +358,11 @@ fun CaptureModeScreen(
                 Column(modifier = Modifier.padding(16.dp)) {
                     CapabilityRow("Root", capabilities.rootAvailable, capabilities.rootDetail)
                     CapabilityRow("Shizuku", capabilities.shizukuReady, null)
+                    CapabilityRow(
+                        name = "ADB",
+                        available = capabilities.adbReady,
+                        detail = if (capabilities.adbReady) "shell" else null,
+                    )
                     /*
                      * ⚠️ 无障碍**也要列**（用户要求过"卡片做具体一点"）——
                      * 它是第三条通道，不列的话用户看不出来态。

@@ -68,6 +68,8 @@ internal class GamepadNativeMonitor(
      * Shizuku 传 [ShizukuGamepadLauncher]。本类只管读流。
      */
     private val launcher: GamepadProcessLauncher,
+    /** 主通道起不来时按顺序再试的通道（例如 ADB → Shizuku → root）。 */
+    private val fallbackLaunchers: List<GamepadProcessLauncher> = emptyList(),
     private val onReady: (String) -> Unit,
     private val onDisconnected: () -> Unit,
     private val onButton: (code: Int, down: Boolean) -> Unit,
@@ -322,11 +324,24 @@ internal class GamepadNativeMonitor(
          * ⚠️ 起进程交给 [launcher] —— 命令字符串两边通用，
          * 只有"谁来执行它"不同（root 走 `su`、Shizuku 走远端 shell）。
          */
-        val proc = launcher.start(command)
+        var chosen: GamepadProcessLauncher? = null
+        var proc: GamepadProcess? = null
+        for (candidate in listOf(launcher) + fallbackLaunchers) {
+            proc = candidate.start(command)
+            if (proc != null) {
+                chosen = candidate
+                break
+            }
+            AppLog.w(TAG, "手柄 helper 起不来（${candidate.label}）")
+        }
         if (proc == null) {
-            AppLog.w(TAG, "手柄 helper 起不来（${launcher.label}）")
+            AppLog.w(
+                TAG,
+                "手柄 helper 所有通道都起不来（${(listOf(launcher) + fallbackLaunchers).joinToString { it.label }}）",
+            )
             return
         }
+        AppLog.i(TAG, "手柄 helper 已通过 ${chosen?.label} 启动")
         process = proc
 
         var lineCount = 0

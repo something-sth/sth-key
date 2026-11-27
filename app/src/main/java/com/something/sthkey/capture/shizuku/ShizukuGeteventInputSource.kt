@@ -79,9 +79,12 @@ import java.util.concurrent.atomic.AtomicBoolean
  *   全局模式下设备清单由 `getevent` 自己给出，不需要外部先扫一遍 ——
  *   而且主应用**根本没有权限** `ls /dev/input`。
  */
-class ShizukuGeteventInputSource : InputSource {
+internal class ShizukuGeteventInputSource(
+    private val launcher: com.something.sthkey.capture.shell.ShellLauncher =
+        com.something.sthkey.capture.shell.ShizukuShellLauncher(),
+    override val channel: CaptureChannel = CaptureChannel.SHIZUKU,
+) : InputSource {
 
-    override val channel: CaptureChannel = CaptureChannel.SHIZUKU
 
     /**
      * 设备数由 `getevent` 的公告驱动（见 [GeteventStream]）。
@@ -98,7 +101,7 @@ class ShizukuGeteventInputSource : InputSource {
 
     /** 当前远端进程；[stop] 时关掉它（关流会让读取循环退出） */
     @Volatile
-    private var shell: ShizukuShell.RemoteShell? = null
+    private var shell: com.something.sthkey.capture.shell.RemoteShellHandle? = null
 
     @Volatile
     private var loopJob: Job? = null
@@ -153,7 +156,7 @@ class ShizukuGeteventInputSource : InputSource {
              * 所以**先在外面把 shell 起起来**,只把"读流"这一步交给探测。
              */
             val probed: Map<String, DeviceCapabilities> = try {
-                val shell = ShizukuShell.start(InputDeviceProbe.COMMAND)
+                val shell = launcher.start(InputDeviceProbe.COMMAND)
                 withContext(Dispatchers.IO) {
                     InputDeviceProbe {
                         BufferedReader(InputStreamReader(shell.inputStream))
@@ -211,7 +214,7 @@ class ShizukuGeteventInputSource : InputSource {
 
         scope.launch {
             try {
-                val shell = ShizukuShell.start(
+                val shell = launcher.start(
                     "${InputDeviceProbe.GETEVENT} -i 2>&1 '$devicePath' </dev/null",
                 )
                 val caps = withContext(Dispatchers.IO) {
@@ -337,7 +340,7 @@ class ShizukuGeteventInputSource : InputSource {
         probeCapabilities()
 
         val remote = try {
-            withContext(Dispatchers.IO) { ShizukuShell.start(GeteventStream.COMMAND) }
+            withContext(Dispatchers.IO) { launcher.start(GeteventStream.COMMAND) }
         } catch (e: Exception) {
             AppLog.w(TAG, "启动远端进程失败：${e.javaClass.simpleName}: ${e.message}")
             onError("Shizuku 启动失败：${e.message ?: e.javaClass.simpleName}")

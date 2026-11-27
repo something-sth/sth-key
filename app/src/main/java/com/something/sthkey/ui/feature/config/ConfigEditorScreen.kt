@@ -2254,7 +2254,8 @@ private fun LazyListScope.live2DStyleSections(
     }
 
     /* 表情分区：只有模型自带表情时才出现（模型元数据在导入时写入） */
-    val expressions = Live2DModels.resolve(editable.live2d.modelId).expressions
+    val model = Live2DModels.resolve(editable.live2d.modelId)
+    val expressions = model.expressions
     if (expressions.isNotEmpty()) {
         item { SectionHeader("表情") }
         item {
@@ -2263,6 +2264,38 @@ private fun LazyListScope.live2DStyleSections(
                 expressions = expressions,
                 applyChange = applyChange,
             )
+        }
+    }
+
+    /* 去水印：只有模型自己声明了水印参数/部件时才出现 */
+    if (model.watermarkParameters.isNotEmpty() || model.watermarkParts.isNotEmpty()) {
+        item { SectionHeader("水印") }
+        item {
+            SettingsCard {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("去水印", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            text = "这个模型声明了水印，默认隐藏；关闭后恢复显示。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    com.something.sthkey.ui.component.ExpressiveSwitch(
+                        checked = editable.live2d.hideWatermark,
+                        onCheckedChange = { enabled ->
+                            applyChange {
+                                it.copy(live2d = it.live2d.copy(hideWatermark = enabled))
+                            }
+                        },
+                    )
+                }
+            }
         }
     }
 }

@@ -48,8 +48,8 @@ android {
         // targetSdk 保持 36：它决定运行时行为（是否受新版系统限制），
         // 与"用什么 SDK 编译"是两件事，没必要跟着一起升
         targetSdk = 36
-        versionCode = 286
-        versionName = "2.8.6"
+        versionCode = 287
+        versionName = "2.8.7"
 
         buildConfigField("String", "BUILD_TAG", "\"$buildTag\"")
 
@@ -267,6 +267,12 @@ dependencies {
     implementation(libs.material.kolor)
     implementation(libs.shizuku.api)
     implementation(libs.shizuku.provider)
+
+    /* 软件内 ADB 授权：配对 / TLS / mDNS / shell 流 */
+    implementation(libs.libadb)
+    implementation(libs.hiddenapi.bypass)
+    /* 自签客户端证书生成（体积小）；不用 BouncyCastle */
+    implementation(libs.sun.security)
 
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)

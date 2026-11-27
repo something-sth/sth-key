@@ -178,6 +178,27 @@ object CustomMediaStore {
         return true
     }
 
+    /**
+     * 清理**没有任何配置组件引用**的媒体文件。
+     *
+     * 媒体是「按需引用」的：组件删了、配置删了，文件若没有别处再用，
+     * 就应当跟着删，否则 `/data/data` 里会越攒越多。字体 / Live2D 模型
+     * 是全局资源，不在这里处理。
+     *
+     * @param referencedIds 当前所有配置里仍被引用的资源 id 集合
+     * @return 实际删掉的资源个数
+     */
+    fun collectGarbage(referencedIds: Set<String>): Int {
+        val context = appContext ?: return 0
+        val all = readIndex()
+        val orphans = all.filter { it.id !in referencedIds }
+        if (orphans.isEmpty()) return 0
+        orphans.forEach { File(root(context), it.id).deleteRecursively() }
+        writeIndex(all.filter { it.id in referencedIds })
+        AppLog.i(TAG, "清理未引用的媒体资源：${orphans.size} 个")
+        return orphans.size
+    }
+
     /* ============================================================
      * 内部
      * ============================================================ */

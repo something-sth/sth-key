@@ -38,6 +38,8 @@ dependencyResolutionManagement {
         maven("https://maven.aliyun.com/repository/google")
         google()
         mavenCentral()
+        /* ADB 授权：libadb 只发布在 JitPack */
+        maven("https://jitpack.io")
     }
 }
 

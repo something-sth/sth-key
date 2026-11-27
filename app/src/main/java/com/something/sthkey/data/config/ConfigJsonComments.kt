@@ -114,7 +114,7 @@ object ConfigJsonComments {
         "keyMappings" to "键位映射；inputKeyCodes 是明文键位 ID 数组。",
         "joystick" to "摇杆外观与手感（三种摇杆共用）。",
         "touch" to "触屏样式设置：regions / move / camera。",
-        "live2d" to "Live2D 模型设置：modelId / opacityPercent。",
+        "live2d" to "Live2D 模型设置：modelId / opacityPercent / expression / expressionBindings / hideWatermark。",
         "custom" to "自定义 Key 布局：components / touchRegions。",
         "customOpacityPercent" to "自定义 Key 的整体不透明度，0..100。",
         "customTextScalePercent" to "自定义 Key 的整体字符缩放，100 = 原大小。",
@@ -147,7 +147,11 @@ object ConfigJsonComments {
             add("  touch.regions[]：pinned=true 才生效；move / camera 是两个摇杆的手感。")
         }
         if (keys.contains("live2d")) {
-            add("  live2d.modelId：内置模型 id 或 imported:<uuid>；opacityPercent 为 0..100。")
+            add(
+                "  live2d.modelId：内置模型 id 或 imported:<uuid>；opacityPercent 为 0..100；" +
+                    "expression 为当前表情下标（-1 = 未选）；expressionBindings[] 为表情快捷键绑定；" +
+                    "hideWatermark 为是否去水印（true/false）。",
+            )
         }
     }
 

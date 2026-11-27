@@ -722,6 +722,11 @@ data class Live2DSettings(
      * 每个表情最多一组组合键；内层必须同时按下。
      */
     val expressionBindings: List<ExpressionBinding> = emptyList(),
+    /**
+     * 去水印：只对模型在 DisplayInfo 里声明了「水印」参数/部件的模型生效。
+     * 默认开；渲染时在动作/表情之后把水印参数压到 0、部件 opacity 压到 0。
+     */
+    val hideWatermark: Boolean = true,
 )
 
 /** 表情快捷键绑定：`keys` 是一组"同时按下"的键码 */

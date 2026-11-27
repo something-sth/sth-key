@@ -789,6 +789,20 @@ class AppPrefs private constructor(context: Context) {
             prefs.edit().putString(KEY_BOTTOM_BAR_STYLE, value).apply()
         }
 
+    /** 是否完成过无线调试配对（用于「启动」按钮判断走 TLS 还是 5555） */
+    var adbPaired: Boolean
+        get() = prefs.getBoolean(KEY_ADB_PAIRED, false)
+        set(value) {
+            prefs.edit().putBoolean(KEY_ADB_PAIRED, value).apply()
+        }
+
+    /** 是否成功连过一次 ADB（用于冷启动自动重连，避免从没用过也弹授权框） */
+    var adbEverConnected: Boolean
+        get() = prefs.getBoolean(KEY_ADB_EVER_CONNECTED, false)
+        set(value) {
+            prefs.edit().putBoolean(KEY_ADB_EVER_CONNECTED, value).apply()
+        }
+
     companion object {
         /** 一行最少几个配置 */
         const val CONFIG_LIST_COLUMNS_MIN = 1
@@ -815,6 +829,8 @@ class AppPrefs private constructor(context: Context) {
         private const val PREFS_NAME = "sthkey_settings"
         private const val KEY_MODE = "key_mode"
         private const val KEY_SHIZUKU_BACKEND = "shizuku_backend"
+        private const val KEY_ADB_PAIRED = "adb_paired"
+        private const val KEY_ADB_EVER_CONNECTED = "adb_ever_connected"
         private const val KEY_SETUP_COMPLETED = "setup_completed"
         private const val KEY_ANNOUNCEMENT_VERSION = "announcement_version"
         private const val KEY_ACTIVE_CONFIG_ID = "active_config_id"

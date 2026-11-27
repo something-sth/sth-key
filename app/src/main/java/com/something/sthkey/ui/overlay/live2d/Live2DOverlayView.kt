@@ -259,6 +259,7 @@ class Live2DOverlayView(context: Context) : FrameLayout(context) {
 
     /* 配置里的表情：当前下标 + 每组快捷键对应的表情下标 */
     private var expressionIndex: Int = -1
+    private var watermarkHidden: Boolean = true
     private var expressionBindings: List<Pair<Int, List<Int>>> = emptyList()
     private var lastPressedExpressionKeys: Set<Int> = emptySet()
 
@@ -268,6 +269,15 @@ class Live2DOverlayView(context: Context) : FrameLayout(context) {
      * - [index] 是默认表情；页面就绪后立即设置一次；
      * - [bindings] 是"按下这一组键 → 切到对应表情"（固定切换，不循环）。
      */
+    /** 去水印：只影响渲染层，不改模型文件。 */
+    fun applyWatermark(hidden: Boolean) {
+        AppLog.i(TAG, "去水印开关 → hidden=$hidden（pageReady=$pageReady）")
+        watermarkHidden = hidden
+        if (pageReady) {
+            dispatchRaw("window.AxonBongoCat&&AxonBongoCat.setHideWatermark(${if (hidden) "true" else "false"})")
+        }
+    }
+
     fun applyExpressions(index: Int, bindings: List<Pair<Int, List<Int>>>) {
         expressionIndex = index.coerceAtLeast(-1)
         expressionBindings = bindings
@@ -573,6 +583,7 @@ class Live2DOverlayView(context: Context) : FrameLayout(context) {
 
         /* 表情：页面就绪后按配置设一次（clear() 不会清掉它） */
         dispatchExpression(expressionIndex)
+        applyWatermark(watermarkHidden)
 
         /* 渲染帧率：页面就绪后立刻套用（默认 60，可在采集通道页改） */
         dispatchFrameRate()

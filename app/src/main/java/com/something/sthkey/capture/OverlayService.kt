@@ -1105,6 +1105,7 @@ runCatching { if (old.host.parent != null) windowManager.removeView(old.host) }
                     config.live2d.expression,
                     config.live2d.expressionBindings.map { it.index to it.keys },
                 )
+                applyWatermark(config.live2d.hideWatermark)
                 alpha = config.live2d.opacityPercent.coerceIn(0, 100) / 100f
             }
         } else {
@@ -1201,6 +1202,7 @@ runCatching { if (old.host.parent != null) windowManager.removeView(old.host) }
             config.live2d.expression,
             config.live2d.expressionBindings.map { it.index to it.keys },
         )
+        live2d.applyWatermark(config.live2d.hideWatermark)
         live2d.alpha = config.live2d.opacityPercent.coerceIn(0, 100) / 100f
     }
 

@@ -236,7 +236,8 @@ object FpsMonitor {
                  * 之前只在 Shizuku 下才走 SF，等于白白浪费了 root。
                  */
                 val hasRoot = if (hasShizuku) false else hasRootShell()
-                val hasShell = hasShizuku || hasRoot
+                val hasAdb = com.something.sthkey.capture.adb.AdbAuthorization.isConnected()
+                val hasShell = hasShizuku || hasRoot || hasAdb
                 /* ⚠️ 熄屏时不采样:采了也没意义，还白耗电（用户日志里那串 N/A 有一段就是息屏） */
                 if (!isScreenOn(appContext)) {
                     _reading.value = Reading(null, Source.NONE, ++sampleSeq)
@@ -601,7 +602,20 @@ object FpsMonitor {
                 null
             }
         }
+        if (com.something.sthkey.capture.adb.AdbAuthorization.isConnected()) {
+            return runShellViaAdb(command)
+        }
         return runShellAsRoot(command)
+    }
+
+    /** ADB 优先于 root（ADB 已连接时用 shell 身份执行）。 */
+    private suspend fun runShellViaAdb(command: String): String? = try {
+        com.something.sthkey.capture.adb.AdbAuthorization
+            .exec(command, READ_LIMIT_BYTES.toLong())
+            ?.take(READ_LIMIT_BYTES)
+    } catch (e: Exception) {
+        AppLog.w(TAG, "ADB 命令失败（${e.javaClass.simpleName}）：$command")
+        null
     }
 
     /** root 执行（`su -c`）;失败返回 null */

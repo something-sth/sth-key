@@ -37,9 +37,11 @@ data class CaptureCapabilities(
      * —— 后者只说明用户点过开关，服务可能还没起来（或被系统杀了）。
      */
     val accessibilityReady: Boolean = false,
+    /** ADB 是否已连接（5555 或无线调试配对后） */
+    val adbReady: Boolean = false,
 ) {
     val anyAvailable: Boolean
-        get() = rootAvailable || shizukuReady || accessibilityReady
+        get() = rootAvailable || shizukuReady || adbReady || accessibilityReady
 
     companion object {
         /** 尚未探测时的初始值 */
@@ -103,6 +105,12 @@ fun resolveCaptureMode(
         },
     )
 
+    KeyMode.ADB -> ResolvedCaptureMode(
+        mode = KeyMode.ADB,
+        fellBack = false,
+        reason = if (capabilities.adbReady) "手动指定 ADB" else "手动指定 ADB，但当前未连接",
+    )
+
     KeyMode.ACCESSIBILITY -> ResolvedCaptureMode(
         mode = KeyMode.ACCESSIBILITY,
         fellBack = false,
@@ -122,6 +130,13 @@ fun resolveCaptureMode(
                 KeyMode.SHIZUKU,
                 fellBack = true,
                 reason = "自动：root 不可用，回退到 Shizuku",
+            )
+
+        capabilities.adbReady ->
+            ResolvedCaptureMode(
+                KeyMode.ADB,
+                fellBack = true,
+                reason = "自动：root 与 Shizuku 不可用，回退到 ADB shell",
             )
 
         capabilities.accessibilityReady ->

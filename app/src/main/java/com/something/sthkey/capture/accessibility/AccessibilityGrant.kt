@@ -207,15 +207,17 @@ internal object AccessibilityGrant {
     suspend fun grant(
         context: Context,
         useRoot: Boolean,
+        useAdb: Boolean = false,
         forceRebind: Boolean = false,
         timeoutMs: Long = 4000L,
     ): Result = grantMutex.withLock {
-        grantLocked(context, useRoot, forceRebind, timeoutMs)
+        grantLocked(context, useRoot, useAdb, forceRebind, timeoutMs)
     }
 
     private suspend fun grantLocked(
         context: Context,
         useRoot: Boolean,
+        useAdb: Boolean = false,
         forceRebind: Boolean = false,
         timeoutMs: Long = 4000L,
     ): Result = withContext(Dispatchers.IO) {
@@ -229,10 +231,10 @@ internal object AccessibilityGrant {
             )
         }
 
-        AppLog.i(TAG, "尝试用 ${if (useRoot) "root" else "Shizuku"} 开启无障碍")
+        AppLog.i(TAG, "尝试用 ${when { useRoot -> "root"; useAdb -> "ADB"; else -> "Shizuku" }} 开启无障碍")
 
         /* ① 读现状 */
-        val current = runShell(useRoot, "settings --user current get secure $KEY_ENABLED_SERVICES")
+        val current = runShell(useRoot, useAdb, "settings --user current get secure $KEY_ENABLED_SERVICES")
         if (current == null) {
             AppLog.w(TAG, "读不到无障碍启用列表（shell 执行失败）")
             return@withContext Result(
@@ -246,7 +248,7 @@ internal object AccessibilityGrant {
         /* ② 重绑时先摘掉，给系统时间处理"移除" */
         if (forceRebind) {
             val without = removeServiceFromList(current, service)
-            val removed = writeList(useRoot, without)
+            val removed = writeList(useRoot, useAdb, without)
             AppLog.i(TAG, "重绑：已先移除自己（成功=$removed）")
             if (removed) delay(300)
         }
@@ -257,7 +259,7 @@ internal object AccessibilityGrant {
             service = service,
             forceRebind = forceRebind,
         )
-        val writeOk = writeList(useRoot, merged)
+        val writeOk = writeList(useRoot, useAdb, merged)
         if (!writeOk) {
             AppLog.w(TAG, "写入无障碍设置失败")
             return@withContext Result(
@@ -273,7 +275,7 @@ internal object AccessibilityGrant {
          * （权限管理/无障碍管理器自己重写）。不校验的话就会出现
          * "提示已启动、实际没开"——必须确认列表里真的有我们。
          */
-        val verify = runShell(useRoot, "settings --user current get secure $KEY_ENABLED_SERVICES")
+        val verify = runShell(useRoot, useAdb, "settings --user current get secure $KEY_ENABLED_SERVICES")
         val verified = verify?.contains(service) == true
         AppLog.i(TAG, "读回校验：${if (verified) "通过" else "失败"}（$verify）")
         if (!verified) {
@@ -292,8 +294,13 @@ internal object AccessibilityGrant {
          * （用户自己手动开过）不会走到这里，所以手动授权不会弹提示。
          */
         if (connected) {
+            val channel = when {
+                useRoot -> "root"
+                useAdb -> "ADB"
+                else -> "Shizuku"
+            }
             _notice.tryEmit(
-                "无障碍服务已通过 ${if (useRoot) "root" else "Shizuku"} 启动",
+                "无障碍服务已通过 $channel 启动",
             )
         }
         Result(
@@ -312,8 +319,8 @@ internal object AccessibilityGrant {
      * ⚠️ 列表为空时用 `settings delete` 而不是 `put ""`:
      * 某些 ROM 上留一个空条目会让整个无障碍系统判成配置损坏。
      */
-    private suspend fun writeList(useRoot: Boolean, list: String): Boolean =
-        runShell(useRoot, buildWriteCommand(list)) != null
+    private suspend fun writeList(useRoot: Boolean, useAdb: Boolean, list: String): Boolean =
+        runShell(useRoot, useAdb, buildWriteCommand(list)) != null
 
     /**
      * 拼"写入已启用列表 + 打开总开关"的 shell 命令。
@@ -344,8 +351,11 @@ internal object AccessibilityGrant {
      *   ⚠️ 返回 `null` 与"输出空串"是**两件事**:前者是失败，后者是"命令成功但没有输出"。
      *   调用方必须区分。
      */
-    private suspend fun runShell(useRoot: Boolean, command: String): String? =
-        if (useRoot) runRoot(command) else runShizuku(command)
+    private suspend fun runShell(useRoot: Boolean, useAdb: Boolean, command: String): String? = when {
+        useRoot -> runRoot(command)
+        useAdb -> runAdb(command)
+        else -> runShizuku(command)
+    }
 
     /**
      * `su -c <command>`，返回 stdout。
@@ -366,6 +376,14 @@ internal object AccessibilityGrant {
         }
     } catch (t: Throwable) {
         AppLog.w(TAG, "root 执行失败：${t.javaClass.simpleName}")
+        null
+    }
+
+    /** ADB shell（配对 / 5555） */
+    private suspend fun runAdb(command: String): String? = try {
+        com.something.sthkey.capture.adb.AdbAuthorization.exec(command)
+    } catch (t: Throwable) {
+        AppLog.w(TAG, "ADB 执行失败：${t.javaClass.simpleName}")
         null
     }
 

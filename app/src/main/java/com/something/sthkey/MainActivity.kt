@@ -8,6 +8,7 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -17,6 +18,11 @@ import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -578,25 +584,53 @@ private fun SthKeyApp(
         }
     }
 
-    when (stage) {
-        AppStage.SETUP.name -> {
-            SetupScreen(
-                viewModel = viewModel,
-                onFinished = { stage = AppStage.MAIN.name },
-            )
-        }
+    /*
+     * ⚠️ 引导页和主界面在**同一个 Activity** 里，只是 Compose 的 `stage`
+     * 状态切换。以前直接 `when` 换 composable，所以没有任何转场 ——
+     * 用户看到的就是"啪"一下换屏。
+     *
+     * 这里用 `AnimatedContent` 给这个状态切换加转场：
+     * - 去主界面：新页从右侧轻滑入，旧页向左滑出；
+     * - 回引导页：方向反过来。
+     */
+    AnimatedContent(
+        targetState = stage,
+        transitionSpec = {
+            (fadeIn(tween(300)) + scaleIn(tween(300), initialScale = 0.97f)) togetherWith
+                (fadeOut(tween(200)) + scaleOut(tween(200), targetScale = 1.02f))
+        },
+        label = "stage-transition",
+    ) { currentStage ->
+        when (currentStage) {
+            AppStage.SETUP.name -> {
+                SetupScreen(
+                    viewModel = viewModel,
+                    onFinished = {
+                        /*
+                         * ⚠️ 进入主界面前，确保采集真的在跑。
+                         * 冷启动时 CaptureController.init 已经尝试过一次，
+                         * 但如果那时还没授权（比如这次是先进引导页、再去配 ADB），
+                         * 那次会失败；授权完成回到主界面后要再拉一次，
+                         * 否则得等开悬浮窗才会启动监听。
+                         */
+                        viewModel.ensureCaptureRunning()
+                        stage = AppStage.MAIN.name
+                    },
+                )
+            }
 
-        else -> {
-            /*
-             * ⚠️ 这里用 `else` 而不是 `AppStage.MAIN.name ->`:
-             * `rememberSaveable` 可能从旧版本的 `savedInstanceState` 里
-             * 回放出一个**已经删掉的阶段名**（比如曾经的 `CHECKING`）。
-             * 用 `else` 接住，回放到未知值时落到主界面，而不是白屏。
-             */
-            MainScaffold(
-                viewModel = viewModel,
-                onOpenSetup = { stage = AppStage.SETUP.name },
-            )
+            else -> {
+                /*
+                 * ⚠️ 这里用 `else` 而不是 `AppStage.MAIN.name ->`:
+                 * `rememberSaveable` 可能从旧版本的 `savedInstanceState` 里
+                 * 回放出一个**已经删掉的阶段名**（比如曾经的 `CHECKING`）。
+                 * 用 `else` 接住，回放到未知值时落到主界面，而不是白屏。
+                 */
+                MainScaffold(
+                    viewModel = viewModel,
+                    onOpenSetup = { stage = AppStage.SETUP.name },
+                )
+            }
         }
     }
 

@@ -84,6 +84,10 @@ data class Live2DModelEntry(
      * 空列表 = 没有表情（内置模型、老导入模型都是这样）。
      */
     val expressions: List<String> = emptyList(),
+    /** DisplayInfo 里声明为水印的参数 id（Name 含「水印」/「watermark」） */
+    val watermarkParameters: List<String> = emptyList(),
+    /** DisplayInfo 里声明为水印的部件 id */
+    val watermarkParts: List<String> = emptyList(),
 )
 
 /**
@@ -221,6 +225,8 @@ object Live2DModels {
             variant = record.variant,
             contentAspect = record.contentAspect,
             expressions = record.expressions,
+            watermarkParameters = record.watermarkParameters,
+            watermarkParts = record.watermarkParts,
         )
     }
 
@@ -290,6 +296,8 @@ object Live2DModels {
         supportedKeys: Set<String> = emptySet(),
         variants: List<Live2DVariant> = emptyList(),
         expressions: List<String> = emptyList(),
+        watermarkParameters: List<String> = emptyList(),
+        watermarkParts: List<String> = emptyList(),
     ): Live2DModelEntry {
         val records = readImported().filterNot { it.id == dirId }.toMutableList()
         records += Record(
@@ -300,6 +308,8 @@ object Live2DModels {
             supportedKeys = supportedKeys,
             variants = variants,
             expressions = expressions,
+            watermarkParameters = watermarkParameters,
+            watermarkParts = watermarkParts,
             /*
              * ⚠️ 多模式模型默认选**标准**，不是"第一个"。
              *
@@ -531,6 +541,9 @@ object Live2DModels {
         val contentAspect: Float = 0f,
         /** 模型自带表情名称 */
         val expressions: List<String> = emptyList(),
+        /** 声明为水印的参数/部件 id */
+        val watermarkParameters: List<String> = emptyList(),
+        val watermarkParts: List<String> = emptyList(),
     ) {
     }
 
@@ -584,6 +597,8 @@ object Live2DModels {
                                     }
                                 }
                             }.orEmpty(),
+                            watermarkParameters = stringListOf(item.optJSONArray("watermarkParameters")),
+                            watermarkParts = stringListOf(item.optJSONArray("watermarkParts")),
                             supportedKeys = item.optJSONArray("supportedKeys")
                                 ?.let { array ->
                                     buildSet {
@@ -643,6 +658,18 @@ object Live2DModels {
                             JSONArray().apply { record.expressions.forEach { put(it) } },
                         )
                     }
+                    if (record.watermarkParameters.isNotEmpty()) {
+                        put(
+                            "watermarkParameters",
+                            JSONArray().apply { record.watermarkParameters.forEach { put(it) } },
+                        )
+                    }
+                    if (record.watermarkParts.isNotEmpty()) {
+                        put(
+                            "watermarkParts",
+                            JSONArray().apply { record.watermarkParts.forEach { put(it) } },
+                        )
+                    }
                 },
             )
         }
@@ -660,4 +687,14 @@ object Live2DModels {
             else -> String.format("%.1f MB", bytes / 1024.0 / 1024.0)
         }
     }
+    private fun stringListOf(array: org.json.JSONArray?): List<String> {
+        if (array == null) return emptyList()
+        return buildList {
+            for (index in 0 until array.length()) {
+                val value = array.optString(index)
+                if (value.isNotEmpty()) add(value)
+            }
+        }
+    }
+
 }

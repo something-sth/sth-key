@@ -163,3 +163,38 @@ internal class ShizukuGamepadLauncher : GamepadProcessLauncher {
         const val TAG = "GamepadLauncher"
     }
 }
+
+/**
+ * 走 ADB shell（配对 / 5555 直连）的 launcher。
+ *
+ * 与 [ShizukuGamepadLauncher] 完全同构：命令一样，只是"谁来执行"换成 ADB。
+ */
+internal class AdbGamepadLauncher : GamepadProcessLauncher {
+
+    override val label: String = "ADB"
+
+    override fun start(command: String): GamepadProcess? = try {
+        AppLog.i(TAG, "用 ADB 启动 helper：$command")
+        val remote = runBlocking {
+            withContext(Dispatchers.IO) {
+                com.something.sthkey.capture.adb.AdbAuthorization.openShell(command + " 2>&1")
+            }
+        } ?: run {
+            AppLog.w(TAG, "ADB helper 起不来：openShell 返回 null（连接可能已断）")
+            return null
+        }
+        object : GamepadProcess {
+            override val inputStream: InputStream = remote.openInputStream()
+            override fun close() {
+                runCatching { remote.close() }
+            }
+        }
+    } catch (e: Exception) {
+        AppLog.w(TAG, "起 ADB helper 失败：${e.javaClass.simpleName}: ${e.message}")
+        null
+    }
+
+    private companion object {
+        const val TAG = "GamepadLauncher"
+    }
+}

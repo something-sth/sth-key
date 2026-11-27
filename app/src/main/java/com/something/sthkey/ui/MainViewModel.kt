@@ -10,6 +10,8 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import com.something.sthkey.BuildConfig
 import com.something.sthkey.capture.accessibility.AccessibilityGrant
+import com.something.sthkey.capture.adb.AdbAuthorization
+import com.something.sthkey.capture.adb.AdbPortProbe
 import com.something.sthkey.capture.accessibility.SthKeyAccessibilityService
 import com.something.sthkey.capture.CaptureController
 import com.something.sthkey.capture.OverlayController
@@ -27,6 +29,8 @@ import com.something.sthkey.domain.capture.ShizukuBridge
 import com.something.sthkey.domain.config.ConfigGroup
 import com.something.sthkey.domain.config.GroupSwitch
 import com.something.sthkey.domain.config.KeyStrokesConfig
+import com.something.sthkey.domain.custom.MediaComponent
+import com.something.sthkey.domain.media.CustomMediaStore
 import com.something.sthkey.domain.overlay.OverlayLayout
 import com.something.sthkey.domain.overlay.OverlayLayouts
 import com.something.sthkey.domain.ui.AppearanceColorMode
@@ -37,6 +41,7 @@ import com.something.sthkey.ui.EditMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.SupervisorJob
 
@@ -411,7 +416,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
          * 所以这里：快照说没有 shell 时，**先同步刷新一次再判断**。
          */
         var snapshot = CaptureController.capabilities.value
-        if (!snapshot.rootAvailable && !snapshot.shizukuReady) {
+        if (!snapshot.rootAvailable && !snapshot.shizukuReady && !snapshot.adbReady) {
             AppLog.i(TAG, "能力快照里没有 shell，先刷新一次再决定（避免旧快照误判）")
             runCatching { CaptureController.refreshCapabilities() }
             snapshot = CaptureController.capabilities.value
@@ -420,19 +425,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         val root = snapshot.rootAvailable
         val shizuku = snapshot.shizukuReady
-        if (!root && !shizuku) {
+        val adb = snapshot.adbReady
+        if (!root && !shizuku && !adb) {
             /*
              * ⚠️ 没有 shell 可借 —— 只能让用户自己去系统设置点。
              * 那个提示交给 [OverlayController]（它会跳设置页），这里只记日志。
              */
-            AppLog.w(TAG, "无障碍未开启，且没有 root / Shizuku 可代为开启")
+            AppLog.w(TAG, "无障碍未开启，且没有 root / Shizuku / ADB 可代为开启")
             return false
         }
 
-        AppLog.i(TAG, "开悬浮窗前自动用 ${if (root) "root" else "Shizuku"} 开启无障碍")
+        AppLog.i(TAG, "开悬浮窗前自动用 ${if (root) "root" else if (shizuku) "Shizuku" else "ADB"} 开启无障碍")
         val result = AccessibilityGrant.grant(
             context = getApplication(),
             useRoot = root,
+            useAdb = !root && !shizuku && adb,
         )
         AppLog.i(TAG, "无障碍授权结果：${result.detail}")
 
@@ -570,6 +577,161 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         AppLog.i(TAG, "Live2D 渲染帧率 → ${clamped}fps")
     }
 
+    /* ---------------- ADB（5555 直连，第一阶段） ---------------- */
+
+    var adbBusy by mutableStateOf(false)
+        private set
+
+    var adbStatus by mutableStateOf(if (AdbAuthorization.isConnected()) "已连接" else "未连接")
+        private set
+
+    /** 检测到的 5555 端口；null = 没开 */
+    var adbPort by mutableStateOf<Int?>(null)
+        private set
+
+    var adbPairing by mutableStateOf(false)
+        private set
+
+    var adbPaired by mutableStateOf(prefs.adbPaired)
+        private set
+
+    var adbPairMessage by mutableStateOf<String?>(null)
+        private set
+
+    fun refreshAdbPort() {
+        scope.launch {
+            adbPort = withContext(Dispatchers.IO) {
+                if (AdbPortProbe.probe()) AdbAuthorization.DEFAULT_PORT else null
+            }
+            adbPaired = prefs.adbPaired
+            adbStatus = if (AdbAuthorization.isConnected()) "已连接（shell）" else adbStatus
+        }
+    }
+
+    /** 从设置页返回时同步配对/连接状态（通知配对不在本 ViewModel 里完成）。 */
+    fun refreshAdbState() {
+        adbPaired = prefs.adbPaired
+        if (AdbAuthorization.isConnected()) adbStatus = "已连接（shell）"
+        refreshAdbPort()
+    }
+
+    /**
+     * 冷启动自动重连：只有**连过一次**才尝试，避免从没用过 ADB 的用户被系统授权框打扰。
+     * 失败不弹窗、不跳页，只刷新能力快照；权限不足的引导由现有 startup 检查负责。
+     */
+    private suspend fun autoConnectAdbIfNeeded() {
+        if (!prefs.adbEverConnected || AdbAuthorization.isConnected()) return
+        delay(800)
+        if (prefs.adbPaired && !adbWirelessEnabled()) {
+            /*
+             * 用户把无线调试关了：不再去 connectTls 等 30 秒 mDNS，
+             * 否则启动阶段会像"卡死"一样一直转。
+             */
+            adbStatus = "无线调试未开启"
+            return
+        }
+        val result = withContext(Dispatchers.IO) {
+            when {
+                prefs.adbPaired -> AdbAuthorization.connectTls(getApplication(), timeoutMs = 8_000)
+                AdbPortProbe.probe() -> AdbAuthorization.connectTcp(getApplication())
+                else -> AdbAuthorization.Result(false, "没有可用端口")
+            }
+        }
+        if (result.ok) {
+            prefs.adbEverConnected = true
+            adbStatus = "已连接（shell）"
+            adbPaired = prefs.adbPaired
+            runCatching { CaptureController.refreshCapabilities() }
+        } else {
+            adbStatus = "未连接：${result.detail}"
+            adbPaired = prefs.adbPaired
+            runCatching { CaptureController.refreshCapabilities() }
+        }
+    }
+
+    /** 无线调试总开关（关闭时 TLS/mDNS 一定不可用，不要空等）。 */
+    private fun adbWirelessEnabled(): Boolean = runCatching {
+        android.provider.Settings.Global.getInt(
+            getApplication<Application>().contentResolver,
+            "adb_wifi_enabled",
+            0,
+        ) == 1
+    }.getOrDefault(true)
+
+    fun clearAdbPairMessage() {
+        adbPairMessage = null
+    }
+
+    fun connectAdb(port: Int = adbPort ?: AdbAuthorization.DEFAULT_PORT) {
+        if (adbBusy) return
+        scope.launch {
+            adbBusy = true
+            adbStatus = "连接中…"
+            val result = AdbAuthorization.connectTcp(getApplication(), port = port)
+            adbStatus = if (result.ok) "已连接（shell）" else "失败：${result.detail}"
+            adbPaired = prefs.adbPaired
+            if (result.ok) {
+                prefs.adbEverConnected = true
+                runCatching { CaptureController.refreshCapabilities() }
+            }
+            adbBusy = false
+        }
+    }
+
+    fun startAdb() {
+        if (adbBusy) return
+        scope.launch {
+            adbBusy = true
+            adbStatus = "连接中…"
+            val result = if (adbPort != null) {
+                AdbAuthorization.connectTcp(getApplication(), port = requireNotNull(adbPort))
+            } else if (adbPaired) {
+                if (!adbWirelessEnabled()) {
+                    AdbAuthorization.Result(false, "无线调试未开启，请先打开")
+                } else {
+                    AdbAuthorization.connectTls(getApplication())
+                }
+            } else {
+                AdbAuthorization.Result(false, "请先配对")
+            }
+            adbStatus = if (result.ok) "已连接（shell）" else "失败：${result.detail}"
+            adbPaired = prefs.adbPaired
+            if (result.ok) {
+                prefs.adbEverConnected = true
+                runCatching { CaptureController.refreshCapabilities() }
+            }
+            adbBusy = false
+        }
+    }
+
+    fun pairAdb(code: String) {
+        if (adbPairing) return
+        scope.launch {
+            adbPairing = true
+            adbStatus = "配对中…"
+            val result = AdbAuthorization.pair(getApplication(), code)
+            if (result.ok) {
+                prefs.adbPaired = true
+                adbPaired = true
+                adbStatus = "配对成功，点启动"
+                adbPairMessage = null
+            } else {
+                adbStatus = "配对失败：${result.detail}"
+                adbPairMessage = result.detail
+            }
+            adbPairing = false
+        }
+    }
+
+    fun disconnectAdb() {
+        scope.launch {
+            AdbAuthorization.disconnect()
+            adbStatus = "未连接"
+        }
+    }
+
+    fun adbPublicKey(): String = AdbAuthorization.authorizedKeyLine(getApplication())
+
     fun applySeedColor(argb: Int) {
         prefs.seedColor = argb
         seedColor = argb
@@ -704,6 +866,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
+     * 确保采集在跑（幂等）。
+     *
+     * 用在「进入主界面」这个时点：冷启动时 [CaptureController.init] 已经试过
+     * 一次，但若当时还没授权会失败；授权完成后回来这里再补一次。
+     *
+     * ⚠️ 失败后 [CaptureController._enabled] 可能还是 true（start 的短路标志），
+     * 所以要先 `stop()` 复位再 `start()`，否则会被 `start()` 当成"已在跑"直接跳过。
+     * 这与 [OverlayController.enableConfigs] 里的自愈写法保持一致。
+     */
+    fun ensureCaptureRunning() {
+        if (CaptureController.isRunning()) return
+        AppLog.i(TAG, "进入应用：采集未运行，重新拉起")
+        CaptureController.stop()
+        CaptureController.start()
+    }
+
+    /**
      * 申请 Shizuku 权限。
      *
      * ⚠️ 必须传 Activity（而不是 application context）:
@@ -724,19 +903,51 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * 这个函数的价值是**强制重绑**:服务卡死时 `settings` 里明明开着、
      * `isConnected()` 却是 false，只有先摘掉再写回去才救得回来。
      */
+    /** ADB 激活完成后：自动用当前 shell 开无障碍，然后进入主界面。 */
+    fun completeAdbActivation(onDone: () -> Unit) {
+        scope.launch {
+            if (!SthKeyAccessibilityService.isConnected()) {
+                val root = capabilities.rootAvailable
+                val shizuku = capabilities.shizukuReady
+                val adb = AdbAuthorization.isConnected()
+                if (adb) {
+                    /* 从 ADB 激活页进来的，明确走 ADB；不要再退回 Shizuku 分支 */
+                    runCatching {
+                        AccessibilityGrant.grant(
+                            context = getApplication(),
+                            useRoot = false,
+                            useAdb = true,
+                        )
+                    }
+                } else if (root || shizuku) {
+                    runCatching {
+                        AccessibilityGrant.grant(
+                            context = getApplication(),
+                            useRoot = root,
+                        )
+                    }
+                }
+            }
+            runCatching { CaptureController.refreshCapabilities() }
+            onDone()
+        }
+    }
+
     fun grantAccessibilityByShell() {
         scope.launch {
             val root = capabilities.rootAvailable
             val shizuku = capabilities.shizukuReady
-            if (!root && !shizuku) {
-                AppLog.w(TAG, "没有 root 或 Shizuku，无法用 shell 开启无障碍")
+            val adb = capabilities.adbReady
+            if (!root && !shizuku && !adb) {
+                AppLog.w(TAG, "没有 root / Shizuku / ADB，无法用 shell 开启无障碍")
                 return@launch
             }
 
-            AppLog.i(TAG, "手动请求用 shell 开启无障碍（${if (root) "root" else "Shizuku"}）")
+            AppLog.i(TAG, "手动请求用 shell 开启无障碍（${if (root) "root" else if (shizuku) "Shizuku" else "ADB"}）")
             val result = AccessibilityGrant.grant(
                 context = getApplication(),
                 useRoot = root,
+                useAdb = !root && !shizuku && adb,
                 /* ⚠️ 用户主动点，就用"强制重绑"—— 卡死时它能救回来 */
                 forceRebind = true,
             )
@@ -792,9 +1003,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         id: String,
         transform: (KeyStrokesConfig) -> KeyStrokesConfig,
     ): KeyStrokesConfig? {
+        val before = configStore.find(id)
         val updated = configStore.updateById(id, transform) ?: return null
         configVersion++
         refreshOverlayIfEnabled(id)
+        /*
+         * 媒体引用可能因这次编辑而减少（删了组件 / 换了资源），
+         * 顺手做一次垃圾回收，避免 /data/data 里残留不再被引用的媒体文件。
+         */
+        if (before != null && mediaIdsOf(before) != mediaIdsOf(updated)) {
+            collectMediaGarbage()
+        }
         return updated
     }
 
@@ -802,6 +1021,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         configStore.upsert(config)
         configVersion++
         refreshOverlayIfEnabled(config.id)
+        collectMediaGarbage()
     }
 
     /**
@@ -882,6 +1102,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             groupsVersion++
         }
 
+        // 配置删了，它引用的媒体（若没别处再用）也要一起清
+        collectMediaGarbage()
+
         // 窗口的增删交给服务：它按最新的开关集合自己同步
         refreshOverlay()
         return true
@@ -892,6 +1115,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         configStore.resetToDefault(id)
         configVersion++
         refreshOverlayIfEnabled(id)
+        collectMediaGarbage()
+    }
+
+    /** 一份配置里所有媒体组件引用的资源 id */
+    private fun mediaIdsOf(config: KeyStrokesConfig): Set<String> = buildSet {
+        config.custom.components.forEach { component ->
+            if (component is MediaComponent && component.assetId.isNotBlank()) {
+                add(component.assetId)
+            }
+        }
+    }
+
+    /** 删除不再被任何配置引用的媒体文件 */
+    private fun collectMediaGarbage() {
+        val referenced = configStore.all().flatMapTo(mutableSetOf()) { mediaIdsOf(it) }
+        CustomMediaStore.collectGarbage(referenced)
     }
 
     /* ============================================================
@@ -985,6 +1224,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
          * ① 上次退出时服务可能被系统回收 —— 开关集合与实际状态对不上，先对齐一次。
          */
         scope.launch { syncOverlayState() }
+        scope.launch { autoConnectAdbIfNeeded() }
 
         /*
          * ② 采集能力（root / Shizuku / 无障碍）是**外部状态**，持续同步进来。

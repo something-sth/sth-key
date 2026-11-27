@@ -131,6 +131,7 @@ enum class CaptureState(val label: String) {
 enum class CaptureChannel(val label: String) {
     ROOT("Root"),
     SHIZUKU("Shizuku"),
+    ADB("ADB"),
     GAMEPAD("手柄"),
     TOUCH("触屏"),
     ACCESSIBILITY("无障碍"),

@@ -56,6 +56,16 @@
   /* 按键组合 → 动作（Mver config.json 的 l2d_motion / l2d_motion_lockhand） */
   const MOTION_BINDINGS = Array.isArray(window.__BONGO_MOTION_BINDINGS) ? window.__BONGO_MOTION_BINDINGS : [];
 
+  /* 水印：导入器从 DisplayInfo 里读出的参数/部件 id */
+  const WATERMARK_PARAMETERS = Array.isArray(window.__BONGO_WATERMARK_PARAMETERS)
+    ? window.__BONGO_WATERMARK_PARAMETERS.map((id) => String(id || '')).filter(Boolean)
+    : [];
+  const WATERMARK_PARTS = Array.isArray(window.__BONGO_WATERMARK_PARTS)
+    ? window.__BONGO_WATERMARK_PARTS.map((id) => String(id || '')).filter(Boolean)
+    : [];
+  let HIDE_WATERMARK = false;
+  let WATERMARK_RESTORE = null;
+
   /*
    * Mver 手部贴图：按下哪个键就把对应编号的手 PNG 盖在模型上，
    * 同时把模型手臂参数设为 1 收起来（不然两双手会同时出现）。
@@ -706,6 +716,12 @@
     setFrameRate(fps) {
       const value = Math.max(1, Math.min(240, Number(fps) || 60));
       FRAME_INTERVAL = 1000 / value;
+    },
+
+    setHideWatermark(hidden) {
+      HIDE_WATERMARK = Boolean(hidden);
+      console.log('[watermark] setHideWatermark hidden=' + hidden);
+      if (renderer) renderer.applyWatermark();
     },
 
     setExpression(index) {
@@ -1659,6 +1675,12 @@
       this.applyExpression();
 
       /*
+       * 去水印必须在动作/表情之后：否则表情会把水印参数又写回来。
+       * Axon 也是这个顺序。
+       */
+      this.applyWatermark();
+
+      /*
        * 物理放在**最后**：它读的是"呼吸/眨眼/覆盖/表情"算完之后的参数，
        * 再把结果写给头发/尾巴这类输出参数。
        */
@@ -1709,6 +1731,62 @@
         else if (blend === 'Overwrite') next = value;
         else next = current + value;
         this.parameters.values[index] = this.clamp(index, next);
+      }
+    }
+
+    applyWatermark() {
+      /*
+       * 参数：在动作/表情之后直接压到 off。
+       * 关闭开关时这里什么都不做，下一帧 prepareParameters 会先把值重置为默认，
+       * 再由动作/表情算出正常值，因此参数天然恢复。
+       */
+      for (const id of WATERMARK_PARAMETERS) {
+        const index = this.paramIndex.get(id);
+        if (index === undefined) continue;
+        const min = this.parameters.minimumValues[index];
+        const max = this.parameters.maximumValues[index];
+        if (HIDE_WATERMARK) {
+          this.parameters.values[index] = (min <= 0 && max >= 0) ? 0 : min;
+        }
+      }
+
+      const parts = this.model && this.model.parts;
+      const partIds = parts && Array.isArray(parts.ids) ? parts.ids : null;
+
+      if (!HIDE_WATERMARK) {
+        /*
+         * 关闭：恢复之前记录的 part opacity。
+         * ⚠️ parts.opacities 是 Float32Array，不是普通 Array，
+         * 之前用 Array.isArray 判断永远 false，导致恢复被跳过 ——
+         * 这就是「开启后关不掉」的真正原因。
+         */
+        if (WATERMARK_RESTORE && parts && parts.opacities && parts.opacities.length) {
+          for (const item of WATERMARK_RESTORE.parts) {
+            parts.opacities[item[0]] = item[1];
+          }
+          WATERMARK_RESTORE = null;
+        }
+        return;
+      }
+
+      if (!partIds) return;
+      const hiddenParts = [];
+      for (const id of WATERMARK_PARTS) {
+        const index = partIds.indexOf(id);
+        if (index >= 0) hiddenParts.push(index);
+      }
+      if (hiddenParts.length === 0) return;
+
+      /* 开启：先记录原始 part opacity（只记一次），再压 0 */
+      const restore = WATERMARK_RESTORE || { parts: [] };
+      WATERMARK_RESTORE = restore;
+      const seen = new Set(restore.parts.map((item) => item[0]));
+      for (const partIndex of hiddenParts) {
+        if (!seen.has(partIndex)) {
+          restore.parts.push([partIndex, parts.opacities[partIndex]]);
+          seen.add(partIndex);
+        }
+        parts.opacities[partIndex] = 0;
       }
     }
 

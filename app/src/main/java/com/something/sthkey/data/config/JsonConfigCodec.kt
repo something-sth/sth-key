@@ -995,6 +995,7 @@ object JsonConfigCodec {
                 JSONObject().apply {
                     put("modelId", config.live2d.modelId)
                     put("opacityPercent", config.live2d.opacityPercent)
+                    put("hideWatermark", config.live2d.hideWatermark)
                     if (config.live2d.expression >= 0) {
                         put("expression", config.live2d.expression)
                     }
@@ -1489,6 +1490,7 @@ object JsonConfigCodec {
              */
             opacityPercent = json.optInt("opacityPercent", defaults.opacityPercent)
                 .coerceIn(20, 100),
+            hideWatermark = json.optBoolean("hideWatermark", defaults.hideWatermark),
             expression = json.optInt("expression", defaults.expression).coerceAtLeast(-1),
             expressionBindings = json.optJSONArray("expressionBindings")?.let { array ->
                 buildList {

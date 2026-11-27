@@ -1,6 +1,7 @@
 package com.something.sthkey
 
 import android.app.Application
+import android.content.Context
 import android.os.Build
 import android.os.Process
 import com.something.sthkey.capture.CaptureController
@@ -36,6 +37,31 @@ import com.something.sthkey.domain.overlay.OverlayLayouts
  * （子进程里重复初始化）隔得很远，很难定位。
  */
 class SthKeyApplication : Application() {
+
+    override fun attachBaseContext(base: Context) {
+        super.attachBaseContext(base)
+        /*
+         * ADB 无线调试配对走 TLS 1.3，libadb 需要平台 Conscrypt 的
+         * `exportKeyingMaterial`（hidden API）。Android 9+ 不加豁免会抛
+         * `NoSuchMethodException: Conscrypt.exportKeyingMaterial`。
+         */
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            runCatching {
+                org.lsposed.hiddenapibypass.HiddenApiBypass.addHiddenApiExemptions("L")
+            }
+            /* 诊断：确认 libadb 需要的 hidden API 真的可见（Android 16 上尤其要看） */
+            val visible = runCatching {
+                Class.forName("com.android.org.conscrypt.Conscrypt").getMethod(
+                    "exportKeyingMaterial",
+                    javax.net.ssl.SSLSocket::class.java,
+                    String::class.java,
+                    ByteArray::class.java,
+                    Int::class.java,
+                )
+            }.isSuccess
+            android.util.Log.i("App", "hidden API exportKeyingMaterial=$visible")
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()

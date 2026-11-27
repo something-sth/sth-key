@@ -6,11 +6,18 @@
         背景透明，避免冷启动时闪一层纯色底。
     -->
     <style name="Theme.SthKey" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowBackground">@color/window_background</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar" tools:targetApi="m">true</item>
     </style>
 
+    <!--
+        ADB 激活页专用：透明窗口 + 半透明，让下层引导页在滑动时可见，
+        避免透明背景在窗口切换时露出黑底（用户说的"渐黑"）。
+    -->
+    <style name="Theme.SthKey.AdbActivation" parent="Theme.SthKey">
+        <item name="android:windowBackground">@color/window_background</item>
+    </style>
 
 </resources>

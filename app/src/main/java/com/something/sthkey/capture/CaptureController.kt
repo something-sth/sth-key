@@ -1,6 +1,9 @@
 package com.something.sthkey.capture
 
 import com.something.sthkey.capture.shizuku.ShizukuGeteventInputSource
+import com.something.sthkey.capture.adb.AdbAuthorization
+import com.something.sthkey.capture.shell.AdbShellLauncher
+import com.something.sthkey.capture.gamepad.AdbGamepadLauncher
 import com.something.sthkey.capture.accessibility.AccessibilityGrant
 import com.something.sthkey.capture.accessibility.AccessibilityInputSource
 import com.something.sthkey.capture.accessibility.SthKeyAccessibilityService
@@ -352,7 +355,8 @@ object CaptureController {
          * ⚠️ 只在**已经拿到特权**时才做；拿不到就跳过（那种情况只能靠用户手动开）。
          * ⚠️ 失败**不报错** —— 它只是"保障"，主流程不该因为它失败而中断。
          */
-        if (!SthKeyAccessibilityService.isConnected() && (root.available || shizuku)) {
+        val adbReady = AdbAuthorization.isConnected()
+        if (!SthKeyAccessibilityService.isConnected() && (root.available || shizuku || adbReady)) {
             runCatching {
                 /*
                  * ⚠️ `appContext` 是**可空的**（未初始化时为 null）——
@@ -364,6 +368,7 @@ object CaptureController {
                 val result = AccessibilityGrant.grant(
                     context = ctx,
                     useRoot = root.available,
+                    useAdb = !root.available && !shizuku && adbReady,
                 )
                 if (result.ok) {
                     AppLog.i(TAG, "已用 shell 自动开启无障碍服务")
@@ -379,6 +384,7 @@ object CaptureController {
             rootAvailable = root.available,
             rootDetail = root.detail,
             shizukuReady = shizuku,
+            adbReady = AdbAuthorization.isConnected(),
             accessibilityReady = SthKeyAccessibilityService.isConnected(),
         )
     }
@@ -452,6 +458,7 @@ object CaptureController {
             rootAvailable = rootProbe.available,
             rootDetail = rootProbe.detail,
             shizukuReady = shizukuReady,
+            adbReady = AdbAuthorization.isConnected(),
             /*
              * ⚠️ **每次启动都现探**，不要缓存。
              *
@@ -510,7 +517,7 @@ object CaptureController {
              * 复制到 `/data/local/tmp` + `chmod 700` + `exec`
              * 这套流程两条通道通用（`/data/local/tmp` shell 也可写）。
              */
-            startGamepadMonitor(ShizukuGamepadLauncher())
+            startGamepadMonitor(ShizukuGamepadLauncher(), gamepadFallbacks("Shizuku"))
             /*
              * ⚠️ 触摸采集用**同一个** launcher（同一条通道）。
              * 它不一定需要（没有触屏窗口时 [touchNeeded] 是 false），
@@ -520,6 +527,26 @@ object CaptureController {
             resolvedTouchLauncher = ShizukuGamepadLauncher()
             syncTouchCapture()
             return startSource(ShizukuGeteventInputSource(), "Shizuku 直连")
+        }
+
+        if (resolved.mode == KeyMode.ADB) {
+            if (!AdbAuthorization.isConnected()) {
+                CaptureSession.updateState(
+                    CaptureState.FAILED,
+                    "ADB 未连接，请到引导页 / 采集通道页完成授权",
+                )
+                return false
+            }
+            startGamepadMonitor(AdbGamepadLauncher(), gamepadFallbacks("ADB"))
+            resolvedTouchLauncher = AdbGamepadLauncher()
+            syncTouchCapture()
+            return startSource(
+                ShizukuGeteventInputSource(
+                    launcher = AdbShellLauncher(),
+                    channel = CaptureChannel.ADB,
+                ),
+                "ADB 直连",
+            )
         }
 
         /*
@@ -578,7 +605,7 @@ object CaptureController {
                  * ⚠️ Shizuku 通道在**上面**也启动了同一个 monitor，
                  * 只是换成 [ShizukuGamepadLauncher]（见那边的说明）。
                  */
-                startGamepadMonitor(RootGamepadLauncher())
+                startGamepadMonitor(RootGamepadLauncher(), gamepadFallbacks("root"))
                 /* ⚠️ 触摸采集同一条通道，见上面 Shizuku 分支的说明 */
                 resolvedTouchLauncher = RootGamepadLauncher()
                 syncTouchCapture()
@@ -1112,7 +1139,24 @@ object CaptureController {
      * ⚠️ 这里**必须传参、不能有默认值**:有默认值的话，将来新增一条通道时
      * 会静默地用了错误的 launcher（手柄没反应，但看不出哪里错了）。
      */
-    private fun startGamepadMonitor(launcher: GamepadProcessLauncher) {
+    /**
+     * 主通道起不来时的备用通道。
+     *
+     * 手柄 helper 和采集通道可以不同：比如 getevent 走 ADB，轴仍可以用 Shizuku
+     * 起 helper。这样某一条 shell 暂时失效时，摇杆/扳机不会直接没反应。
+     */
+    private fun gamepadFallbacks(primary: String): List<GamepadProcessLauncher> = buildList {
+        if (primary != "ADB" && AdbAuthorization.isConnected()) add(AdbGamepadLauncher())
+        if (primary != "Shizuku" && com.something.sthkey.capture.shizuku.ShizukuShell.hasPermission()) {
+            add(ShizukuGamepadLauncher())
+        }
+        if (primary != "root" && capabilities.value.rootAvailable) add(RootGamepadLauncher())
+    }
+
+    private fun startGamepadMonitor(
+        launcher: GamepadProcessLauncher,
+        fallbackLaunchers: List<GamepadProcessLauncher> = emptyList(),
+    ) {
         if (gamepadMonitor?.isRunning() == true) return
 
         val context = appContext ?: return
@@ -1120,6 +1164,7 @@ object CaptureController {
         val monitor = GamepadNativeMonitor(
             context = context,
             launcher = launcher,
+            fallbackLaunchers = fallbackLaunchers,
             onReady = { detail ->
                 AppLog.i(TAG, "手柄已连接：$detail")
                 /*

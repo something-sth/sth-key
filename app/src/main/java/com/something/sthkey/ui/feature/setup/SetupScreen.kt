@@ -1,5 +1,13 @@
 package com.something.sthkey.ui.feature.setup
 
+import android.Manifest
+import android.content.Intent
+import com.something.sthkey.R
+import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,8 +24,11 @@ import androidx.compose.material.icons.filled.Accessibility
 import androidx.compose.material.icons.filled.BatteryAlert
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.Icons
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -26,6 +37,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -49,6 +61,7 @@ import com.something.sthkey.data.permission.PermissionHelper
 import com.something.sthkey.ui.component.findActivity
 import com.something.sthkey.ui.component.ScreenScaffold
 import com.something.sthkey.ui.component.SectionHeader
+import com.something.sthkey.ui.component.collapsibleSection
 import com.something.sthkey.ui.component.SettingsCard
 import com.something.sthkey.ui.MainViewModel
 
@@ -97,10 +110,22 @@ fun SetupScreen(
     }
     var showSkipDialog by remember { mutableStateOf(false) }
 
+    /** Shell 授权折叠盒：默认收起，里面是 Shizuku + ADB */
+    var shellExpanded by remember { mutableStateOf(false) }
+    val adbActivationLauncher = rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            viewModel.refreshAdbState()
+            onFinished()
+        }
+    }
+
     /** 从系统页面返回时重新检查 */
     fun recheck() {
         accessibilityOn = SthKeyAccessibilityService.isConnected()
         batteryIgnored = PermissionHelper.isIgnoringBatteryOptimizations(context)
+        viewModel.refreshAdbState()
     }
 
     DisposableEffect(lifecycleOwner) {
@@ -108,6 +133,7 @@ fun SetupScreen(
             if (event == Lifecycle.Event.ON_RESUME) {
                 recheck()
                 viewModel.refreshCapabilities(force = true)
+                viewModel.refreshAdbPort()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -138,7 +164,7 @@ fun SetupScreen(
      * | 有 shell | [canGrantByShell] | ⚠️ **什么都不用做** —— 我们启动时自动开无障碍 |
      * | 只有无障碍 | `accessibilityOn` | 用户自己点一下（没有别的路） |
      */
-    val canGrantByShell = rootAvailable || shizukuGranted
+    val canGrantByShell = rootAvailable || shizukuGranted || viewModel.capabilities.adbReady
 
     /** 三条通道任一可用（用户说的"三者其一"） */
     val captureReady = canGrantByShell || accessibilityOn
@@ -199,7 +225,7 @@ fun SetupScreen(
                  * - Root:只看 `rootAvailable`
                  * 「有 shell 时无障碍会自动开」这条信息放在 summary 里说明，不参与打勾。
                  */
-                item { SectionHeader("采集模式（三选一）") }
+                item { SectionHeader("采集模式") }
 
                 item {
                     SetupCard(
@@ -207,14 +233,7 @@ fun SetupScreen(
                         title = "无障碍授权",
                         required = !canGrantByShell,
                         granted = accessibilityOn,
-                        summary = when {
-                            accessibilityOn -> "已开启：可显示悬浮窗，也能直接读取键盘按键"
-                            canGrantByShell ->
-                                "会自动开启（你有 root / Shizuku，启动时我们替你开）"
-                            else -> "需要开启：悬浮窗要靠它显示"
-                        },
-                        detail = "无障碍模式只支持物理键盘按键；" +
-                            "鼠标、手柄摇杆与触摸读不到，那些需要 root 或 Shizuku。",
+                        summary = "兼容性最好，但功能不完整，只支持读物理键盘",
                         actionLabel = when {
                             accessibilityOn -> null
                             canGrantByShell -> "立即开启"
@@ -231,20 +250,64 @@ fun SetupScreen(
                 }
 
                 item {
-                    SetupCard(
-                        icon = Icons.Default.Key,
-                        title = "Shizuku 授权",
-                        required = false,
-                        granted = shizukuGranted,
-                        summary = if (shizukuGranted) {
-                            "已授权，可作为 root 之外的采集通道"
-                        } else {
-                            "没有 root 时用它读取按键（鼠标 / 手柄 / 触摸都能读）"
-                        },
-                        isBusy = viewModel.isProbing,
-                        actionLabel = if (shizukuGranted || viewModel.isProbing) null else "申请授权",
-                        onAction = { viewModel.requestShizukuPermission(context.findActivity()) },
-                    )
+                    SettingsCard {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { shellExpanded = !shellExpanded }
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Terminal,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                text = "Shell 授权",
+                                style = MaterialTheme.typography.titleMedium,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Icon(
+                                imageVector = if (shellExpanded) {
+                                    Icons.Default.KeyboardArrowUp
+                                } else {
+                                    Icons.Default.KeyboardArrowDown
+                                },
+                                contentDescription = if (shellExpanded) "收起" else "展开",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+
+                if (shellExpanded) {
+                    item {
+                        SetupCard(
+                            icon = Icons.Default.Key,
+                            title = "Shizuku 授权",
+                            required = false,
+                            granted = shizukuGranted,
+                            summary = "功能完整，适合大多数设备",
+                            isBusy = viewModel.isProbing,
+                            actionLabel = if (shizukuGranted || viewModel.isProbing) null else "申请授权",
+                            onAction = { viewModel.requestShizukuPermission(context.findActivity()) },
+                        )
+                    }
+
+                    item {
+                        AdbSetupCard(viewModel = viewModel) {
+                            adbActivationLauncher.launch(
+                                Intent(context, AdbActivationActivity::class.java),
+                                androidx.core.app.ActivityOptionsCompat.makeCustomAnimation(
+                                    context,
+                                    R.anim.adb_slide_in,
+                                    0,
+                                ),
+                            )
+                        }
+                    }
                 }
 
                 item {
@@ -254,15 +317,10 @@ fun SetupScreen(
                         required = false,
                         granted = rootAvailable,
                         summary = if (rootAvailable) {
-                            "已检测到 root，可读取全部输入"
+                            "功能完整，设备已 root"
                         } else {
-                            "没有 root 就用 Shizuku 或无障碍"
+                            "功能完整，适合已 root 的设备"
                         },
-                        detail = buildList {
-                            add("Root：" + if (rootAvailable) viewModel.capabilities.rootDetail else "不可用")
-                            add("Shizuku：" + if (shizukuGranted) "已授权" else "未授权")
-                            add("无障碍：" + if (accessibilityOn) "已开启（仅键盘）" else "未开启")
-                        }.joinToString("\n"),
                         isBusy = viewModel.isProbing,
                         actionLabel = if (viewModel.isProbing) null else "检测 Root",
                         onAction = { viewModel.refreshCapabilities(force = true) },
@@ -435,16 +493,6 @@ private fun SetupCard(
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(18.dp),
                     )
-                } else {
-                    Text(
-                        text = if (required) "必需" else "建议",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (required) {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                    )
                 }
             }
 
@@ -474,4 +522,38 @@ private fun SetupCard(
             }
         }
     }
+}
+
+/**
+ * ADB 授权卡片（Shell 折叠盒里的第二张）。
+ *
+ * 按钮三态：
+ * - 有 5555：`通过 5555 端口启动`
+ * - 无端口、Android 11+：`启动` + `配对`
+ * - 无端口、Android 10-：`不可用`
+ */
+/**
+ * ADB 授权卡片（Shell 折叠盒里的第二张）。
+ *
+ * 配对码不再在应用内输入：点「配对」会打开开发者设置并挂一个**通知**，
+ * 用户在通知栏的输入框里填 6 位码，配对服务收到后再调用 pair()。
+ */
+@Composable
+private fun AdbSetupCard(viewModel: MainViewModel, onOpenActivation: () -> Unit) {
+    val port = viewModel.adbPort
+    val connected = viewModel.adbStatus.startsWith("已连接")
+
+    LaunchedEffect(Unit) { viewModel.refreshAdbPort() }
+
+    SetupCard(
+        icon = Icons.Default.Terminal,
+        title = "ADB 授权",
+        required = false,
+        granted = connected,
+        summary = "功能完整，较为便捷",
+        detail = if (connected) null else viewModel.adbStatus,
+        isBusy = viewModel.adbBusy,
+        actionLabel = "启动",
+        onAction = onOpenActivation,
+    )
 }

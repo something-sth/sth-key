@@ -17,6 +17,9 @@ materialColorUtilities = "4.0.5"
 materialKolor = "5.0.1"
 
 [libraries]
+libadb = { group = "com.github.MuntashirAkon", name = "libadb-android", version = "3.1.1" }
+hiddenapi-bypass = { group = "org.lsposed.hiddenapibypass", name = "hiddenapibypass", version = "6.1" }
+sun-security = { group = "com.github.MuntashirAkon", name = "sun-security-android", version = "1.1" }
 material-color-utilities = { module = "com.materialkolor:material-color-utilities-android", version.ref = "materialColorUtilities" }
 material-kolor = { module = "com.materialkolor:material-kolor", version.ref = "materialKolor" }
 # --- 基础 ---

@@ -3,6 +3,8 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <!-- 悬浮窗按键显示：需要系统级悬浮窗权限 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- 长时间后台采集输入：引导用户忽略电池优化 -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
@@ -76,6 +78,12 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <activity
+            android:name=".ui.feature.setup.AdbActivationActivity"
+            android:exported="false"
+            android:theme="@style/Theme.SthKey.AdbActivation"
+            android:windowSoftInputMode="adjustResize" />
 
         <activity
             android:name=".MainActivity"
@@ -233,6 +241,15 @@
             前台服务 + specialUse 类型：悬浮窗需要长时间存活，
             普通后台服务在 Android 12+ 很容易被冻结回收（窗口会直接消失）。
         -->
+        <service
+            android:name=".capture.adb.AdbPairingService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="ADB 无线调试配对：在通知栏输入配对码" />
+        </service>
+
         <service
             android:name=".capture.OverlayService"
             android:exported="false"

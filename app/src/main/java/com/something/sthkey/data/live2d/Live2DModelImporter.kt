@@ -353,6 +353,7 @@ object Live2DModelImporter {
         // 5. 生成页面
         /* ⚠️ Mver 风格包（自带逐键 PNG 手）不能去收模型手臂，见 writeModelData 的说明 */
         val expressions = loadExpressions(modelJson, modelBase, dir)
+        val (watermarkParams, watermarkParts) = loadWatermarkIds(modelJson, modelBase, dir)
         val (motions, motionGroups) = loadMotions(modelJson, modelBase, dir)
         writeModelData(
             dir = dir,
@@ -373,6 +374,8 @@ object Live2DModelImporter {
             placement = Live2DMverConfig.loadLayout(dir),
             design = Live2DMverConfig.loadDesign(dir),
             face = Live2DMverConfig.loadFaceSprites(dir, null, dir),
+            watermarkParameters = watermarkParams,
+            watermarkParts = watermarkParts,
         )
         File(dir, Live2DModels.ENTRY_INDEX).writeText(buildHtml(layout))
 
@@ -385,6 +388,8 @@ object Live2DModelImporter {
             // 必须在补齐键帽**之后**算，而且要把透明占位排除掉（见 providedKeycaps）
             supportedKeys = resourceDir?.let { providedKeycaps(it) }.orEmpty(),
             expressions = expressionNames(expressions),
+            watermarkParameters = watermarkParams,
+            watermarkParts = watermarkParts,
         )
 
         val notes = buildList {
@@ -613,6 +618,8 @@ object Live2DModelImporter {
 
         /* ② 逐套建页面 */
         val supportedKeys = mutableSetOf<String>()
+        val watermarkParams = mutableSetOf<String>()
+        val watermarkParts = mutableSetOf<String>()
         var adaptedCount = 0
         var adaptedSample = 1
 
@@ -656,6 +663,10 @@ object Live2DModelImporter {
 
             val variantExpressions = loadExpressions(json, modelBase, dir)
             if (firstExpressions.isEmpty()) firstExpressions = expressionNames(variantExpressions)
+            val (variantWatermarkParams, variantWatermarkParts) =
+                loadWatermarkIds(json, modelBase, dir)
+            watermarkParams += variantWatermarkParams
+            watermarkParts += variantWatermarkParts
             val (variantMotions, variantMotionGroups) = loadMotions(json, modelBase, dir)
             writeModelData(
                 dir = variant.root,
@@ -686,6 +697,8 @@ object Live2DModelImporter {
                 placement = Live2DMverConfig.loadLayout(dir),
                 design = Live2DMverConfig.loadDesign(dir),
                 face = Live2DMverConfig.loadFaceSprites(dir, variant.configMode(), variant.root),
+                watermarkParameters = variantWatermarkParams,
+                watermarkParts = variantWatermarkParts,
             )
             File(variant.root, Live2DModels.ENTRY_INDEX).writeText(buildHtml(variant.layout))
             AppLog.i(TAG, "已生成变体页面：${variant.name}（${variant.pageDir}）")
@@ -700,6 +713,8 @@ object Live2DModelImporter {
             supportedKeys = supportedKeys,
             variants = plan.map { Live2DVariant(name = it.name, pageDir = it.pageDir) },
             expressions = firstExpressions,
+            watermarkParameters = watermarkParams.toList(),
+            watermarkParts = watermarkParts.toList(),
         )
 
         val notes = buildList {
@@ -890,6 +905,9 @@ object Live2DModelImporter {
         design: JSONObject? = null,
         /** Mver 表情贴图（face/） */
         face: JSONObject? = null,
+        /** DisplayInfo 声明为水印的参数/部件 id */
+        watermarkParameters: List<String> = emptyList(),
+        watermarkParts: List<String> = emptyList(),
     ) {
         val texturePaths = JSONArray().apply {
             textures.forEach { put(relativePath(dir, it)) }
@@ -943,6 +961,14 @@ object Live2DModelImporter {
             out.write("window.__BONGO_LAYOUT=${placement?.toString() ?: "null"};\n")
             out.write("window.__BONGO_DESIGN=${design?.toString() ?: "null"};\n")
             out.write("window.__BONGO_FACE=${face?.toString() ?: "null"};\n")
+            out.write(
+                "window.__BONGO_WATERMARK_PARAMETERS=" +
+                    JSONArray().apply { watermarkParameters.forEach { put(it) } } + ";\n",
+            )
+            out.write(
+                "window.__BONGO_WATERMARK_PARTS=" +
+                    JSONArray().apply { watermarkParts.forEach { put(it) } } + ";\n",
+            )
         }
     }
 
@@ -1614,6 +1640,44 @@ object Live2DModelImporter {
      * 为什么不是"只摘要 model3.json"：那个文件很小，两个不同模型完全可能共用同一份
      * （比如同一个角色换贴图），只摘要它就会把不同模型判成同一个。
      */
+    /**
+     * 解析 DisplayInfo 里名字含「水印」/「watermark」的参数与部件。
+     * 只认模型自己声明的，猜不出来就返回空 —— 不误伤普通参数。
+     */
+    private fun loadWatermarkIds(
+        modelJson: JSONObject,
+        modelBase: File,
+        root: File,
+    ): Pair<List<String>, List<String>> {
+        val displayInfo = modelJson.optJSONObject("FileReferences")
+            ?.optString("DisplayInfo")
+            .orEmpty()
+        if (displayInfo.isBlank()) return emptyList<String>() to emptyList()
+        val file = resolveInside(modelBase, displayInfo, root) ?: return emptyList<String>() to emptyList()
+        if (!file.isFile) return emptyList<String>() to emptyList()
+        return runCatching {
+            val json = JSONObject(file.readText())
+            fun collect(key: String): List<String> {
+                val array = json.optJSONArray(key) ?: return emptyList()
+                return buildList {
+                    for (index in 0 until array.length()) {
+                        val item = array.optJSONObject(index) ?: continue
+                        val id = item.optString("Id").trim()
+                        val name = item.optString("Name").lowercase()
+                        if (id.isNotEmpty() && (name.contains("水印") || name.contains("watermark"))) {
+                            add(id)
+                        }
+                    }
+                }
+            }
+            val result = collect("Parameters") to collect("Parts")
+            if (result.first.isNotEmpty() || result.second.isNotEmpty()) {
+                AppLog.i(TAG, "水印声明：参数=${result.first}，部件=${result.second}")
+            }
+            result
+        }.getOrDefault(emptyList<String>() to emptyList())
+    }
+
     private fun computeDigest(dir: File): String {
         val files = dir.walkTopDown()
             /*

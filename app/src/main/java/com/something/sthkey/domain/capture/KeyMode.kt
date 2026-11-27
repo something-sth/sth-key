@@ -44,6 +44,11 @@ enum class KeyMode(val id: String, val label: String, val description: String) {
         label = "Shizuku",
         description = "强制使用 Shizuku（shell 身份）读取输入设备",
     ),
+    ADB(
+        id = "adb",
+        label = "ADB",
+        description = "用 ADB shell（配对或 5555 端口）读取输入；能力与 Shizuku 相同",
+    ),
     ACCESSIBILITY(
         id = "accessibility",
         label = "无障碍",
