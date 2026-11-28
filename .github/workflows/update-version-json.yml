@@ -60,11 +60,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
+          # 用 REST API（curl）而不是 `gh release view --json`：
+          # gh 的 --json 输出是 camelCase，字段名容易踩坑；REST 的 snake_case 是稳定契约。
+          # 带 token 的请求限额 5000 次/小时，远超需要。
+          #
           # Release 可能比 tag 晚几秒创建，重试几次；实在没有也不失败（先写版本号，之后可手动补跑）
           for i in 1 2 3 4 5; do
-            if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
-                 --json body,url,assets,tagName > release.json 2>/dev/null; then
+            if curl -sf --retry 2 --max-time 20 \
+                 -H "Authorization: Bearer $GH_TOKEN" \
+                 -H "Accept: application/vnd.github+json" \
+                 -H "User-Agent: sth-key-release-sync" \
+                 "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$TAG" \
+                 -o release.json; then
               echo "found=true" >> "$GITHUB_OUTPUT"
+              echo "Release $TAG 已找到"
               exit 0
             fi
             echo "Release $TAG 还没出现，${i}/5 次，等 10s..."
@@ -72,6 +81,7 @@ jobs:
           done
           echo '{}' > release.json
           echo "found=false" >> "$GITHUB_OUTPUT"
+          echo "Release $TAG 始终没找到，只写版本号"
 
       - name: Write update/version.json
         env:
@@ -79,7 +89,10 @@ jobs:
           FOUND: ${{ steps.rel.outputs.found }}
         run: |
           python3 <<'PY'
-          import json, os, re
+          import datetime
+          import json
+          import os
+          import re
 
           tag = os.environ["TAG"].strip()
           found = os.environ.get("FOUND") == "true"
@@ -99,16 +112,14 @@ jobs:
           download_url = ""
           for asset in release.get("assets") or []:
               if asset.get("name", "").lower().endswith(".apk"):
-                  # ⚠️ `gh release view --json` 输出是 **camelCase**（browserDownloadUrl），
-                  # 不是 REST API 的 snake_case（browser_download_url）—— 两种都兜着
-                  download_url = (
-                      asset.get("browserDownloadUrl")
-                      or asset.get("browser_download_url")
-                      or ""
-                  )
+                  # REST API 字段：browser_download_url（snake_case）
+                  download_url = asset.get("browser_download_url") or ""
                   break
 
-          page_url = release.get("url") or f"https://github.com/{os.environ.get('GITHUB_REPOSITORY')}/releases/tag/{tag}"
+          page_url = (
+              release.get("html_url")
+              or f"https://github.com/{os.environ.get('GITHUB_REPOSITORY')}/releases/tag/{tag}"
+          )
 
           data = {
               "versionCode": version_code,
@@ -117,6 +128,8 @@ jobs:
               "pageUrl": page_url,
               "downloadUrl": download_url,
               "notes": (release.get("body") or "").strip(),
+              # 每次运行都会变 → 便于从提交里确认"这次到底跑没跑/取到了什么"
+              "generatedAt": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
           }
 
           os.makedirs("update", exist_ok=True)
