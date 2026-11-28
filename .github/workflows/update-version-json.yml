@@ -1,16 +1,30 @@
 name: Update update/version.json
 
-# 发布 Release 时自动更新「检查更新」用的 version.json。
+# ============================================================
+# 为什么用「tag push」而不是「release published」
+# ============================================================
+# 最初写的是 `on: release: types: [published]`。但 v2.8.8 实测：
+# 发布 Release 时 GitHub 会同时创建 tag，而如果那次提交/推送与发布几乎同时，
+# release 事件拿到的默认分支快照里可能还没有这个工作流文件 —— 结果**一次都没触发**。
 #
-# 为什么需要它：客户端主数据源是 jsDelivr 上的仓库文件（api.github.com 在国内
-# 经常不通），所以发版后必须让这个文件跟上，否则客户端会一直看到旧版本。
+# tag push 是更可靠的锚点：网页上「Publish release」一定会创建 tag，
+# 只要 tag 推上来时工作流文件已在 master 上，就必然触发。
+#
+# 另外保留 `workflow_dispatch`：用来手动补跑（比如上次没触发，想回填 downloadUrl / release 正文）。
 #
 # ⚠️ versionCode 规则与 app/build.gradle.kts 一致：major*100 + minor*10 + patch
 #    （2.8.7 → 287，2.8.8 → 288）。改规则时两处要一起改。
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要写入的 tag（留空 = 仓库里最新的 tag）"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -19,24 +33,56 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout master
         uses: actions/checkout@v4
         with:
           ref: master
+          fetch-depth: 0
+
+      - name: Resolve tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"
+          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="$(git describe --tags --abbrev=0)"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "本次写入 tag: $TAG"
+
+      - name: Fetch release metadata
+        id: rel
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          # Release 可能比 tag 晚几秒创建，重试几次；实在没有也不失败（先写版本号，之后可手动补跑）
+          for i in 1 2 3 4 5; do
+            if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+                 --json body,url,assets,tagName > release.json 2>/dev/null; then
+              echo "found=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Release $TAG 还没出现，${i}/5 次，等 10s..."
+            sleep 10
+          done
+          echo '{}' > release.json
+          echo "found=false" >> "$GITHUB_OUTPUT"
 
       - name: Write update/version.json
         env:
-          TAG: ${{ github.event.release.tag_name }}
-          URL: ${{ github.event.release.html_url }}
-          NOTES: ${{ github.event.release.body }}
-          ASSETS: ${{ toJson(github.event.release.assets) }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          FOUND: ${{ steps.rel.outputs.found }}
         run: |
           python3 <<'PY'
           import json, os, re
 
-          tag = (os.environ.get("TAG") or "").strip()
-          url = (os.environ.get("URL") or "").strip()
-          notes = (os.environ.get("NOTES") or "").strip()
+          tag = os.environ["TAG"].strip()
+          found = os.environ.get("FOUND") == "true"
 
           match = re.search(r"(\d+)\.(\d+)\.(\d+)", tag)
           if not match:
@@ -45,21 +91,26 @@ jobs:
           version_code = major * 100 + minor * 10 + patch
           version_name = f"{major}.{minor}.{patch}"
 
-          assets = json.loads(os.environ.get("ASSETS") or "[]")
+          release = {}
+          if found:
+              with open("release.json", encoding="utf-8") as f:
+                  release = json.load(f)
+
           download_url = ""
-          for asset in assets:
-              name = asset.get("name", "")
-              if name.lower().endswith(".apk"):
+          for asset in release.get("assets", []):
+              if asset.get("name", "").lower().endswith(".apk"):
                   download_url = asset.get("browser_download_url", "")
                   break
+
+          page_url = release.get("url") or f"https://github.com/{os.environ.get('GITHUB_REPOSITORY')}/releases/tag/{tag}"
 
           data = {
               "versionCode": version_code,
               "versionName": version_name,
               "tag": tag,
-              "pageUrl": url,
+              "pageUrl": page_url,
               "downloadUrl": download_url,
-              "notes": notes,
+              "notes": (release.get("body") or "").strip(),
           }
 
           os.makedirs("update", exist_ok=True)
@@ -70,6 +121,8 @@ jobs:
           PY
 
       - name: Commit
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -78,5 +131,6 @@ jobs:
             echo "version.json 没变化，跳过提交"
             exit 0
           fi
-          git commit -m "chore(update): 同步 version.json 到 ${TAG}"
+          git commit -m "chore(update): 同步 version.json 到 $TAG"
+          git pull --rebase origin master
           git push origin HEAD:master
