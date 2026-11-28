@@ -97,9 +97,15 @@ jobs:
                   release = json.load(f)
 
           download_url = ""
-          for asset in release.get("assets", []):
+          for asset in release.get("assets") or []:
               if asset.get("name", "").lower().endswith(".apk"):
-                  download_url = asset.get("browser_download_url", "")
+                  # ⚠️ `gh release view --json` 输出是 **camelCase**（browserDownloadUrl），
+                  # 不是 REST API 的 snake_case（browser_download_url）—— 两种都兜着
+                  download_url = (
+                      asset.get("browserDownloadUrl")
+                      or asset.get("browser_download_url")
+                      or ""
+                  )
                   break
 
           page_url = release.get("url") or f"https://github.com/{os.environ.get('GITHUB_REPOSITORY')}/releases/tag/{tag}"
