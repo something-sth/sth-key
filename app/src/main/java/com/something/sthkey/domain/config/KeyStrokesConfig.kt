@@ -681,9 +681,30 @@ data class KeyStrokesConfig(
 }
 
 /**
+ * Live2D 的纯色背景。
+ *
+ * 背景垫在**最底层**（模型、包自带底图都在它上面），所以它只在模型内容透明处
+ * 以及"背景比模型大"留出的边距里可见。
+ *
+ * 关闭时字段照样保存：用户来回切开关，调好的宽高/颜色不丢。
+ */
+data class Live2DBackground(
+    /** 是否显示背景（默认关；老配置解码后也是关，外观零变化） */
+    val enabled: Boolean = false,
+    /** 背景宽 = 模型内容宽 × 这个百分比。20..200，100 = 紧贴模型内容边界 */
+    val widthPercent: Int = 100,
+    /** 背景高 = 模型内容高 × 这个百分比 */
+    val heightPercent: Int = 100,
+    /** 颜色只存 24 位 RGB；不透明度由 [opacityPercent] 单独管 */
+    val color: Long = 0xFFFFFF,
+    /** 背景不透明度 0..100 */
+    val opacityPercent: Int = 100,
+)
+
+/**
  * Live2D（键盘猫）样式的设置。
  *
- * 只有三项真正属于它自己；"整体缩放"是共用的（[KeyStrokesConfig.scalePercent]），
+ * 只有这几项真正属于它自己；"整体缩放"是共用的（[KeyStrokesConfig.scalePercent]），
  * 因为它对两种样式含义相同 —— 都是把内容与窗口一起放大缩小。
  */
 data class Live2DSettings(
@@ -727,6 +748,8 @@ data class Live2DSettings(
      * 默认开；渲染时在动作/表情之后把水印参数压到 0、部件 opacity 压到 0。
      */
     val hideWatermark: Boolean = true,
+    /** 纯色背景；与模型无关，每个 Live2D 配置各一套 */
+    val background: Live2DBackground = Live2DBackground(),
 )
 
 /** 表情快捷键绑定：`keys` 是一组"同时按下"的键码 */

@@ -158,6 +158,47 @@ class AppPrefs private constructor(context: Context) {
 
     /*
      * ============================================================
+     * 检查更新
+     * ============================================================
+     * 三个值都只在本机生效：
+     * - 自动检查开关（默认开）
+     * - 上次**成功**检查的时间（用来做 24h 冷却，避免每次启动都请求）
+     * - 用户点了「以后再说」的版本名（同一个版本不再自动弹，手动检查仍会弹）
+     */
+    var updateAutoCheck: Boolean
+        get() = prefs.getBoolean(KEY_UPDATE_AUTO_CHECK, true)
+        set(value) {
+            prefs.edit().putBoolean(KEY_UPDATE_AUTO_CHECK, value).apply()
+        }
+
+    var updateLastCheckAt: Long
+        get() = prefs.getLong(KEY_UPDATE_LAST_CHECK_AT, 0L)
+        set(value) {
+            prefs.edit().putLong(KEY_UPDATE_LAST_CHECK_AT, value).apply()
+        }
+
+    var updateSkippedVersion: String?
+        get() = prefs.getString(KEY_UPDATE_SKIPPED_VERSION, null)
+        set(value) {
+            prefs.edit().putString(KEY_UPDATE_SKIPPED_VERSION, value).apply()
+        }
+
+    /**
+     * **调试用**：把检查更新的数据源换成一个自定义 URL（空 = 用默认的 jsDelivr/GitHub）。
+     *
+     * 为什么要这个：检查更新的正确性依赖"远端返回值"，而远端我们改不了。
+     * 调试时把本机起的 HTTP 服务（模拟器里是 `http://10.0.2.2:端口/...`）填进来，
+     * 就能稳定地构造"有新版本 / 没新版 / 坏 JSON / 超时 / 404"这些场景。
+     * 只在 debug 包里通过 `run-as` 改 prefs 使用，正式包没有入口。
+     */
+    var updateManifestUrlOverride: String?
+        get() = prefs.getString(KEY_UPDATE_MANIFEST_OVERRIDE, null)
+        set(value) {
+            prefs.edit().putString(KEY_UPDATE_MANIFEST_OVERRIDE, value).apply()
+        }
+
+    /*
+     * ============================================================
      * 当前生效的配置
      *
      * 只存 id，不存配置内容本身：配置内容以后由 zip 包承载，
@@ -833,6 +874,10 @@ class AppPrefs private constructor(context: Context) {
         private const val KEY_ADB_EVER_CONNECTED = "adb_ever_connected"
         private const val KEY_SETUP_COMPLETED = "setup_completed"
         private const val KEY_ANNOUNCEMENT_VERSION = "announcement_version"
+        private const val KEY_UPDATE_AUTO_CHECK = "update_auto_check"
+        private const val KEY_UPDATE_LAST_CHECK_AT = "update_last_check_at"
+        private const val KEY_UPDATE_SKIPPED_VERSION = "update_skipped_version"
+        private const val KEY_UPDATE_MANIFEST_OVERRIDE = "update_manifest_url_override"
         private const val KEY_ACTIVE_CONFIG_ID = "active_config_id"
         private const val KEY_CONFIGS_JSON = "configs_json"
         private const val KEY_IMPORTED_FONTS = "imported_fonts"

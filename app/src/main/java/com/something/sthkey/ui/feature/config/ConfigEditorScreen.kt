@@ -73,6 +73,7 @@ import com.something.sthkey.domain.config.AnimationMode
 import com.something.sthkey.domain.config.DEFAULT_CPS_TEMPLATE
 import com.something.sthkey.domain.config.DEFAULT_CPS_TEMPLATE_MODE1
 import com.something.sthkey.domain.config.KeyStrokesConfig
+import com.something.sthkey.domain.config.Live2DBackground
 import com.something.sthkey.domain.config.resetParamsToDefault
 import com.something.sthkey.domain.config.ShadowMode
 import com.something.sthkey.domain.config.TextShadow
@@ -84,6 +85,7 @@ import com.something.sthkey.domain.custom.TextComponent
 import com.something.sthkey.domain.custom.toCustomKeyStyle
 import com.something.sthkey.domain.font.bitmap.BitmapFontImporter
 import com.something.sthkey.domain.font.FontRegistry
+import com.something.sthkey.domain.live2d.Live2DBackgroundGeometry
 import com.something.sthkey.domain.live2d.Live2DModels
 import com.something.sthkey.domain.style.KeyLayout
 import com.something.sthkey.domain.style.StyleId
@@ -2187,6 +2189,32 @@ private fun LazyListScope.live2DStyleSections(
     onPickModel: () -> Unit,
     applyChange: ((KeyStrokesConfig) -> KeyStrokesConfig) -> Unit,
 ) {
+    val background = editable.live2d.background
+    val updateBackground: ((Live2DBackground) -> Live2DBackground) -> Unit = { transform ->
+        applyChange { it.copy(live2d = it.live2d.copy(background = transform(it.live2d.background))) }
+    }
+
+    /* 模型在最上面：它是 Live2D 配置里最要紧的一项 */
+    item { SectionHeader("模型") }
+
+    item {
+        SettingsCard {
+            /*
+             * 模型选择。
+             *
+             * 这里**不再有**"右侧显示方向键还是鼠标"的开关：那两个内置模型
+             * 就是那两页，它们的副标题已经写明"右侧显示方向键/鼠标"。
+             * 再加一个布尔开关就会和 modelId 打架。
+             */
+            SettingItem(
+                title = "当前模型",
+                leadingIcon = Icons.Rounded.ViewInAr,
+                subtitle = modelName,
+                onClick = onPickModel,
+            )
+        }
+    }
+
     item { SectionHeader("外观") }
 
     item {
@@ -2202,6 +2230,69 @@ private fun LazyListScope.live2DStyleSections(
                     applyChange { it.copy(scalePercent = value.toInt()) }
                 },
             )
+
+            CardDivider()
+
+            /* 背景开关。开启后才长出下面三项 —— 关着的时候不占地方 */
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "背景",
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.weight(1f),
+                )
+                com.something.sthkey.ui.component.ExpressiveSwitch(
+                    checked = background.enabled,
+                    onCheckedChange = { enabled ->
+                        updateBackground { it.copy(enabled = enabled) }
+                    },
+                )
+            }
+
+            if (background.enabled) {
+                CardDivider()
+                SliderRow(
+                    label = "宽度",
+                    value = background.widthPercent.toFloat(),
+                    valueRange = Live2DBackgroundGeometry.WIDTH_MIN.toFloat()..
+                        Live2DBackgroundGeometry.WIDTH_MAX.toFloat(),
+                    steps = LIVE2D_BACKGROUND_SIZE_STEPS,
+                    display = "${background.widthPercent}%",
+                    onValueChange = { value ->
+                        updateBackground { it.copy(widthPercent = value.toInt()) }
+                    },
+                )
+
+                CardDivider()
+                SliderRow(
+                    label = "高度",
+                    value = background.heightPercent.toFloat(),
+                    valueRange = Live2DBackgroundGeometry.HEIGHT_MIN.toFloat()..
+                        Live2DBackgroundGeometry.HEIGHT_MAX.toFloat(),
+                    steps = LIVE2D_BACKGROUND_SIZE_STEPS,
+                    display = "${background.heightPercent}%",
+                    onValueChange = { value ->
+                        updateBackground { it.copy(heightPercent = value.toInt()) }
+                    },
+                )
+
+                CardDivider()
+                HexColorRow(
+                    label = "背景颜色",
+                    value = background.color,
+                    onValueChange = { rgb -> updateBackground { it.copy(color = rgb) } },
+                    /*
+                     * 不透明度在「不透明度」分区单独调，所以这里不给 A 滑杆：
+                     * 两个入口改同一个值只会让人以为"改了没生效"。
+                     * 传 alphaPercent 只是让色块预览按真实不透明度显示。
+                     */
+                    alphaPercent = background.opacityPercent,
+                )
+            }
         }
     }
 
@@ -2223,34 +2314,25 @@ private fun LazyListScope.live2DStyleSections(
                     }
                 },
             )
-        }
-    }
 
-    item { SectionHeader("键盘猫") }
-
-    item {
-        SettingsCard {
-            /*
-             * 模型选择。
-             *
-             * 这里**不再有**"右侧显示方向键还是鼠标"的开关：那两个内置模型
-             * 就是那两页，它们的副标题已经写明"右侧显示方向键/鼠标"。
-             * 再加一个布尔开关就会和 modelId 打架。
-             */
-            SettingItem(
-                title = "模型",
-                leadingIcon = Icons.Rounded.ViewInAr,
-                subtitle = modelName,
-                onClick = onPickModel,
-            )
+            if (background.enabled) {
+                CardDivider()
+                SliderRow(
+                    label = "背景",
+                    value = background.opacityPercent.toFloat(),
+                    valueRange = 0f..100f,
+                    steps = LIVE2D_BACKGROUND_OPACITY_STEPS,
+                    display = "${background.opacityPercent}%",
+                    onValueChange = { value ->
+                        updateBackground { it.copy(opacityPercent = value.toInt()) }
+                    },
+                )
+            }
         }
     }
 
     item {
-        SectionHint(
-            text = "切换模型会重载悬浮窗页（几百毫秒）。" +
-                "颜色、键位映射、字体等属于「Key」样式的设置，在 Live2D 下不显示也不生效。",
-        )
+        SectionHint(text = "切换模型会重载悬浮窗页（几百毫秒）。")
     }
 
     /* 表情分区：只有模型自带表情时才出现（模型元数据在导入时写入） */
@@ -2873,3 +2955,20 @@ private const val TEXT_OFFSET_MAX = 60f
  * （1% 与 2% 是相邻两档，差别正好是 2 倍）。要精确值可以点数字直接输入。
  */
 private val SCALE_SLIDER_STEPS = KeyLayout.SCALE_PERCENT_MAX - KeyLayout.SCALE_PERCENT_MIN - 1
+
+/*
+ * ============================================================
+ * Live2D 背景滑块的档位
+ * ============================================================
+ * 宽/高改一次就会重排悬浮窗（窗口跟着变大/变小），连续滑块一秒能触发几十次
+ * 窗口重排 —— 实测明显卡顿。5% 一档把次数压到十分之一，手感回到正常。
+ *
+ * 背景不透明度不走窗口重排，但同样每次变化都要跨桥下发一次，也给 5% 一档。
+ * 要精确值仍然点右侧数字直接输入。
+ */
+private const val LIVE2D_BACKGROUND_STEP_PERCENT = 5
+private const val LIVE2D_BACKGROUND_SIZE_STEPS =
+    (Live2DBackgroundGeometry.WIDTH_MAX - Live2DBackgroundGeometry.WIDTH_MIN) /
+        LIVE2D_BACKGROUND_STEP_PERCENT - 1
+private const val LIVE2D_BACKGROUND_OPACITY_STEPS = 100 / LIVE2D_BACKGROUND_STEP_PERCENT - 1
+

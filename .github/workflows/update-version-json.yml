@@ -1,0 +1,82 @@
+name: Update update/version.json
+
+# 发布 Release 时自动更新「检查更新」用的 version.json。
+#
+# 为什么需要它：客户端主数据源是 jsDelivr 上的仓库文件（api.github.com 在国内
+# 经常不通），所以发版后必须让这个文件跟上，否则客户端会一直看到旧版本。
+#
+# ⚠️ versionCode 规则与 app/build.gradle.kts 一致：major*100 + minor*10 + patch
+#    （2.8.7 → 287，2.8.8 → 288）。改规则时两处要一起改。
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - name: Write update/version.json
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          URL: ${{ github.event.release.html_url }}
+          NOTES: ${{ github.event.release.body }}
+          ASSETS: ${{ toJson(github.event.release.assets) }}
+        run: |
+          python3 <<'PY'
+          import json, os, re
+
+          tag = (os.environ.get("TAG") or "").strip()
+          url = (os.environ.get("URL") or "").strip()
+          notes = (os.environ.get("NOTES") or "").strip()
+
+          match = re.search(r"(\d+)\.(\d+)\.(\d+)", tag)
+          if not match:
+              raise SystemExit(f"tag 里没有版本号: {tag}")
+          major, minor, patch = (int(x) for x in match.groups())
+          version_code = major * 100 + minor * 10 + patch
+          version_name = f"{major}.{minor}.{patch}"
+
+          assets = json.loads(os.environ.get("ASSETS") or "[]")
+          download_url = ""
+          for asset in assets:
+              name = asset.get("name", "")
+              if name.lower().endswith(".apk"):
+                  download_url = asset.get("browser_download_url", "")
+                  break
+
+          data = {
+              "versionCode": version_code,
+              "versionName": version_name,
+              "tag": tag,
+              "pageUrl": url,
+              "downloadUrl": download_url,
+              "notes": notes,
+          }
+
+          os.makedirs("update", exist_ok=True)
+          with open("update/version.json", "w", encoding="utf-8") as f:
+              json.dump(data, f, ensure_ascii=False, indent=2)
+              f.write("\n")
+          print(json.dumps(data, ensure_ascii=False, indent=2))
+          PY
+
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add update/version.json
+          if git diff --cached --quiet; then
+            echo "version.json 没变化，跳过提交"
+            exit 0
+          fi
+          git commit -m "chore(update): 同步 version.json 到 ${TAG}"
+          git push origin HEAD:master

@@ -15,7 +15,9 @@ import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import com.something.sthkey.capture.OverlayBounds
 import com.something.sthkey.core.log.AppLog
+import com.something.sthkey.domain.config.Live2DBackground
 import com.something.sthkey.domain.keys.KeyCodes
+import com.something.sthkey.domain.live2d.Live2DBackgroundGeometry
 import com.something.sthkey.domain.live2d.Live2DModelEntry
 import com.something.sthkey.domain.live2d.Live2DModels
 import com.something.sthkey.domain.live2d.Live2DSemantics
@@ -263,6 +265,12 @@ class Live2DOverlayView(context: Context) : FrameLayout(context) {
     private var expressionBindings: List<Pair<Int, List<Int>>> = emptyList()
     private var lastPressedExpressionKeys: Set<Int> = emptySet()
 
+    /** 纯色背景（页面就绪后要补发，所以状态留在 View 上） */
+    private var background: Live2DBackground = Live2DBackground()
+
+    /** 模型不透明度 0..100（只控模型；背景有自己的不透明度） */
+    private var modelOpacityPercent: Int = 100
+
     /**
      * 应用配置里的表情。
      *
@@ -282,6 +290,69 @@ class Live2DOverlayView(context: Context) : FrameLayout(context) {
         expressionIndex = index.coerceAtLeast(-1)
         expressionBindings = bindings
         if (pageReady) dispatchExpression(expressionIndex)
+    }
+
+    private fun dispatchBackground() {
+        val bg = background
+        dispatchRaw(
+            "window.AxonBongoCat&&AxonBongoCat.setBackground(" +
+                "${if (bg.enabled) "true" else "false"}, " +
+                "${bg.widthPercent}, ${bg.heightPercent}, " +
+                "${bg.color and 0xFFFFFF}, ${bg.opacityPercent})",
+        )
+    }
+
+    /**
+     * 纯色背景。只改渲染层，**不重载页面**（重载要重新解析模型，几百毫秒）。
+     *
+     * 越界值在这里先收敛一次：窗口尺寸按同一组百分比算，页面收到 500% 会算出
+     * 一个巨大的背景块，两边就对不上了。
+     *
+     * ⚠️ 两次改动之间的值相同时**直接返回**：拖滑块时 Compose 可能对同一个值
+     * 重复回调，每多一次 `evaluateJavascript` 就多一次跨桥开销。
+     */
+    fun applyBackground(settings: Live2DBackground) {
+        val next = Live2DBackgroundGeometry.coerce(settings)
+        if (next == background) return
+        background = next
+        scheduleRenderSettings()
+    }
+
+    /**
+     * 模型不透明度（0..100）。
+     *
+     * ⚠️ **不要**再用 `view.alpha`：那会把整个 WebView（包括纯色背景）一起淡掉。
+     * 现在页面用一层"模型容器"的 CSS opacity 整组合成，观感与旧版一致。
+     */
+    fun applyOpacity(percent: Int) {
+        val next = percent.coerceIn(0, 100)
+        if (next == modelOpacityPercent) return
+        modelOpacityPercent = next
+        scheduleRenderSettings()
+    }
+
+    /*
+     * ============================================================
+     * 渲染参数的合并下发
+     * ============================================================
+     * 拖滑块时背景/不透明度可能在同一帧内各变好几次。每次变化都
+     * `evaluateJavascript` 一次会让 UI 线程排队、手感发涩，所以合并到
+     * 下一轮消息里**一次性**下发。
+     */
+    private var renderSettingsScheduled = false
+
+    private val renderSettingsRunnable = Runnable {
+        renderSettingsScheduled = false
+        if (!pageReady) return@Runnable
+        dispatchBackground()
+        dispatchRaw("window.AxonBongoCat&&AxonBongoCat.setModelOpacity($modelOpacityPercent)")
+    }
+
+    private fun scheduleRenderSettings() {
+        if (!pageReady) return
+        if (renderSettingsScheduled) return
+        renderSettingsScheduled = true
+        post(renderSettingsRunnable)
     }
 
     /** 组合键**刚凑齐**的那一下切换表情；按住不放不会反复切 */
@@ -585,6 +656,10 @@ class Live2DOverlayView(context: Context) : FrameLayout(context) {
         dispatchExpression(expressionIndex)
         applyWatermark(watermarkHidden)
 
+        /* 背景与模型不透明度：页面就绪前推过去会被静默丢掉，这里补发 */
+        dispatchBackground()
+        dispatchRaw("window.AxonBongoCat&&AxonBongoCat.setModelOpacity($modelOpacityPercent)")
+
         /* 渲染帧率：页面就绪后立刻套用（默认 60，可在采集通道页改） */
         dispatchFrameRate()
     }
@@ -778,7 +853,11 @@ class Live2DOverlayView(context: Context) : FrameLayout(context) {
                 canvas: canvas ? (canvas.width + 'x' + canvas.height) : 'missing',
                 target: s ? [s.targetX, s.targetY] : 'no-state',
                 cursor: s ? [s.cursorX, s.cursorY] : 'no-state',
-                pointerActive: s ? s.pointerActive : 'no-state'
+                pointerActive: s ? s.pointerActive : 'no-state',
+                /* 背景层自诊断：开着却看不见时，这一项能直接指出哪一步没生效 */
+                bg: (window.AxonBongoCat && window.AxonBongoCat.debugBackground)
+                  ? window.AxonBongoCat.debugBackground() : 'no-bg-debug',
+                viewport: innerWidth + 'x' + innerHeight
               });
             })()
         """.trimIndent()

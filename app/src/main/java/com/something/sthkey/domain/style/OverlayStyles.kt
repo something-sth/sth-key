@@ -2,6 +2,7 @@ package com.something.sthkey.domain.style
 
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.custom.CustomLayout
+import com.something.sthkey.domain.live2d.Live2DBackgroundGeometry
 import com.something.sthkey.domain.live2d.Live2DModels
 
 
@@ -302,20 +303,18 @@ object OverlayStyleRegistry {
                  */
                 baseSize = { config, _ ->
                     val aspect = Live2DModels.find(config.live2d.modelId)?.contentAspect ?: 0f
-                    if (aspect > 0f) {
-                        /*
-                         * 高度保持设计高、宽度按内容比例推。
-                         *
-                         * ⚠️ 只收窄宽度、不动高度:高度是"内容能画多高"的上限，
-                         * 高度也一起变的话，同一模型在不同比例下会整体缩放跳变。
-                         */
-                        OverlayBaseSize(
-                            width = LIVE2D_DESIGN_HEIGHT * aspect,
-                            height = LIVE2D_DESIGN_HEIGHT,
-                        )
-                    } else {
-                        OverlayBaseSize(LIVE2D_DESIGN_WIDTH, LIVE2D_DESIGN_HEIGHT)
-                    }
+                    /*
+                     * ⚠️ 尺寸必须与页面的布局用**同一个算法**（`Live2DBackgroundGeometry`）：
+                     * 背景 >100% 时窗口要跟着变大，否则多出来的底板会被窗口裁掉。
+                     * 背景关闭时这两个数是 1 → 与加背景之前完全一致。
+                     */
+                    val (width, height) = Live2DBackgroundGeometry.windowBase(
+                        aspect = aspect,
+                        designWidth = LIVE2D_DESIGN_WIDTH,
+                        designHeight = LIVE2D_DESIGN_HEIGHT,
+                        background = config.live2d.background,
+                    )
+                    OverlayBaseSize(width = width, height = height)
                 },
             ),
         )

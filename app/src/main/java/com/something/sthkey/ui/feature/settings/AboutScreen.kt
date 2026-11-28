@@ -3,6 +3,7 @@ package com.something.sthkey.ui.feature.settings
 import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -13,6 +14,7 @@ import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Groups
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -20,12 +22,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.something.sthkey.BuildConfig
 import com.something.sthkey.data.permission.PermissionHelper
 import com.something.sthkey.ui.AppLinks
+import com.something.sthkey.ui.MainViewModel
 import com.something.sthkey.ui.component.CardDivider
 import com.something.sthkey.ui.component.ScrollableScreen
 import com.something.sthkey.ui.component.SectionHeader
@@ -48,6 +52,7 @@ import com.something.sthkey.ui.feature.announcement.AppAnnouncement
 fun AboutScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    viewModel: MainViewModel,
 ) {
     val context = LocalContext.current
 
@@ -59,7 +64,7 @@ fun AboutScreen(
 
     ScrollableScreen(
         title = "关于",
-        subtitle = "版本 ${BuildConfig.VERSION_NAME}",
+        subtitle = "版本 v${BuildConfig.VERSION_NAME}",
         onBack = onBack,
         modifier = modifier,
     ) {
@@ -78,7 +83,7 @@ fun AboutScreen(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "版本 ${BuildConfig.VERSION_NAME}（${BuildConfig.VERSION_CODE}）",
+                        text = "版本 v${BuildConfig.VERSION_NAME}（${BuildConfig.VERSION_CODE}）",
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.primary,
                     )
@@ -118,6 +123,51 @@ fun AboutScreen(
          * 链接
          * ============================================================
          */
+
+        /*
+         * ============================================================
+         * 更新
+         * ============================================================
+         * 「检查更新」手动触发一次；开关控制**启动时**是否自动检查（默认开）。
+         *
+         * ⚠️ 自动检查有 24h 冷却，手动检查不受限 —— 滑块/开关的判断都在 ViewModel，
+         * 这里只负责点与显示。
+         */
+        item { SectionHeader("更新") }
+
+        item {
+            SettingsCard {
+                SettingItem(
+                    title = "检查更新",
+                    subtitle = when {
+                        viewModel.updateChecking -> "正在检查…"
+                        viewModel.updateInfo != null -> "发现新版本 v${viewModel.updateInfo?.versionName}"
+                        else -> "当前已是最新版本 v${BuildConfig.VERSION_NAME}（${BuildConfig.VERSION_CODE}）"
+                    },
+                    leadingIcon = Icons.Rounded.Refresh,
+                    onClick = { viewModel.checkForUpdates(manual = true) },
+                )
+
+                CardDivider()
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "启动时检查更新",
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.weight(1f),
+                    )
+                    com.something.sthkey.ui.component.ExpressiveSwitch(
+                        checked = viewModel.checkUpdateOnLaunch,
+                        onCheckedChange = viewModel::setCheckUpdateOnLaunchEnabled,
+                    )
+                }
+            }
+        }
 
         /*
          * ============================================================

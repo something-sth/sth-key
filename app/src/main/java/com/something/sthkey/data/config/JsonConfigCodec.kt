@@ -16,7 +16,9 @@ import com.something.sthkey.domain.config.KeyMapping
 import com.something.sthkey.domain.config.KeyOutline
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.config.LIVE2D_MODEL_STANDARD
+import com.something.sthkey.domain.config.Live2DBackground
 import com.something.sthkey.domain.config.Live2DSettings
+import com.something.sthkey.domain.live2d.Live2DBackgroundGeometry
 import com.something.sthkey.domain.config.migratedOutlineColors
 import com.something.sthkey.domain.config.Opacity
 import com.something.sthkey.domain.config.ShadowMode
@@ -996,6 +998,20 @@ object JsonConfigCodec {
                     put("modelId", config.live2d.modelId)
                     put("opacityPercent", config.live2d.opacityPercent)
                     put("hideWatermark", config.live2d.hideWatermark)
+                    /*
+                     * 纯色背景。**五个字段全写**（哪怕开关关着）：只写非默认值的话，
+                     * 用户调好宽高/颜色再关掉开关，那组值就永久丢了。
+                     */
+                    put(
+                        "background",
+                        JSONObject().apply {
+                            put("enabled", config.live2d.background.enabled)
+                            put("widthPercent", config.live2d.background.widthPercent)
+                            put("heightPercent", config.live2d.background.heightPercent)
+                            put("color", config.live2d.background.color)
+                            put("opacityPercent", config.live2d.background.opacityPercent)
+                        },
+                    )
                     if (config.live2d.expression >= 0) {
                         put("expression", config.live2d.expression)
                     }
@@ -1507,6 +1523,25 @@ object JsonConfigCodec {
                     }
                 }
             }.orEmpty(),
+            /*
+             * 纯色背景。缺这个对象（2.8.7 及更早的配置）→ 关闭 + 默认值，
+             * 于是老配置的外观零变化。
+             *
+             * 越界一律收敛：手工改过的配置包可能塞进 500%、负值，
+             * 几何算出来会是个巨大的窗口。
+             */
+            background = Live2DBackgroundGeometry.coerce(
+                json.optJSONObject("background")?.let { bg ->
+                    val defaults = Live2DBackground()
+                    Live2DBackground(
+                        enabled = bg.optBoolean("enabled", defaults.enabled),
+                        widthPercent = bg.optInt("widthPercent", defaults.widthPercent),
+                        heightPercent = bg.optInt("heightPercent", defaults.heightPercent),
+                        color = bg.optLong("color", defaults.color),
+                        opacityPercent = bg.optInt("opacityPercent", defaults.opacityPercent),
+                    )
+                } ?: Live2DBackground(),
+            ),
         )
     }
 

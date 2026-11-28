@@ -86,6 +86,17 @@ object Live2DModelImporter {
     private val HAND_PARAMS = listOf("CatParamLeftHandDown", "CatParamRightHandDown")
 
     /**
+     * 内置 Cubism Core（5.1.0）能解析的最高 moc3 版本。
+     *
+     * ⚠️ 实测：Core 6（moc3 v4~v6）虽然能解析新模型，但它引入了
+     * blendModes / offscreen / multiply-color 等新渲染特性，我们这套自研渲染器
+     * 没有实现，会导致**大量旧模型贴图缺失、错位**。所以暂时停留在 Core 5。
+     * 代价是 moc3 版本高于 3 的模型渲染不出来 —— 那就必须在导入时就明确告知用户，
+     * 而不是让他看到一个空白窗口去猜。
+     */
+    private const val SUPPORTED_MOC_VERSION = 3
+
+    /**
      * 导入结果。
      *
      * @param reused 本地已有同样内容的模型（按摘要命中），没有重复占磁盘
@@ -393,7 +404,8 @@ object Live2DModelImporter {
         )
 
         val notes = buildList {
-            addAll(compatibilityNotes(modelJson, modelBase, dir))
+                addAll(compatibilityNotes(modelJson, modelBase, dir))
+            mocVersionNote(modelJson, modelBase, dir)?.let { add(it) }
             if (layout == Live2DModels.LAYOUT_CAT) {
                 add("这个模型没有自带键盘美术，因此只显示角色本身（键帽与键盘底图都不会出现）。")
             }
@@ -1593,6 +1605,37 @@ object Live2DModelImporter {
      * 但没有 `CatParamLeftHandDown` / `CatParamRightHandDown` 时**按键不会有反应**。
      * 不提示的话，用户导入完按键盘没动静，只会以为功能坏了。
      */
+    /**
+     * 模型 moc3 版本是否超出内置 Core 的支持范围。
+     *
+     * moc3 头 5 字节：`MOC3` + 版本号（1 字节）。版本高于 3 的模型
+     * （Cubism 5.2+ 导出）当前渲染不出来，导入时就告诉用户。
+     */
+    private fun mocVersionNote(
+        modelJson: JSONObject,
+        modelBase: File,
+        root: File,
+    ): String? {
+        val mocPath = modelJson.optJSONObject("FileReferences")
+            ?.optString("Moc")
+            .orEmpty()
+            .trim()
+        if (mocPath.isEmpty()) return null
+        val file = resolveInside(modelBase, mocPath, root) ?: return null
+        if (!file.isFile) return null
+        val version = runCatching {
+            file.inputStream().use { input ->
+                val head = ByteArray(5)
+                if (input.read(head) < 5) return@use null
+                if (String(head, 0, 4, Charsets.US_ASCII) != "MOC3") return@use null
+                head[4].toInt() and 0xFF
+            }
+        }.getOrNull() ?: return null
+        if (version <= SUPPORTED_MOC_VERSION) return null
+        return "这个模型用的是较新的 Live2D 格式（moc3 v$version），" +
+            "当前版本最高支持 v$SUPPORTED_MOC_VERSION，导入后可能显示为空白。"
+    }
+
     private fun compatibilityNotes(
         modelJson: JSONObject,
         modelBase: File,

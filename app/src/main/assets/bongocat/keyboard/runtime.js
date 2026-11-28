@@ -65,6 +65,36 @@
     : [];
   let HIDE_WATERMARK = false;
   let WATERMARK_RESTORE = null;
+  /* 被水印参数控制的 drawable 索引；null = 还没探测 */
+  let WATERMARK_CONTROLLED = null;
+  /* 「隐藏」对应的参数取值（min / max / 0 之一，探测得出） */
+  let WATERMARK_OFF_VALUE = null;
+
+  /*
+   * ============================================================
+   * 纯色背景
+   * ============================================================
+   * 垫在**最底层**（模型、包自带底图都在它上面），所以它只在模型透明处
+   * 和"背景比模型大"留出的边距里可见。
+   *
+   * 宽高是**模型内容矩形**的百分比，以内容中心为轴对称伸缩；
+   * 尺寸与位置都在 resize() 里算好（见 finishLayout），这里只存参数。
+   */
+  let BG_ENABLED = false;
+  let BG_WIDTH = 100;
+  let BG_HEIGHT = 100;
+  let BG_RGB = 0xFFFFFF;
+  let BG_OPACITY = 100;
+  /* 背景矩形（画布设备像素）；null = 没有背景 */
+  let BG_RECT = null;
+
+  /*
+   * 模型不透明度（0..1）。
+   *
+   * ⚠️ 不能再用 Android 侧的 `view.alpha`：那样背景也会一起淡。
+   * 这里只乘在**模型与手/键/表情贴图**上，背景有自己的不透明度。
+   */
+  let MODEL_OPACITY = 1;
 
   /*
    * Mver 手部贴图：按下哪个键就把对应编号的手 PNG 盖在模型上，
@@ -82,6 +112,54 @@
     : null;
   const pressedKeyOrder = [];
 
+  /*
+   * ============================================================
+   * 模型图层容器（整层不透明度）
+   * ============================================================
+   * 模型不透明度必须**整组合成**一次，不能逐个 drawable / 元素乘 alpha：
+   * 后者会让人透过皮肤看到眼睛、头发等内部图层（像透视），
+   * 而且画布是预乘 alpha，逐层乘还会让边缘更花。
+   *
+   * 做法是一层 DOM wrapper + CSS opacity：子树先在内部按正常 alpha 合成，
+   * 最后整体淡出一次 —— 与旧的 Android `view.alpha` 观感一致。
+   *
+   * ⚠️ 背景（包底图 `#background` / 纯色底 `#solidBackground`）**不在**这个容器里，
+   * 所以它们不会被模型不透明度影响（只控模型）。
+   */
+  const MODEL_LAYER_IDS = [
+    /*
+     * `#background` 是**模型包自带的底图**（桌子/键盘），属于"这个模型长什么样"的一部分，
+     * 所以它跟着模型不透明度一起淡 —— 与旧的 `view.alpha` 观感一致。
+     * 只有新加的纯色底（`#solidBackground`）是独立的、走自己的不透明度。
+     */
+    'background', 'fallback', 'live2dCanvas', 'leftKey', 'rightKey',
+    'leftHand', 'rightHand', 'handLayer', 'faceLayer',
+  ];
+  let modelLayerElement = null;
+
+  function modelLayerRoot() {
+    if (modelLayerElement && modelLayerElement.isConnected) return modelLayerElement;
+    let wrapper = document.getElementById('modelLayer');
+    if (!wrapper) {
+      wrapper = document.createElement('div');
+      wrapper.id = 'modelLayer';
+      wrapper.style.position = 'absolute';
+      wrapper.style.inset = '0';
+      wrapper.style.pointerEvents = 'none';
+      /* z-index 1：在包底图(z0)、纯色底(z0)之上；容器内部自己再排 z 序 */
+      wrapper.style.zIndex = '1';
+      wrapper.style.opacity = String(MODEL_OPACITY);
+      const container = document.getElementById('stage') || document.body;
+      container.appendChild(wrapper);
+      for (const id of MODEL_LAYER_IDS) {
+        const element = document.getElementById(id);
+        if (element && element.parentNode !== wrapper) wrapper.appendChild(element);
+      }
+    }
+    modelLayerElement = wrapper;
+    return wrapper;
+  }
+
   /**
    * 手图图层**按需创建**。
    *
@@ -97,8 +175,8 @@
       element.style.pointerEvents = 'none';
       element.style.objectFit = 'fill';
       element.style.zIndex = '4';
-      const stage = document.getElementById('stage') || document.body;
-      stage.appendChild(element);
+      /* 手图属于模型：放进模型容器，跟着模型不透明度一起淡 */
+      modelLayerRoot().appendChild(element);
     }
     /*
      * ⚠️ 页面模板里的 `<img id="leftHand" class="hidden">` 带 `hidden` 类，
@@ -265,6 +343,13 @@
     return `${String(base || '').replace(/\/$/, '')}/${relativePath}`;
   }
 
+  /** 数字参数收敛：NaN/缺省 → fallback，其余 clamp 到 [min, max] 并取整 */
+  function clampNumber(value, min, max, fallback) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return fallback;
+    return Math.min(max, Math.max(min, Math.round(number)));
+  }
+
   function setImageWithFallback(image, relativePath) {
     const preferredBase = window.__BONGO_RESOURCE_BASE || BUILTIN_RESOURCE_BASE;
     const preferred = resourceUrl(preferredBase, relativePath);
@@ -300,6 +385,14 @@
     setImageWithFallback(backgroundImage, 'background.png');
   }
   setImageWithFallback(fallback, 'cover.png');
+
+  /*
+   * 模型容器在这里就建好：把画布 / 封面 / 键帽 / 手图搬进去。
+   *
+   * ⚠️ 必须在**第一次渲染之前**搬完 —— canvas 换父节点会让它重建一次合成层，
+   * 放到模型加载之后再搬会闪一下。
+   */
+  modelLayerRoot();
 
   let renderer = null;
   let lastFrameTime = 0;
@@ -567,12 +660,111 @@
       element.style.pointerEvents = 'none';
       element.style.objectFit = 'fill';
       element.style.zIndex = '7';
-      const stage = document.getElementById('stage') || document.body;
-      stage.appendChild(element);
+      /* 表情贴图属于模型：放进模型容器 */
+      modelLayerRoot().appendChild(element);
     }
     element.classList.remove('hidden');
     faceLayer = element;
     return element;
+  }
+
+  /*
+   * ============================================================
+   * 纯色背景层
+   * ============================================================
+   * 动态创建而不是写进 index.html：导入模型的页面是**导入时生成的**，
+   * 改模板只对新导入的模型生效，老模型就永远没有这个层。
+   */
+
+  let backgroundLayer = null;
+
+  function ensureBackgroundLayer() {
+    if (backgroundLayer && backgroundLayer.isConnected) return backgroundLayer;
+    let element = document.getElementById('solidBackground');
+    if (!element) {
+      element = document.createElement('div');
+      element.id = 'solidBackground';
+      element.style.position = 'absolute';
+      element.style.pointerEvents = 'none';
+      element.style.zIndex = '0';
+      element.style.display = 'none';
+      const stage = document.getElementById('stage') || document.body;
+      // ⚠️ 插在 stage 的**第一个**子节点：同 z-index 时 DOM 顺序在前的在下层，
+      // 这样它垫在包自带底图（#background）下面 —— 背景就该是最底层。
+      stage.insertBefore(element, stage.firstChild);
+    }
+    backgroundLayer = element;
+    return element;
+  }
+
+  /** 把 BG_RECT（设备像素）写到 CSS（CSS 像素） */
+  function updateBackgroundLayer() {
+    const element = ensureBackgroundLayer();
+    if (!BG_ENABLED || !BG_RECT) {
+      element.style.display = 'none';
+      return;
+    }
+    const dpr = Math.max(1, devicePixelRatio || 1);
+    const r = (BG_RGB >> 16) & 0xff;
+    const g = (BG_RGB >> 8) & 0xff;
+    const b = BG_RGB & 0xff;
+    element.style.display = 'block';
+    element.style.left = (BG_RECT.x / dpr) + 'px';
+    element.style.top = (BG_RECT.y / dpr) + 'px';
+    element.style.width = (BG_RECT.w / dpr) + 'px';
+    element.style.height = (BG_RECT.h / dpr) + 'px';
+    element.style.backgroundColor = `rgba(${r}, ${g}, ${b}, ${BG_OPACITY / 100})`;
+  }
+
+  /*
+   * ============================================================
+   * 设计画布图层（包自带底图 / 键帽 / 封面）
+   * ============================================================
+   * 这几张图是**作者按设计画布（如 612×352）画的整幅贴图**，而且都是
+   * `.layer{inset:0;width:100%}` —— 默认铺满**整个窗口**。
+   *
+   * ⚠️ 背景把窗口撑大之后，"铺满窗口"就错了：包底图（桌子/键盘）会被横向拉宽，
+   * 而模型仍按设计画布居中 —— 于是桌子和角色错位（用户报的"桌子始终贴在背景
+   * 最下方"）。所以背景开启时必须把它们**钉回设计画布那块矩形**，
+   * 多出来的边距留给纯色背景。
+   *
+   * 背景关闭时清掉内联样式，回到原来的"铺满窗口"行为（零回归）。
+   */
+  const DESIGN_LAYER_IDS = ['background', 'leftKey', 'rightKey', 'fallback'];
+
+  function syncDesignLayers(rect) {
+    const dpr = Math.max(1, devicePixelRatio || 1);
+    for (const id of DESIGN_LAYER_IDS) {
+      const element = document.getElementById(id);
+      if (!element) continue;
+      if (!rect) {
+        element.style.left = '';
+        element.style.top = '';
+        element.style.width = '';
+        element.style.height = '';
+        element.style.right = '';
+        element.style.bottom = '';
+        continue;
+      }
+      element.style.left = (rect.x / dpr) + 'px';
+      element.style.top = (rect.y / dpr) + 'px';
+      element.style.width = (rect.w / dpr) + 'px';
+      element.style.height = (rect.h / dpr) + 'px';
+      /* .layer 自带 inset:0（= right/bottom 也 0），不显式放开会过约束 */
+      element.style.right = 'auto';
+      element.style.bottom = 'auto';
+      element.style.objectFit = 'fill';
+    }
+  }
+
+  /*
+   * 模型不透明度：**只改模型容器那一层的 CSS opacity**。
+   *
+   * ⚠️ 不要挨个元素设 opacity：那会让层与层互相透出来（"透视"），
+   * 与旧的整层 `view.alpha` 观感完全不同。容器 opacity 是整组合成，效果正确。
+   */
+  function applyModelOpacity() {
+    modelLayerRoot().style.opacity = String(MODEL_OPACITY);
   }
 
   function evaluateExpressionBindings() {
@@ -722,6 +914,81 @@
       HIDE_WATERMARK = Boolean(hidden);
       console.log('[watermark] setHideWatermark hidden=' + hidden);
       if (renderer) renderer.applyWatermark();
+    },
+
+    /**
+     * 纯色背景。
+     *
+     * @param {boolean} enabled        开关
+     * @param {number}  widthPercent   模型内容宽的百分比 20..200
+     * @param {number}  heightPercent  模型内容高的百分比 20..200
+     * @param {number}  rgb            0xRRGGBB
+     * @param {number}  opacityPercent 0..100
+     */
+    setBackground(enabled, widthPercent, heightPercent, rgb, opacityPercent) {
+      const previousEnabled = BG_ENABLED;
+      const previousWidth = BG_WIDTH;
+      const previousHeight = BG_HEIGHT;
+      BG_ENABLED = Boolean(enabled);
+      BG_WIDTH = clampNumber(widthPercent, 20, 200, 100);
+      BG_HEIGHT = clampNumber(heightPercent, 20, 200, 100);
+      BG_RGB = (Number(rgb) || 0) & 0xFFFFFF;
+      BG_OPACITY = clampNumber(opacityPercent, 0, 100, 100);
+
+      /*
+       * ⚠️ 只有**几何**（开关/宽/高）变了才需要重跑 resize：
+       * 只改颜色或不透明度时，重排画布纯属浪费 —— 拖不透明度滑块会明显卡。
+       */
+      const geometryChanged = previousEnabled !== BG_ENABLED ||
+        previousWidth !== BG_WIDTH || previousHeight !== BG_HEIGHT;
+      if (geometryChanged && renderer) renderer.resize();
+      else updateBackgroundLayer();
+
+      if (previousEnabled !== BG_ENABLED && !window.__sthkeyBgLogged) {
+        window.__sthkeyBgLogged = true;
+        console.log('[background] ' + (BG_ENABLED ? '开启' : '关闭')
+          + ' ' + BG_WIDTH + '%×' + BG_HEIGHT + '% #'
+          + BG_RGB.toString(16).toUpperCase().padStart(6, '0')
+          + ' ' + BG_OPACITY + '%');
+      }
+    },
+
+    /**
+     * 模型不透明度 0..100（**只影响模型**，背景不受影响）。
+     *
+     * ⚠️ 不能再走 Android 的 `view.alpha`：那会把背景一起淡掉。
+     * 这里改的是"模型容器"那一层的 CSS opacity —— 整组合成，观感和旧版一致。
+     */
+    setModelOpacity(percent) {
+      const next = clampNumber(percent, 0, 100, 100);
+      if (Math.abs(MODEL_OPACITY - next / 100) < 0.0001) return;
+      MODEL_OPACITY = next / 100;
+      applyModelOpacity();
+    },
+
+    /** 自诊断：背景层现在到底长什么样（调试页/日志用） */
+    debugBackground() {
+      const element = ensureBackgroundLayer();
+      const style = element ? getComputedStyle(element) : null;
+      return {
+        enabled: BG_ENABLED,
+        width: BG_WIDTH,
+        height: BG_HEIGHT,
+        rgb: BG_RGB,
+        opacity: BG_OPACITY,
+        rect: BG_RECT,
+        dpr: Math.max(1, devicePixelRatio || 1),
+        display: style ? style.display : 'missing',
+        css: element
+          ? [element.style.left, element.style.top, element.style.width, element.style.height,
+            element.style.backgroundColor].join(',')
+          : 'missing',
+        z: style ? style.zIndex : 'missing',
+        /* 模型不透明度是**整层** CSS opacity，顺手报出来便于排查"透视"类问题 */
+        modelOpacity: MODEL_OPACITY,
+        modelLayerOpacity: modelLayerRoot().style.opacity,
+        modelLayerChildren: modelLayerRoot().children.length,
+      };
     },
 
     setExpression(index) {
@@ -1512,9 +1779,33 @@
       this.pixelWidth = width;
       this.pixelHeight = height;
 
-      const stageScale = Math.min(width / DESIGN_WIDTH, height / DESIGN_HEIGHT);
+      /*
+       * 背景 >100% 时窗口已经按"内容 × 百分比"变大，所以内容本身要按**放大后的框**
+       * 去 contain（否则内容会先铺满窗口，再加上背景就撑出去了）。
+       * 背景关闭时 ex=ey=1，与以前完全一致。
+       */
+      const expandX = BG_ENABLED ? Math.max(1, BG_WIDTH / 100) : 1;
+      const expandY = BG_ENABLED ? Math.max(1, BG_HEIGHT / 100) : 1;
+      const stageScale = Math.min(
+        width / (DESIGN_WIDTH * expandX),
+        height / (DESIGN_HEIGHT * expandY),
+      );
+
       const stageOffsetX = (width - DESIGN_WIDTH * stageScale) * 0.5;
       const stageOffsetY = (height - DESIGN_HEIGHT * stageScale) * 0.5;
+
+      /*
+       * ============================================================
+       * 布局：每个分支只负责算出"内容矩形（画布像素）"，收尾统一走 finishLayout
+       * ============================================================
+       * finishLayout 会把纯色背景并进来（关闭时**一个数都不改**）。
+       */
+      const designBoxPx = {
+        x: stageOffsetX,
+        y: stageOffsetY,
+        w: DESIGN_WIDTH * stageScale,
+        h: DESIGN_HEIGHT * stageScale,
+      };
 
       if (IMPORTED_MODEL && MODEL_LAYOUT === 'full') {
         // Skin packs with their own background are normalized by their Cubism canvas, so the
@@ -1527,6 +1818,7 @@
         this.scale = stageScale * modelToDesign;
         this.offsetX = stageOffsetX + designLeft * stageScale;
         this.offsetY = stageOffsetY + designTop * stageScale;
+        this.finishLayout(width, height, designBoxPx);
         return;
       }
 
@@ -1542,7 +1834,10 @@
         /*
          * 设计画布 → 视口
          */
-        const designScale = Math.min(width / designWidth, height / designHeight);
+        const designScale = Math.min(
+          width / (designWidth * expandX),
+          height / (designHeight * expandY),
+        );
         const designX = (width - designWidth * designScale) * 0.5;
         const designY = (height - designHeight * designScale) * 0.5;
         this.designScale = designScale;
@@ -1566,6 +1861,12 @@
         this.offsetX = designX + (designWidth - canvasWidth * modelFit) * 0.5 * designScale;
         this.offsetY = designY + (designHeight - canvasHeight * modelFit) * 0.5 * designScale;
         reportContentAspect(designWidth, designHeight);
+        this.finishLayout(width, height, {
+          x: designX,
+          y: designY,
+          w: designWidth * designScale,
+          h: designHeight * designScale,
+        });
         return;
       }
 
@@ -1585,13 +1886,22 @@
          * 回报之后窗口按内容比例重排，下一帧就正好铺满。
          */
         const b = this.contentBounds;
-        const fit = Math.min(width / Math.max(1, b.width), height / Math.max(1, b.height));
+        const fit = Math.min(
+          width / Math.max(1, b.width * expandX),
+          height / Math.max(1, b.height * expandY),
+        );
         this.scale = fit;
         this.offsetX = (width - b.width * fit) * 0.5 - b.minX * fit;
         this.offsetY = (height - b.height * fit) * 0.5 - b.minY * fit;
 
         /* 把内容比例回报给原生侧（只回报一次，之后的窗口重排会再次进来） */
         reportContentAspect(b.width, b.height);
+        this.finishLayout(width, height, {
+          x: (width - b.width * fit) * 0.5,
+          y: (height - b.height * fit) * 0.5,
+          w: b.width * fit,
+          h: b.height * fit,
+        });
         return;
       }
 
@@ -1599,6 +1909,88 @@
       this.scale = stageScale;
       this.offsetX = stageOffsetX;
       this.offsetY = stageOffsetY;
+      this.finishLayout(width, height, designBoxPx);
+    }
+
+    /**
+     * 布局收尾：把纯色背景并进"内容矩形"，算出最终的 scale / offset 与背景矩形。
+     *
+     * ⚠️ 背景关闭时必须**一个数都不改** —— 加了背景功能之后老模型的位置/大小
+     * 不能有任何变化（这是上一轮层叠顺序事故之后定下的回归线）。
+     */
+    finishLayout(width, height, basis) {
+      if (!BG_ENABLED) {
+        BG_RECT = null;
+        /* 背景关闭：设计画布图层回到"铺满窗口"的原行为（零回归） */
+        syncDesignLayers(null);
+        updateBackgroundLayer();
+        return;
+      }
+
+      const bgWidth = basis.w * (BG_WIDTH / 100);
+      const bgHeight = basis.h * (BG_HEIGHT / 100);
+      const cx = basis.x + basis.w * 0.5;
+      const cy = basis.y + basis.h * 0.5;
+      const bg = {
+        x: cx - bgWidth * 0.5,
+        y: cy - bgHeight * 0.5,
+        w: bgWidth,
+        h: bgHeight,
+      };
+      const union = {
+        x: Math.min(basis.x, bg.x),
+        y: Math.min(basis.y, bg.y),
+      };
+      union.w = Math.max(basis.x + basis.w, bg.x + bg.w) - union.x;
+      union.h = Math.max(basis.y + basis.h, bg.y + bg.h) - union.y;
+
+      /*
+       * 窗口尺寸由 Kotlin 侧按"内容比例 × 百分比"算，正常情况下并集正好等于画布。
+       * 只有两种例外才会走到这里缩放：
+       * - 窗口被屏幕夹过；
+       * - 页面先于窗口重排渲染了一帧（内容比例还没回报）。
+       *
+       * 缩放以**内容中心为不动点**，模型 / 手 / 键帽的相对位置都不变。
+       */
+      const k = Math.min(1, width / Math.max(1, union.w), height / Math.max(1, union.h));
+      if (k < 0.999) {
+        this.scale *= k;
+        this.offsetX = cx - (cx - this.offsetX) * k;
+        this.offsetY = cy - (cy - this.offsetY) * k;
+        // 手部贴图用的是设计画布那套缩放，也要跟着缩，否则手会和模型错位
+        if (this.designScale) {
+          this.designScale *= k;
+          this.designX = cx - (cx - this.designX) * k;
+          this.designY = cy - (cy - this.designY) * k;
+        }
+        if (!window.__sthkeyBgScaled) {
+          window.__sthkeyBgScaled = true;
+          console.log('[background] 画布装不下并集，整体缩放 ' + k.toFixed(3));
+        }
+      }
+
+      /*
+       * ⚠️ basis 已经是**画布像素**（resize 里各分支算出来的内容矩形），
+       * 所以 bgWidth/bgHeight 也是像素 —— 这里不能再乘 this.scale
+       * （乘了就会缩成一个点，背景看起来"没生效"）。
+       */
+      BG_RECT = {
+        x: cx - bgWidth * k * 0.5,
+        y: cy - bgHeight * k * 0.5,
+        w: bgWidth * k,
+        h: bgHeight * k,
+      };
+      /*
+       * 包自带底图 / 键帽 / 封面：钉回**设计画布那块矩形**（按 k 缩放）。
+       * 不钉的话它们会被拉满整个变大的窗口，桌子和角色就会错位。
+       */
+      syncDesignLayers({
+        x: cx - basis.w * k * 0.5,
+        y: cy - basis.h * k * 0.5,
+        w: basis.w * k,
+        h: basis.h * k,
+      });
+      updateBackgroundLayer();
     }
 
     range(id) {
@@ -1734,32 +2126,96 @@
       }
     }
 
-    applyWatermark() {
-      /*
-       * 参数：在动作/表情之后直接压到 off。
-       * 关闭开关时这里什么都不做，下一帧 prepareParameters 会先把值重置为默认，
-       * 再由动作/表情算出正常值，因此参数天然恢复。
-       */
+    /**
+     * 探测「水印参数控制哪些 drawable」，并决定哪个极值才是「隐藏」。
+     *
+     * 只在初始化时跑一次。跑两次 model.update() 属于纯计算，不影响画面
+     * （之后每帧还会重新 update）。
+     */
+    resolveWatermark() {
+      if (WATERMARK_CONTROLLED !== null) return;
+      WATERMARK_CONTROLLED = [];
+      WATERMARK_OFF_VALUE = null;
+      if (!WATERMARK_PARAMETERS.length) return;
+
+      const d = this.drawables;
+      const snapshots = [];
+      const candidates = [];
+
       for (const id of WATERMARK_PARAMETERS) {
         const index = this.paramIndex.get(id);
         if (index === undefined) continue;
         const min = this.parameters.minimumValues[index];
         const max = this.parameters.maximumValues[index];
-        if (HIDE_WATERMARK) {
-          this.parameters.values[index] = (min <= 0 && max >= 0) ? 0 : min;
+        if (!(max > min)) continue;
+
+        const saved = this.parameters.values[index];
+
+        // 极值 A = min
+        this.parameters.values[index] = min;
+        this.model.update();
+        const atMin = Array.from(d.opacities);
+
+        // 极值 B = max
+        this.parameters.values[index] = max;
+        this.model.update();
+        const atMax = Array.from(d.opacities);
+
+        this.parameters.values[index] = saved;
+
+        let sumMin = 0;
+        let sumMax = 0;
+        const diff = [];
+        for (let i = 0; i < atMin.length; i++) {
+          const a = atMin[i] || 0;
+          const b = atMax[i] || 0;
+          if (Math.abs(a - b) > 0.001) {
+            diff.push(i);
+            sumMin += a;
+            sumMax += b;
+          }
+        }
+        if (!diff.length) continue;
+        /* 哪个极值让这些图层更透明，就是「隐藏」值 */
+        const off = sumMin <= sumMax ? min : max;
+        candidates.push({ index, off, diff });
+        snapshots.push({ id, min, max, off, changed: diff.length, sumMin, sumMax });
+      }
+
+      if (!candidates.length) {
+        console.log('[watermark] 未找到由参数控制的水印图层（模型可能只在 part 上）');
+        return;
+      }
+
+      const controlled = new Set();
+      candidates.forEach((c) => c.diff.forEach((i) => controlled.add(i)));
+      WATERMARK_CONTROLLED = Array.from(controlled).sort((a, b) => a - b);
+      WATERMARK_OFF_VALUE = candidates[0].off;
+
+      console.log('[watermark] 探测结果 ' + JSON.stringify(snapshots)
+        + ' 受控图层 ' + WATERMARK_CONTROLLED.length
+        + ' 关闭值 ' + WATERMARK_OFF_VALUE);
+    }
+
+    applyWatermark() {
+      /* ---- 参数：隐藏时压到「关闭值」 ---- */
+      if (HIDE_WATERMARK) {
+        for (const id of WATERMARK_PARAMETERS) {
+          const index = this.paramIndex.get(id);
+          if (index === undefined) continue;
+          const min = this.parameters.minimumValues[index];
+          const max = this.parameters.maximumValues[index];
+          this.parameters.values[index] = WATERMARK_OFF_VALUE !== null
+            ? WATERMARK_OFF_VALUE
+            : (min <= 0 && max >= 0 ? 0 : min);
         }
       }
 
+      /* ---- 部件：按 part opacity 隐藏（update 会传播到子 drawable） ---- */
       const parts = this.model && this.model.parts;
       const partIds = parts && Array.isArray(parts.ids) ? parts.ids : null;
 
       if (!HIDE_WATERMARK) {
-        /*
-         * 关闭：恢复之前记录的 part opacity。
-         * ⚠️ parts.opacities 是 Float32Array，不是普通 Array，
-         * 之前用 Array.isArray 判断永远 false，导致恢复被跳过 ——
-         * 这就是「开启后关不掉」的真正原因。
-         */
         if (WATERMARK_RESTORE && parts && parts.opacities && parts.opacities.length) {
           for (const item of WATERMARK_RESTORE.parts) {
             parts.opacities[item[0]] = item[1];
@@ -1777,7 +2233,6 @@
       }
       if (hiddenParts.length === 0) return;
 
-      /* 开启：先记录原始 part opacity（只记一次），再压 0 */
       const restore = WATERMARK_RESTORE || { parts: [] };
       WATERMARK_RESTORE = restore;
       const seen = new Set(restore.parts.map((item) => item[0]));
@@ -1787,6 +2242,25 @@
           seen.add(partIndex);
         }
         parts.opacities[partIndex] = 0;
+      }
+    }
+
+    /**
+     * 参数型水印：model.update() 会把 drawable opacity 重算回来，
+     * 所以必须在 update **之后**再把受控图层压 0。
+     */
+    applyWatermarkDrawables() {
+      if (!HIDE_WATERMARK) return;
+      if (!WATERMARK_CONTROLLED || !WATERMARK_CONTROLLED.length) return;
+      const d = this.drawables;
+      if (!d || !d.opacities) return;
+      for (const index of WATERMARK_CONTROLLED) {
+        d.opacities[index] = 0;
+      }
+      if (!window.__sthkeyWmApplied) {
+        window.__sthkeyWmApplied = true;
+        console.log('[watermark] 已隐藏图层 ' + JSON.stringify(WATERMARK_CONTROLLED)
+          + ' opacity=' + WATERMARK_CONTROLLED.map((i) => d.opacities[i]).join(','));
       }
     }
 
@@ -1845,6 +2319,7 @@
       const d = this.drawables;
       this.prepareParameters(deltaSeconds);
       this.model.update();
+      this.applyWatermarkDrawables();
 
       gl.viewport(0, 0, this.pixelWidth, this.pixelHeight);
       gl.clearColor(0, 0, 0, 0);
@@ -1856,8 +2331,24 @@
       gl.blendEquation(gl.FUNC_ADD);
       gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 
+      /*
+       * ⚠️⚠️ 绘制顺序：**必须优先 renderOrders**
+       * ============================================================
+       * Core 5.1.0 的 drawables 里 `drawOrders` 和 `renderOrders` **两个都存在**，
+       * 但含义不同（drawOrders 是建模时的描画順，renderOrders 才是 Core 算出来的
+       * 实际绘制顺序）。实测同一个模型的排序结果：
+       *   清宵 313 个 drawable 里有 294 个位置不同，莫宁 182/200，菲比 95/120。
+       *
+       * 之前为了兼容 Core 6 写成 `d.drawOrders || d.renderOrders` —— 在 Core 5 上
+       * 这会**选中 drawOrders**，于是所有老模型的层叠顺序全乱：贴图错位、眼睛被
+       * 脸盖住、按键时的手被挡住。表现就是"回退 Core 之后老模型还是坏的"。
+       *
+       * Core 6 里 renderOrders 被**移除**（改名成 drawOrders），所以顺序反着写：
+       * 有 renderOrders 就用它（Core <= 5），没有才用 drawOrders（Core 6）。
+       */
+      const drawOrders = d.renderOrders || d.drawOrders || [];
       const order = Array.from({ length: d.count }, (_, index) => index)
-        .sort((a, b) => d.renderOrders[a] - d.renderOrders[b]);
+        .sort((a, b) => drawOrders[a] - drawOrders[b]);
 
       for (const index of order) {
         if (!this.core.Utils.hasIsVisibleBit(d.dynamicFlags[index])) continue;
@@ -1930,6 +2421,7 @@
       if (!model) throw new Error('model init failed');
 
       renderer = new CoreRenderer(core, model, textures);
+      try { renderer.resolveWatermark(); } catch (e) { console.log('[watermark] resolve failed: ' + e); }
       if (HANDS) {
         console.info('[hands] loaded', JSON.stringify({
           left: (HANDS.left && HANDS.left.bindings ? HANDS.left.bindings.length : 0),
@@ -1949,6 +2441,9 @@
       if (renderer.physics) renderer.physics.stabilize(renderer);
       /* 验证台用：把 renderer 暴露出来读参数（只有显式打开 __BONGO_DEBUG 才生效） */
       if (window.__BONGO_DEBUG) window.__STHKEY_RENDERER = renderer;
+      /* 页面就绪前原生侧可能已经推过不透明度/背景参数 —— 这里补一次 */
+      applyModelOpacity();
+      updateBackgroundLayer();
       syncHandOverrides();
       applyHandSprites();
       applyFaceSprites();

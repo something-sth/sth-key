@@ -21,6 +21,9 @@ import com.something.sthkey.core.prefs.AppPrefs
 import com.something.sthkey.data.config.ConfigStore
 import com.something.sthkey.data.config.GroupStore
 import com.something.sthkey.data.permission.PermissionHelper
+import com.something.sthkey.data.update.UpdateChecker
+import com.something.sthkey.domain.update.UpdateInfo
+import com.something.sthkey.domain.update.isNewerThan
 import com.something.sthkey.domain.capture.CaptureCapabilities
 import com.something.sthkey.domain.capture.KeyMode
 import com.something.sthkey.domain.capture.resolveCaptureMode
@@ -1004,6 +1007,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         transform: (KeyStrokesConfig) -> KeyStrokesConfig,
     ): KeyStrokesConfig? {
         val before = configStore.find(id)
+        /*
+         * ⚠️ 值没变就**直接返回**，不落盘、不刷悬浮窗。
+         *
+         * 带步长的滑块（`Slider(steps = …)`）在拖动过程中会把**同一个档位值**
+         * 反复回调回来；照原样走一遍"存盘 + JSON 全量序列化 + 通知悬浮窗"
+         * 会让拖滑块明显发涩。这里一次判等就能挡掉绝大部分无效回调。
+         */
+        if (before != null && transform(before) == before) return before
         val updated = configStore.updateById(id, transform) ?: return null
         configVersion++
         refreshOverlayIfEnabled(id)
@@ -1211,6 +1222,122 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /*
      * ============================================================
+     * 检查更新
+     * ============================================================
+     * 数据源与失败策略见 `UpdateChecker`：jsDelivr 的 version.json 为主、
+     * GitHub Releases API 为备，都失败就**静默**（自动检查时）或提示网络问题（手动检查时）。
+     *
+     * 交互约定（用户定的）：
+     * - 有新版本 → 弹窗；
+     * - 没新版本 → toast「当前已是最新版本」；
+     * - 网络失败 → 自动检查静默、手动检查才 toast。
+     */
+
+    /** 待展示的「发现新版本」；null = 没有 */
+    var updateInfo by mutableStateOf<UpdateInfo?>(null)
+        private set
+
+    /** 是否正在检查（按钮显示"检查中…"用） */
+    var updateChecking by mutableStateOf(false)
+        private set
+
+    /** 启动时自动检查更新（默认开，可在「关于」页关闭） */
+    var checkUpdateOnLaunch by mutableStateOf(prefs.updateAutoCheck)
+        private set
+
+    /** 一次性 toast 消息，界面消费后置空 */
+    var updateToast by mutableStateOf<String?>(null)
+        private set
+
+    fun consumeUpdateToast() {
+        updateToast = null
+    }
+
+    fun setCheckUpdateOnLaunchEnabled(enabled: Boolean) {
+        prefs.updateAutoCheck = enabled
+        checkUpdateOnLaunch = enabled
+        AppLog.i(TAG, "检查更新：启动时自动检查 → ${if (enabled) "开" else "关"}")
+    }
+
+    /**
+     * 启动时调用：开关开着、距上次成功检查超过 24h 时才真的发请求。
+     *
+     * ⚠️ 24h 冷却很关键：`api.github.com` 未认证限流是按 IP 的，
+     * 而本应用会被用户一天开很多次；去掉冷却会既打扰用户又容易撞限流。
+     */
+    fun autoCheckUpdatesIfNeeded() {
+        if (!checkUpdateOnLaunch) return
+        if (updateChecking || updateInfo != null) return
+        val last = prefs.updateLastCheckAt
+        val now = System.currentTimeMillis()
+        if (last > 0 && now - last < UPDATE_CHECK_INTERVAL_MS) return
+        checkForUpdates(manual = false)
+    }
+
+    /**
+     * 检查更新。
+     *
+     * @param manual true = 用户主动点「检查更新」：失败要提示、没新版要 toast；
+     *   false = 启动时自动：失败静默，避免网络不好时每次启动都弹错误。
+     */
+    fun checkForUpdates(manual: Boolean) {
+        if (updateChecking) return
+        updateChecking = true
+        val context = getApplication<Application>()
+        scope.launch {
+            val override = prefs.updateManifestUrlOverride
+            val info = withContext(Dispatchers.IO) {
+                UpdateChecker.fetchLatest(context, override)
+            }
+            updateChecking = false
+
+            if (info == null) {
+                AppLog.w(TAG, "检查更新失败：所有来源都不可达")
+                if (manual) updateToast = "检查更新失败，请检查网络"
+                return@launch
+            }
+
+            /* 只有**成功拿到远端结果**才记时间，失败不占用冷却窗口 */
+            prefs.updateLastCheckAt = System.currentTimeMillis()
+
+            val newer = info.isNewerThan(BuildConfig.VERSION_CODE, BuildConfig.VERSION_NAME)
+            AppLog.i(
+                TAG,
+                "检查更新：远端 ${info.versionName}(${info.versionCode})，" +
+                    "本地 ${BuildConfig.VERSION_NAME}(${BuildConfig.VERSION_CODE})，" +
+                    "有新版=$newer，来源=${info.source}",
+            )
+
+            if (!newer) {
+                if (manual) updateToast = "当前已是最新版本"
+                return@launch
+            }
+
+            /*
+             * 「以后再说」跳过的那个版本，**自动检查**不再烦用户；
+             * 但用户手动点检查时仍然要弹 —— 那是他自己要看的。
+             */
+            val skipped = prefs.updateSkippedVersion
+            if (!manual && skipped == info.versionName) {
+                AppLog.i(TAG, "检查更新：${info.versionName} 已被用户跳过，不弹窗")
+                return@launch
+            }
+            updateInfo = info
+        }
+    }
+
+    /** 关掉「发现新版本」弹窗；[skipThisVersion] = 以后不再自动提醒这个版本 */
+    fun dismissUpdate(skipThisVersion: Boolean) {
+        val info = updateInfo ?: return
+        if (skipThisVersion) {
+            prefs.updateSkippedVersion = info.versionName
+            AppLog.i(TAG, "检查更新：用户跳过 ${info.versionName}")
+        }
+        updateInfo = null
+    }
+
+    /*
+     * ============================================================
      * 初始化
      * ============================================================
      * ⚠️ 这段**放在文件末尾**（所有属性声明之后）:
@@ -1259,6 +1386,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
         /** 停服务后等它真正退出的宽限期（见 `syncOverlayState`） */
         const val SERVICE_SHUTDOWN_GRACE_MS = 800L
+
+        /**
+         * 自动检查更新的最小间隔。
+         *
+         * 24h：本应用一天会被开很多次，不设冷却的话请求量既浪费又容易撞
+         * GitHub 的 IP 限流（未认证 60 次/小时）。手动检查不受此限制。
+         */
+        const val UPDATE_CHECK_INTERVAL_MS = 24L * 60 * 60 * 1000
 
         const val TAG = "App"
     }

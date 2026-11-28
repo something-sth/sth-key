@@ -105,6 +105,8 @@ import com.something.sthkey.core.log.AppLog
 import com.something.sthkey.core.prefs.AppPrefs
 import com.something.sthkey.core.prefs.CanvasColorPreset
 import com.something.sthkey.data.incoming.IncomingFile
+import com.something.sthkey.data.permission.PermissionHelper
+import com.something.sthkey.data.update.UpdateChecker
 import com.something.sthkey.domain.font.bitmap.BitmapFontImporter
 import com.something.sthkey.domain.ui.BottomBarStyle
 import com.something.sthkey.ui.AppStage
@@ -113,6 +115,7 @@ import com.something.sthkey.ui.component.LocalBottomBarInset
 import com.something.sthkey.ui.component.LocalBottomBarOverlay
 import com.something.sthkey.ui.component.MaterialFloatingBottomBar
 import com.something.sthkey.ui.component.PendingBitmapImportDialog
+import com.something.sthkey.ui.component.UpdateAvailableDialog
 import com.something.sthkey.ui.feature.announcement.AnnouncementDialog
 import com.something.sthkey.ui.feature.capture.CaptureModeScreen
 import com.something.sthkey.ui.feature.config.ConfigEditorScreen
@@ -585,6 +588,29 @@ private fun SthKeyApp(
     }
 
     /*
+     * ============================================================
+     * 检查更新
+     * ============================================================
+     * 进入主界面后跑一次（24h 冷却、开关、跳过版本的判断都在 ViewModel 里）。
+     *
+     * ⚠️ 一定要等**公告弹窗关掉之后**再检查：两个 AlertDialog 同时开着时，
+     * 部分 ROM 会把先弹的那个顶掉（本文件上面也记过同一个坑）。
+     */
+    LaunchedEffect(stage, showAnnouncement) {
+        if (stage == AppStage.MAIN.name && !showAnnouncement) {
+            viewModel.autoCheckUpdatesIfNeeded()
+        }
+    }
+
+    /* 手动检查的"已是最新/网络失败"之类的一次性提示 */
+    LaunchedEffect(viewModel.updateToast) {
+        viewModel.updateToast?.let { message ->
+            Toast.makeText(notifyContext, message, Toast.LENGTH_SHORT).show()
+            viewModel.consumeUpdateToast()
+        }
+    }
+
+    /*
      * ⚠️ 引导页和主界面在**同一个 Activity** 里，只是 Compose 的 `stage`
      * 状态切换。以前直接 `when` 换 composable，所以没有任何转场 ——
      * 用户看到的就是"啪"一下换屏。
@@ -645,6 +671,31 @@ private fun SthKeyApp(
             },
             onDismiss = null,
         )
+    }
+
+    /*
+     * 「发现新版本」弹窗。
+     *
+     * ⚠️ 与公告弹窗互斥（同上：两个 AlertDialog 同时开会互相顶掉）。
+     * 「前往下载」交给系统浏览器：本应用不自建下载/安装流程，
+     * 用户还能自己决定走代理或镜像。
+     *
+     * 两种关闭方式**语义不同**：
+     * - 点「以后再说」→ 记住这个版本，之后自动检查不再打扰；
+     * - 点弹窗外部 / 返回键 → 只是关掉本次弹窗，不记跳过（下次仍可能提醒）。
+     */
+    if (!showAnnouncement) {
+        viewModel.updateInfo?.let { info ->
+            UpdateAvailableDialog(
+                info = info,
+                onDownload = {
+                    PermissionHelper.openUrl(notifyContext, UpdateChecker.downloadTarget(info))
+                    viewModel.dismissUpdate(skipThisVersion = false)
+                },
+                onLater = { viewModel.dismissUpdate(skipThisVersion = true) },
+                onDismissRequest = { viewModel.dismissUpdate(skipThisVersion = false) },
+            )
+        }
     }
 
     /*
@@ -1332,6 +1383,7 @@ private fun MainScaffold(
                 BlockInputWhenHidden(isCurrent = isCurrentRoute(entry, currentRoute)) {
                     AboutScreen(
                         onBack = { navController.popBackStack() },
+                        viewModel = viewModel,
                     )
                 }
             }

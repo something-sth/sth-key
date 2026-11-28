@@ -2,7 +2,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
     <!-- 仅 debug：允许 adb 直接启动配对服务，方便在模拟器验证通知/RemoteInput -->
-    <application>
+    <!--
+        仅 debug：允许明文 HTTP。
+        检查更新的端到端测试会指向本机起的 `http://10.0.2.2:8765/version.json`；
+        正式包只访问 https，不需要（也不应该）开这个开关。
+    -->
+    <application android:usesCleartextTraffic="true">
         <service
             android:name=".capture.adb.AdbPairingService"
             android:exported="true"

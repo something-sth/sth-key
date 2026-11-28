@@ -12,9 +12,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.something.sthkey.capture.StickState
+import com.something.sthkey.domain.live2d.Live2DBackgroundGeometry
+import com.something.sthkey.domain.live2d.Live2DModels
 import com.something.sthkey.ui.overlay.gamepad.Gamepad2Content
 import com.something.sthkey.domain.config.KeyStrokesConfig
 import com.something.sthkey.domain.custom.CustomLayout
@@ -93,14 +96,59 @@ fun ConfigPreview(
          * 预览图已经足够回答"我选的是哪个模型"，而且和模型列表里看到的是同一张。
          */
         if (config.styleId == StyleId.KEYBOARD_CAT) {
-            Live2DModelThumbnail(
-                modelId = config.live2d.modelId,
-                widthDp = widthDp - PREVIEW_PADDING_DP * 2,
-                heightDp = heightDp - PREVIEW_PADDING_DP * 2,
-                modifier = Modifier.padding(PREVIEW_PADDING_DP.dp),
-                // 外框已经有底色与边框了，再套一层会变成"框中框"
-                drawBackground = false,
-            )
+            val background = config.live2d.background
+            val innerWidth = widthDp - PREVIEW_PADDING_DP * 2
+            val innerHeight = heightDp - PREVIEW_PADDING_DP * 2
+            val aspect = remember(config.live2d.modelId) {
+                Live2DModels.find(config.live2d.modelId)?.contentAspect ?: 0f
+            }
+
+            /*
+             * 背景开启时合成「底色块 + 模型预览图」。
+             *
+             * ⚠️ 尺寸必须与悬浮窗用**同一个几何函数**（[Live2DBackgroundGeometry]），
+             * 否则会出现"预览里刚好铺满、悬浮窗上溢出去"这种只有真机才看得出的偏差。
+             */
+            val rects = if (background.enabled) {
+                remember(innerWidth, innerHeight, aspect, background) {
+                    Live2DBackgroundGeometry.previewRects(innerWidth, innerHeight, aspect, background)
+                }
+            } else {
+                null
+            }
+
+            if (rects == null || rects.bgWidth <= 0f || rects.bgHeight <= 0f) {
+                Live2DModelThumbnail(
+                    modelId = config.live2d.modelId,
+                    widthDp = innerWidth,
+                    heightDp = innerHeight,
+                    modifier = Modifier.padding(PREVIEW_PADDING_DP.dp),
+                    // 外框已经有底色与边框了，再套一层会变成"框中框"
+                    drawBackground = false,
+                )
+                return@Box
+            }
+
+            Box(
+                modifier = Modifier
+                    .padding(PREVIEW_PADDING_DP.dp)
+                    .width(rects.bgWidth.dp)
+                    .height(rects.bgHeight.dp)
+                    .background(
+                        Color(Live2DBackgroundGeometry.opaqueArgb(background)).copy(
+                            alpha = Live2DBackgroundGeometry.alphaFraction(background),
+                        ),
+                        RoundedCornerShape(4.dp),
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Live2DModelThumbnail(
+                    modelId = config.live2d.modelId,
+                    widthDp = rects.modelWidth,
+                    heightDp = rects.modelHeight,
+                    drawBackground = false,
+                )
+            }
             return@Box
         }
 

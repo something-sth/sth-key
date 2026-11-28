@@ -48,6 +48,7 @@ import com.something.sthkey.domain.custom.JoystickSource
 import com.something.sthkey.domain.custom.KeyComponent
 import com.something.sthkey.domain.custom.TextComponent
 import com.something.sthkey.domain.custom.TextualComponent
+import com.something.sthkey.domain.live2d.Live2DBackgroundGeometry
 import com.something.sthkey.domain.live2d.Live2DModels
 import com.something.sthkey.domain.overlay.OverlayLayout
 import com.something.sthkey.domain.overlay.OverlayLayouts
@@ -1106,7 +1107,12 @@ runCatching { if (old.host.parent != null) windowManager.removeView(old.host) }
                     config.live2d.expressionBindings.map { it.index to it.keys },
                 )
                 applyWatermark(config.live2d.hideWatermark)
-                alpha = config.live2d.opacityPercent.coerceIn(0, 100) / 100f
+                /*
+                 * ⚠️ 不再用 `alpha`：那是整层淡，纯色背景也会一起淡。
+                 * 不透明度改由页面只乘在模型上（见 Live2DOverlayView.applyOpacity）。
+                 */
+                applyOpacity(config.live2d.opacityPercent)
+                applyBackground(config.live2d.background)
             }
         } else {
             /*
@@ -1203,7 +1209,9 @@ runCatching { if (old.host.parent != null) windowManager.removeView(old.host) }
             config.live2d.expressionBindings.map { it.index to it.keys },
         )
         live2d.applyWatermark(config.live2d.hideWatermark)
-        live2d.alpha = config.live2d.opacityPercent.coerceIn(0, 100) / 100f
+        /* 不透明度只控模型；背景的颜色/尺寸/不透明度都是页内独立的一层 */
+        live2d.applyOpacity(config.live2d.opacityPercent)
+        live2d.applyBackground(config.live2d.background)
     }
 
     /**
@@ -1250,16 +1258,58 @@ runCatching { if (old.host.parent != null) windowManager.removeView(old.host) }
             screenHeight = screen.second,
         )
 
-        if (window.params.x == x && window.params.y == y) {
+        /*
+         * ============================================================
+         * ⚠️ Live2D 背景把窗口撑大时，位置要按**模型内容**锚定
+         * ============================================================
+         * 背景是左右/上下对称扩展的，窗口左上角如果不动，模型就会随着宽度变大
+         * 一直往右下漂 —— 拖滑块时看起来像猫在自己爬。
+         *
+         * 所以这里把窗口往左上补偿"内容矩形到窗口的边距"，模型在屏幕上原地不动。
+         * 背景关闭时 inset = 0，行为与以前完全一致。
+         */
+        val inset = windowContentInsetPx(window.config)
+        val (finalX, finalY) = if (inset.first == 0 && inset.second == 0) {
+            x to y
+        } else {
+            OverlayBounds.clamp(
+                x = x - inset.first,
+                y = y - inset.second,
+                windowWidth = window.params.width,
+                windowHeight = window.params.height,
+                screenWidth = screen.first,
+                screenHeight = screen.second,
+            )
+        }
+
+        if (window.params.x == finalX && window.params.y == finalY) {
             // 位置没变也要对一次存档 —— 系统可能自己挪过窗口（见 syncPositionFromActual）
             window.view.post { syncPositionFromActual(window) }
             return
         }
-        window.params.x = x
-        window.params.y = y
+        window.params.x = finalX
+        window.params.y = finalY
         updateLayoutParams(window)
         // 落位之后再读实际值，系统若又挪了就以它为准
         window.view.post { syncPositionFromActual(window) }
+    }
+
+    /**
+     * 纯色背景把窗口撑大之后，"模型内容矩形"到窗口左上角的边距（像素）。
+     *
+     * 只有 Live2D 样式的背景会撑大窗口，其它样式恒为 0 —— 它们的内容就是窗口。
+     */
+    private fun windowContentInsetPx(config: KeyStrokesConfig): Pair<Int, Int> {
+        if (config.styleId != StyleId.KEYBOARD_CAT) return 0 to 0
+        val background = config.live2d.background
+        if (!background.enabled) return 0 to 0
+
+        val scale = KeyLayout.uiScale(config)
+        val base = OverlayStyleRegistry.baseSizeOf(config)
+        val expandX = Live2DBackgroundGeometry.expandX(background)
+        val expandY = Live2DBackgroundGeometry.expandY(background)
+        return ((base.width - base.width / expandX) * scale / 2f).toInt() to
+            ((base.height - base.height / expandY) * scale / 2f).toInt()
     }
 
     /**
@@ -1301,8 +1351,11 @@ runCatching { if (old.host.parent != null) windowManager.removeView(old.host) }
         }
 
         // 减掉偏移：base 是"没有偏移时窗口该在的位置"，实际位置里含着偏移
-        val baseX = window.params.x - layout.offsetX
-        val baseY = window.params.y - layout.offsetY
+        // 再加回背景内缩：applyPosition 会把窗口往左上补偿"内容到窗口"的边距，
+        // 不回加的话每同步一次就多缩一截（与偏移那个坑同源）
+        val inset = windowContentInsetPx(window.config)
+        val baseX = window.params.x - layout.offsetX + inset.first
+        val baseY = window.params.y - layout.offsetY + inset.second
         if (layout.baseX == baseX && layout.baseY == baseY) return
 
         OverlayLayouts.update(this, window.configId) {
@@ -1725,8 +1778,11 @@ runCatching { if (old.host.parent != null) windowManager.removeView(old.host) }
                          * 偏移在这里读一次即可：拖动不会改它（滑块与拖动是两回事）。
                          */
                         val layout = OverlayLayouts.of(this, configId)
-                        val baseX = params.x - layout.offsetX
-                        val baseY = params.y - layout.offsetY
+                        // 与 syncPositionFromActual 同理：把背景内缩加回去，否则每拖一次偏一截
+                        val inset = windows[configId]?.let { windowContentInsetPx(it.config) }
+                            ?: (0 to 0)
+                        val baseX = params.x - layout.offsetX + inset.first
+                        val baseY = params.y - layout.offsetY + inset.second
                         OverlayLayouts.update(this, configId) {
                             it.copy(baseX = baseX, baseY = baseY)
                         }

@@ -76,6 +76,134 @@
   let lastFrameTime = 0;
   let animationHandle = 0;
 
+  /*
+   * ============================================================
+   * 纯色背景 + 模型不透明度（与 keyboard/runtime.js 同一套语义）
+   * ============================================================
+   * 背景垫在最底层（模型、包底图都在它上面）；宽高是**模型内容矩形**的百分比，
+   * 以内容中心为轴对称伸缩；模型不透明度只乘在画布与 DOM 贴图上，背景独立。
+   */
+  let BG_ENABLED = false;
+  let BG_WIDTH = 100;
+  let BG_HEIGHT = 100;
+  let BG_RGB = 0xFFFFFF;
+  let BG_OPACITY = 100;
+  let BG_RECT = null;
+  let MODEL_OPACITY = 1;
+
+  function clampNumber(value, min, max, fallback) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return fallback;
+    return Math.min(max, Math.max(min, Math.round(number)));
+  }
+
+  /*
+   * 模型图层容器（整层不透明度）—— 与 keyboard/runtime.js 同一套做法。
+   *
+   * ⚠️ 模型不透明度必须整组合成一次：逐个元素乘 alpha 会让人透过皮肤
+   * 看到眼睛等内部图层（"透视"感）。背景（包底图 / 纯色底）不在容器里。
+   */
+  /* `#background` 是模型包自带底图，跟着模型不透明度一起淡；纯色底独立 */
+  const MODEL_LAYER_IDS = ['background', 'fallback', 'live2dCanvas', 'leftKey', 'rightKey'];
+  let modelLayerElement = null;
+
+  function modelLayerRoot() {
+    if (modelLayerElement && modelLayerElement.isConnected) return modelLayerElement;
+    let wrapper = document.getElementById('modelLayer');
+    if (!wrapper) {
+      wrapper = document.createElement('div');
+      wrapper.id = 'modelLayer';
+      wrapper.style.position = 'absolute';
+      wrapper.style.inset = '0';
+      wrapper.style.pointerEvents = 'none';
+      wrapper.style.zIndex = '1';
+      wrapper.style.opacity = String(MODEL_OPACITY);
+      const container = document.getElementById('stage') || document.body;
+      container.appendChild(wrapper);
+      for (const id of MODEL_LAYER_IDS) {
+        const element = document.getElementById(id);
+        if (element && element.parentNode !== wrapper) wrapper.appendChild(element);
+      }
+    }
+    modelLayerElement = wrapper;
+    return wrapper;
+  }
+
+  let backgroundLayer = null;
+
+  /** 背景层动态创建（不改 index.html，存量模型也能生效） */
+  function ensureBackgroundLayer() {
+    if (backgroundLayer && backgroundLayer.isConnected) return backgroundLayer;
+    let element = document.getElementById('solidBackground');
+    if (!element) {
+      element = document.createElement('div');
+      element.id = 'solidBackground';
+      element.style.position = 'absolute';
+      element.style.pointerEvents = 'none';
+      element.style.zIndex = '0';
+      element.style.display = 'none';
+      const container = document.getElementById('stage') || document.body;
+      container.insertBefore(element, container.firstChild);
+    }
+    backgroundLayer = element;
+    return element;
+  }
+
+  function updateBackgroundLayer() {
+    const element = ensureBackgroundLayer();
+    if (!BG_ENABLED || !BG_RECT) {
+      element.style.display = 'none';
+      return;
+    }
+    const dpr = Math.max(1, devicePixelRatio || 1);
+    const r = (BG_RGB >> 16) & 0xff;
+    const g = (BG_RGB >> 8) & 0xff;
+    const b = BG_RGB & 0xff;
+    element.style.display = 'block';
+    element.style.left = (BG_RECT.x / dpr) + 'px';
+    element.style.top = (BG_RECT.y / dpr) + 'px';
+    element.style.width = (BG_RECT.w / dpr) + 'px';
+    element.style.height = (BG_RECT.h / dpr) + 'px';
+    element.style.backgroundColor = `rgba(${r}, ${g}, ${b}, ${BG_OPACITY / 100})`;
+  }
+
+  function applyModelOpacity() {
+    modelLayerRoot().style.opacity = String(MODEL_OPACITY);
+  }
+
+  /*
+   * 设计画布图层（包底图 / 键帽 / 封面）默认铺满整个窗口。
+   * 背景把窗口撑大后必须钉回设计画布那块矩形，否则桌子/键帽会和模型错位。
+   */
+  const DESIGN_LAYER_IDS = ['background', 'leftKey', 'rightKey', 'fallback'];
+
+  function syncDesignLayers(rect) {
+    const dpr = Math.max(1, devicePixelRatio || 1);
+    for (const id of DESIGN_LAYER_IDS) {
+      const element = document.getElementById(id);
+      if (!element) continue;
+      if (!rect) {
+        element.style.left = '';
+        element.style.top = '';
+        element.style.width = '';
+        element.style.height = '';
+        element.style.right = '';
+        element.style.bottom = '';
+        continue;
+      }
+      element.style.left = (rect.x / dpr) + 'px';
+      element.style.top = (rect.y / dpr) + 'px';
+      element.style.width = (rect.w / dpr) + 'px';
+      element.style.height = (rect.h / dpr) + 'px';
+      element.style.right = 'auto';
+      element.style.bottom = 'auto';
+      element.style.objectFit = 'fill';
+    }
+  }
+
+  /* 渲染开始前就把画布/封面/键帽搬进模型容器（换父节点只在这一刻做，避免闪） */
+  modelLayerRoot();
+
   // CubismEyeBlink defaults from the same Cubism framework used by easy-live2d.
   const blink = {
     phase: 'first',
@@ -272,6 +400,45 @@
       syncGlobalReverse();
     },
 
+    /** 纯色背景（语义与 keyboard/runtime.js 完全一致） */
+    setBackground(enabled, widthPercent, heightPercent, rgb, opacityPercent) {
+      const previousEnabled = BG_ENABLED;
+      const previousWidth = BG_WIDTH;
+      const previousHeight = BG_HEIGHT;
+      BG_ENABLED = Boolean(enabled);
+      BG_WIDTH = clampNumber(widthPercent, 20, 200, 100);
+      BG_HEIGHT = clampNumber(heightPercent, 20, 200, 100);
+      BG_RGB = (Number(rgb) || 0) & 0xFFFFFF;
+      BG_OPACITY = clampNumber(opacityPercent, 0, 100, 100);
+
+      /* 只有几何变化才重排画布；只改颜色/透明度时别做无谓的 resize */
+      const geometryChanged = previousEnabled !== BG_ENABLED ||
+        previousWidth !== BG_WIDTH || previousHeight !== BG_HEIGHT;
+      if (geometryChanged && renderer) renderer.resize();
+      else updateBackgroundLayer();
+
+      if (previousEnabled !== BG_ENABLED && !window.__sthkeyBgLogged) {
+        window.__sthkeyBgLogged = true;
+        console.log('[background] ' + (BG_ENABLED ? '开启' : '关闭')
+          + ' ' + BG_WIDTH + '%×' + BG_HEIGHT + '% #'
+          + BG_RGB.toString(16).toUpperCase().padStart(6, '0')
+          + ' ' + BG_OPACITY + '%');
+      }
+    },
+
+    /**
+     * 模型不透明度 0..100（**只影响模型**，背景不受影响）。
+     *
+     * ⚠️ 不走 Android 的 `view.alpha`：那会把背景一起淡掉。
+     * 这里改的是模型容器那一层的 CSS opacity —— 整组合成，观感和旧版一致。
+     */
+    setModelOpacity(percent) {
+      const next = clampNumber(percent, 0, 100, 100);
+      if (Math.abs(MODEL_OPACITY - next / 100) < 0.0001) return;
+      MODEL_OPACITY = next / 100;
+      applyModelOpacity();
+    },
+
     clear() {
       state.leftKey = null;
       state.rightKey = null;
@@ -433,9 +600,60 @@
       }
       this.pixelWidth = width;
       this.pixelHeight = height;
-      this.scale = Math.min(width / DESIGN_WIDTH, height / DESIGN_HEIGHT);
+      /* 背景 >100% 时窗口已经按百分比变大，内容要按放大后的框 contain（关背景时 1:1） */
+      const expandX = BG_ENABLED ? Math.max(1, BG_WIDTH / 100) : 1;
+      const expandY = BG_ENABLED ? Math.max(1, BG_HEIGHT / 100) : 1;
+      this.scale = Math.min(
+        width / (DESIGN_WIDTH * expandX),
+        height / (DESIGN_HEIGHT * expandY),
+      );
       this.offsetX = (width - DESIGN_WIDTH * this.scale) * 0.5;
       this.offsetY = (height - DESIGN_HEIGHT * this.scale) * 0.5;
+
+      /* 内容矩形 = 设计画布铺进画布后的那块（与上面 scale/offset 一致） */
+      const basis = {
+        x: this.offsetX,
+        y: this.offsetY,
+        w: DESIGN_WIDTH * this.scale,
+        h: DESIGN_HEIGHT * this.scale,
+      };
+      if (!BG_ENABLED) {
+        BG_RECT = null;
+        syncDesignLayers(null);
+        updateBackgroundLayer();
+        return;
+      }
+
+      const bgWidth = basis.w * (BG_WIDTH / 100);
+      const bgHeight = basis.h * (BG_HEIGHT / 100);
+      const cx = basis.x + basis.w * 0.5;
+      const cy = basis.y + basis.h * 0.5;
+
+      /* 窗口尺寸由原生侧按"内容比例 × 百分比"算；被屏幕夹过时才需要整体缩一点 */
+      const unionWidth = Math.max(basis.w, bgWidth);
+      const unionHeight = Math.max(basis.h, bgHeight);
+      const k = Math.min(1, width / Math.max(1, unionWidth), height / Math.max(1, unionHeight));
+      if (k < 0.999) {
+        this.scale *= k;
+        this.offsetX = cx - (cx - this.offsetX) * k;
+        this.offsetY = cy - (cy - this.offsetY) * k;
+      }
+
+      /* basis 已是画布像素，bgWidth/bgHeight 也是像素 —— 不再乘 scale */
+      BG_RECT = {
+        x: cx - bgWidth * k * 0.5,
+        y: cy - bgHeight * k * 0.5,
+        w: bgWidth * k,
+        h: bgHeight * k,
+      };
+      /* 包底图 / 键帽 / 封面钉回设计画布矩形，避免被拉满变大的窗口 */
+      syncDesignLayers({
+        x: cx - basis.w * k * 0.5,
+        y: cy - basis.h * k * 0.5,
+        w: basis.w * k,
+        h: basis.h * k,
+      });
+      updateBackgroundLayer();
     }
 
     range(id) {
@@ -570,8 +788,20 @@
       gl.blendEquation(gl.FUNC_ADD);
       gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 
+      /*
+       * ⚠️⚠️ 绘制顺序：**必须优先 renderOrders**
+       * ============================================================
+       * Core 5.1.0 的 drawables 里 `drawOrders` 和 `renderOrders` **两个都存在**，
+       * 但含义不同：drawOrders 是建模时的描画順，renderOrders 才是 Core 算出来的
+       * 实际绘制顺序（同一模型实测排序差异很大，清宵 294/313 位置不同）。
+       *
+       * 之前为兼容 Core 6 写成 `d.drawOrders || d.renderOrders`，在 Core 5 上会选中
+       * drawOrders → 层叠顺序错乱（贴图错位、眼睛被盖住）。Core 6 里 renderOrders
+       * 已被移除，所以这里必须反过来：有 renderOrders 用 renderOrders。
+       */
+      const drawOrders = d.renderOrders || d.drawOrders || [];
       const order = Array.from({ length: d.count }, (_, index) => index)
-        .sort((a, b) => d.renderOrders[a] - d.renderOrders[b]);
+        .sort((a, b) => drawOrders[a] - drawOrders[b]);
 
       for (const index of order) {
         if (!this.core.Utils.hasIsVisibleBit(d.dynamicFlags[index])) continue;
@@ -645,6 +875,9 @@
       renderer.setOverride('ParamMouseLeftDown', (state.mouseButtons & 1) ? 1 : 0);
       renderer.setOverride('ParamMouseRightDown', (state.mouseButtons & 2) ? 1 : 0);
       fallback.classList.add('hidden');
+      /* 页面就绪前原生侧可能已经推过不透明度/背景参数 —— 这里补一次 */
+      applyModelOpacity();
+      updateBackgroundLayer();
       state.ready = true;
 
       if (!animationHandle) animationHandle = requestAnimationFrame(tick);
